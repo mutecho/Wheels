@@ -1,0 +1,36 @@
+# OS / editor metadata
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build and tool caches
+build/
+.cache/
+cmake-build-*/
+
+# CMake / CTest generated files
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+cmake_install.cmake
+compile_commands.json
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Logs
+*.log
+
+# Internal debug caches
+debuglist/
