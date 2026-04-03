@@ -34,3 +34,6 @@ compile_commands.json
 
 # Internal debug caches
 debuglist/
+
+# Local agent instructions
+AGENTS.md
