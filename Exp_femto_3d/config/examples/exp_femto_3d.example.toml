@@ -1,0 +1,59 @@
+[input]
+input_root = "/absolute/path/to/AnalysisResults_3d.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_3Dqn"
+mixed_event_subtask = "MixedEvent_3Dqn"
+sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
+
+[output]
+output_directory = "/absolute/path/to/output"
+cf_root_name = "cf_output.root"
+fit_root_name = "fit_output.root"
+fit_summary_name = "fit_summary.tsv"
+log_level = "info"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "full"
+use_coulomb = true
+use_core_halo_lambda = true
+use_q2_baseline = true
+use_pml = true
+fit_q_max = 0.15
+reopen_output_file_per_slice = true
+
+[[bins.centrality]]
+min = 0.0
+max = 10.0
+
+[[bins.centrality]]
+min = 10.0
+max = 30.0
+
+[[bins.mt]]
+min = 0.24
+max = 0.33
+
+[[bins.mt]]
+min = 0.42
+max = 0.52
+
+[[fit_selection.centrality]]
+min = 0.0
+max = 10.0
+
+[[fit_selection.centrality]]
+min = 10.0
+max = 30.0
+
+[[fit_selection.mt]]
+min = 0.24
+max = 0.33
+
+[[fit_selection.mt]]
+min = 0.42
+max = 0.52
