@@ -12,4 +12,15 @@ if [[ ! -x "${binary_path}" ]]; then
 fi
 
 cd "${script_dir}"
-exec alienv setenv O2Physics/latest-master-o2 -c sh -lc "\"${binary_path}\""
+
+quoted_binary="$(printf '%q' "${binary_path}")"
+quoted_args=()
+for arg in "$@"; do
+  quoted_args+=("$(printf '%q' "${arg}")")
+done
+command_line="${quoted_binary}"
+if [[ ${#quoted_args[@]} -gt 0 ]]; then
+  command_line+=" ${quoted_args[*]}"
+fi
+
+exec alienv setenv O2Physics/latest-master-o2 -c sh -lc "${command_line}"

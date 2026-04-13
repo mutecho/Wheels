@@ -18,6 +18,7 @@ struct ProjectionFitConfig {
   bool fail_alpha_result_when_error_invalid = false;
   bool fail_hbt_results_when_error_invalid = false;
   bool fail_directional_results_when_error_invalid = false;
+  bool accept_hbt_central_value_only_for_summary = true;
 };
 
 struct SliceFitProducts {

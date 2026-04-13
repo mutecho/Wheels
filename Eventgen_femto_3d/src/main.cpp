@@ -1,36 +1,23 @@
-#include "femto3d/AnalysisConfig.h"
+#include "femto3d/Config.h"
 #include "femto3d/Workflow.h"
 
 #include <exception>
 #include <iostream>
-#include <string>
 
-int main(int /*argc*/, char** /*argv*/) {
-  femto3d::AnalysisConfig config = femto3d::MakeDefaultAnalysisConfig();
-  std::string input_root_path = "input.root";
-  std::string output_root_path = "output.root";
-  std::string tree_name = "events";
-
-  // Future CLI version:
-  // if (argc >= 2) {
-  //   input_root_path = argv[1];
-  // }
-  // if (argc >= 3) {
-  //   output_root_path = argv[2];
-  // }
-  // if (argc >= 4) {
-  //   tree_name = argv[3];
-  // }
-
-  config.input.tree_name = tree_name;
+int main(int argc, char** argv) {
+  using namespace femto3d;
 
   try {
-    const femto3d::AnalysisStatistics statistics =
-        femto3d::RunAnalysis(config, input_root_path, output_root_path);
+    const CliOptions cli_options = ParseCliArgs(argc, argv);
+    ApplicationConfig config = LoadApplicationConfig(cli_options.config_path);
+    ApplyCliOverrides(cli_options, config);
+
+    const AnalysisStatistics statistics = RunAnalysis(config);
     std::cout << "Analysis completed.\n"
-              << "  Input file: " << input_root_path << "\n"
-              << "  Output file: " << output_root_path << "\n"
-              << "  Tree name: " << tree_name << "\n"
+              << "  Config file: " << cli_options.config_path << "\n"
+              << "  Input file: " << config.input_root_path << "\n"
+              << "  Output file: " << config.output_root_path << "\n"
+              << "  Input schema: " << ToString(config.input_schema) << "\n"
               << "  Events read: " << statistics.events_read << "\n"
               << "  Selected particles: " << statistics.selected_particles << "\n"
               << "  Events with valid event plane: "
@@ -48,11 +35,13 @@ int main(int /*argc*/, char** /*argv*/) {
               << "  Rejected close pairs: " << statistics.rejected_close_pairs
               << "\n"
               << "  Rejected invalid pair kinematics: "
-              << statistics.rejected_invalid_pair_kinematics << "\n";
+              << statistics.rejected_invalid_pair_kinematics << "\n"
+              << "  R2 summary points skipped due to invalid HBT errors: "
+              << statistics.r2_summary_points_skipped_invalid_hbt_error << "\n";
+    return 0;
   } catch (const std::exception& error) {
-    std::cerr << "Analysis failed: " << error.what() << "\n";
-    return 2;
+    std::cerr << "[error] " << error.what() << "\n\n";
+    PrintUsage(std::cerr);
+    return 1;
   }
-
-  return 0;
 }

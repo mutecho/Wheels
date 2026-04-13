@@ -13,7 +13,12 @@ enum class EventPlaneWeightMode {
   kPt = 1,
 };
 
-struct InputTreeConfig {
+enum class InputSchema {
+  kLegacyVectorTree = 0,
+  kBlastwaveFlatTrees = 1,
+};
+
+struct LegacyInputTreeConfig {
   std::string tree_name = "events";
   std::string centrality_branch = "centrality";
   std::string event_plane_branch = "event_plane_psi";
@@ -26,6 +31,28 @@ struct InputTreeConfig {
   std::string y_branch = "y";
   std::string z_branch = "z";
   std::string t_branch = "t";
+};
+
+struct BlastwaveInputTreeConfig {
+  std::string events_tree = "events";
+  std::string particles_tree = "particles";
+  std::string event_id_branch = "event_id";
+  std::string centrality_branch = "centrality";
+  std::string event_plane_branch = "psi2";
+  std::string pid_branch = "pid";
+  std::string px_branch = "px";
+  std::string py_branch = "py";
+  std::string pz_branch = "pz";
+  std::string mass_branch = "mass";
+  std::string x_branch = "x";
+  std::string y_branch = "y";
+  std::string z_branch = "z";
+  std::string t_branch = "t";
+};
+
+struct InputConfig {
+  LegacyInputTreeConfig legacy;
+  BlastwaveInputTreeConfig blastwave;
 };
 
 struct EventPlaneConfig {
@@ -62,7 +89,7 @@ struct HistogramConfig {
 };
 
 struct AnalysisConfig {
-  InputTreeConfig input;
+  InputConfig input;
   EventPlaneConfig event_plane;
   ParticleSelectionConfig selection;
   HistogramConfig histograms;
@@ -74,6 +101,13 @@ struct AnalysisConfig {
   double close_pair_distance_tolerance = 1.0e-12;
   std::string top_directory_name = "Femto3D";
   std::string r2_summary_directory_name = "R2Summary";
+};
+
+struct ApplicationConfig {
+  std::string input_root_path = "input.root";
+  std::string output_root_path = "output.root";
+  InputSchema input_schema = InputSchema::kBlastwaveFlatTrees;
+  AnalysisConfig analysis;
 };
 
 inline std::vector<RangeBin> MakeUniformBins(const double min,
@@ -114,6 +148,24 @@ inline AnalysisConfig MakeDefaultAnalysisConfig() {
       {0.60, 0.80, FormatBinLabel("femto_mt", 0.60, 0.80)},
   };
   config.phi_bins = MakeUniformBins(-kPi / 2.0, kPi / 2.0, 12U, "phi");
+  return config;
+}
+
+inline EventPlaneConfig MakeDefaultEventPlaneConfigForSchema(
+    const InputSchema schema) {
+  EventPlaneConfig config;
+  if (schema == InputSchema::kBlastwaveFlatTrees) {
+    config.use_internal_reconstruction = false;
+    config.fallback_to_input_branch = true;
+  }
+  return config;
+}
+
+inline ApplicationConfig MakeDefaultApplicationConfig() {
+  ApplicationConfig config;
+  config.analysis = MakeDefaultAnalysisConfig();
+  config.analysis.event_plane =
+      MakeDefaultEventPlaneConfigForSchema(config.input_schema);
   return config;
 }
 

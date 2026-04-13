@@ -2,22 +2,25 @@
 
 #include "femto3d/EventPlane.h"
 #include "femto3d/Histogramming.h"
+#include "femto3d/InputReader.h"
 #include "femto3d/ProjectionFit.h"
 #include "femto3d/SourceExtraction.h"
 
+#include "TCanvas.h"
 #include "TDirectory.h"
 #include "TFile.h"
 #include "TGraphErrors.h"
+#include "TPaveText.h"
 #include "TTree.h"
-#include "TTreeReader.h"
-#include "TTreeReaderValue.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -38,6 +41,12 @@ struct RadiusSummaryPoint {
 using RadiusSummaryMap =
     std::map<std::pair<std::size_t, std::size_t>,
              std::array<std::vector<RadiusSummaryPoint>, 6>>;
+
+struct SummaryGraphStats {
+  int point_count = 0;
+  double mean_y = 0.0;
+  double rms_y = 0.0;
+};
 
 int FindBinIndex(const std::vector<RangeBin>& bins, const double value) {
   for (std::size_t index = 0; index < bins.size(); ++index) {
@@ -76,54 +85,66 @@ std::string BuildRelativePhiAxisTitle(const int harmonic_order) {
   return "#phi_{pair} - #Psi_{" + std::to_string(harmonic_order) + "}";
 }
 
-void ValidateReaderBranch(const int setup_status, const std::string& branch_name) {
-  if (setup_status < 0) {
-    throw std::runtime_error("Failed to bind ROOT branch: " + branch_name);
-  }
+std::string FormatSummaryStat(const double value) {
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(3) << value;
+  return stream.str();
 }
 
-std::size_t ValidateParticleBranches(const std::vector<int>& pdg,
-                                     const std::vector<double>& px,
-                                     const std::vector<double>& py,
-                                     const std::vector<double>& pz,
-                                     const std::vector<double>& mass,
-                                     const std::vector<double>& x,
-                                     const std::vector<double>& y,
-                                     const std::vector<double>& z,
-                                     const std::vector<double>& t) {
-  const std::size_t size = pdg.size();
-  const bool consistent = px.size() == size && py.size() == size &&
-                          pz.size() == size && mass.size() == size &&
-                          x.size() == size && y.size() == size &&
-                          z.size() == size && t.size() == size;
-  if (!consistent) {
-    throw std::runtime_error("Particle branch vector sizes are inconsistent.");
+SummaryGraphStats ComputeSummaryGraphStats(
+    const std::vector<RadiusSummaryPoint>& points) {
+  SummaryGraphStats stats;
+  double sum_y = 0.0;
+  double sum_y2 = 0.0;
+
+  for (const RadiusSummaryPoint& point : points) {
+    if (!point.valid || !std::isfinite(point.value)) {
+      continue;
+    }
+
+    ++stats.point_count;
+    sum_y += point.value;
+    sum_y2 += point.value * point.value;
   }
 
-  return size;
+  if (stats.point_count <= 0) {
+    return stats;
+  }
+
+  const double normalization = static_cast<double>(stats.point_count);
+  stats.mean_y = sum_y / normalization;
+  const double mean_y2 = sum_y2 / normalization;
+  stats.rms_y = std::sqrt(std::max(0.0, mean_y2 - stats.mean_y * stats.mean_y));
+  return stats;
 }
 
-ParticleState MakeParticleState(const std::vector<int>& pdg,
-                                const std::vector<double>& px,
-                                const std::vector<double>& py,
-                                const std::vector<double>& pz,
-                                const std::vector<double>& mass,
-                                const std::vector<double>& x,
-                                const std::vector<double>& y,
-                                const std::vector<double>& z,
-                                const std::vector<double>& t,
-                                const std::size_t particle_index) {
-  ParticleState particle;
-  particle.pdg = pdg[particle_index];
-  particle.px = px[particle_index];
-  particle.py = py[particle_index];
-  particle.pz = pz[particle_index];
-  particle.mass = mass[particle_index];
-  particle.x = x[particle_index];
-  particle.y = y[particle_index];
-  particle.z = z[particle_index];
-  particle.t = t[particle_index];
-  return particle;
+void ApplySummaryGraphStyle(TGraphErrors& graph) {
+  constexpr int kSummaryGraphColor = 602;
+  constexpr int kSummaryMarkerStyle = 20;
+
+  graph.SetMarkerStyle(kSummaryMarkerStyle);
+  graph.SetMarkerSize(1.2);
+  graph.SetMarkerColor(kSummaryGraphColor);
+  graph.SetLineColor(kSummaryGraphColor);
+  graph.SetLineWidth(2);
+  graph.SetFillStyle(0);
+  graph.SetDrawOption("ALPE1");
+}
+
+TPaveText* CreateSummaryInfoBox(const std::string& graph_name,
+                                const SummaryGraphStats& stats) {
+  auto* info_box = new TPaveText(0.63, 0.72, 0.89, 0.89, "NDC");
+  info_box->SetName((graph_name + "_summary_box").c_str());
+  info_box->SetBorderSize(1);
+  info_box->SetFillColor(0);
+  info_box->SetFillStyle(1001);
+  info_box->SetShadowColor(0);
+  info_box->SetTextAlign(12);
+  info_box->SetTextFont(42);
+  info_box->AddText(("Points: " + std::to_string(stats.point_count)).c_str());
+  info_box->AddText(("Mean(Y): " + FormatSummaryStat(stats.mean_y)).c_str());
+  info_box->AddText(("RMS(Y): " + FormatSummaryStat(stats.rms_y)).c_str());
+  return info_box;
 }
 
 bool PassesFemtoSelection(const ParticleState& particle,
@@ -142,16 +163,12 @@ bool PassesFemtoSelection(const ParticleState& particle,
   return pt >= selection.femto_pt_min && pt < selection.femto_pt_max;
 }
 
-bool BranchExists(TTree& tree, const std::string& branch_name) {
-  return tree.GetBranch(branch_name.c_str()) != nullptr;
-}
-
 EventPlaneResult ResolveEventPlane(
     const AnalysisConfig& config,
     const bool use_internal_event_plane,
     const bool use_input_event_plane,
     const std::vector<ParticleState>& event_plane_candidates,
-    TTreeReaderValue<double>* input_event_plane) {
+    const EventData& event_data) {
   EventPlaneResult result;
   result.failure_reason = EventPlaneFailureReason::kDisabled;
 
@@ -163,8 +180,8 @@ EventPlaneResult ResolveEventPlane(
   }
 
   if (use_input_event_plane) {
-    if (input_event_plane != nullptr) {
-      return MakeInputEventPlaneResult(*(*input_event_plane),
+    if (event_data.has_input_event_plane) {
+      return MakeInputEventPlaneResult(event_data.event_plane_psi,
                                        config.event_plane.harmonic_order);
     }
 
@@ -235,6 +252,8 @@ void WriteAnalysisStatistics(TDirectory& directory,
       static_cast<long long>(statistics.rejected_close_pairs);
   long long rejected_invalid_pair_kinematics =
       static_cast<long long>(statistics.rejected_invalid_pair_kinematics);
+  long long r2_summary_points_skipped_invalid_hbt_error = static_cast<long long>(
+      statistics.r2_summary_points_skipped_invalid_hbt_error);
 
   TTree statistics_tree("analysis_statistics", "analysis_statistics");
   statistics_tree.Branch("events_read", &events_read, "events_read/L");
@@ -264,6 +283,9 @@ void WriteAnalysisStatistics(TDirectory& directory,
   statistics_tree.Branch("rejected_invalid_pair_kinematics",
                          &rejected_invalid_pair_kinematics,
                          "rejected_invalid_pair_kinematics/L");
+  statistics_tree.Branch("r2_summary_points_skipped_invalid_hbt_error",
+                         &r2_summary_points_skipped_invalid_hbt_error,
+                         "r2_summary_points_skipped_invalid_hbt_error/L");
   statistics_tree.Fill();
   directory.cd();
   statistics_tree.Write();
@@ -353,6 +375,8 @@ void WriteProjectionFitMetadata(TDirectory& directory,
       config.projection_fit.fail_hbt_results_when_error_invalid ? 1 : 0;
   int fail_directional_results_when_error_invalid =
       config.projection_fit.fail_directional_results_when_error_invalid ? 1 : 0;
+  int accept_hbt_central_value_only_for_summary =
+      config.projection_fit.accept_hbt_central_value_only_for_summary ? 1 : 0;
 
   TTree metadata_tree("projection_fit_metadata", "projection_fit_metadata");
   metadata_tree.Branch("use_adaptive_integration",
@@ -370,6 +394,9 @@ void WriteProjectionFitMetadata(TDirectory& directory,
   metadata_tree.Branch("fail_directional_results_when_error_invalid",
                        &fail_directional_results_when_error_invalid,
                        "fail_directional_results_when_error_invalid/I");
+  metadata_tree.Branch("accept_hbt_central_value_only_for_summary",
+                       &accept_hbt_central_value_only_for_summary,
+                       "accept_hbt_central_value_only_for_summary/I");
   metadata_tree.Fill();
   directory.cd();
   metadata_tree.Write();
@@ -421,6 +448,9 @@ void WriteR2SummaryGraphs(TDirectory& directory,
                           .c_str());
       graph->GetXaxis()->SetTitle(relative_phi_title.c_str());
       graph->GetYaxis()->SetTitle(graph_titles[radius_index].c_str());
+      ApplySummaryGraphStyle(*graph);
+
+      const SummaryGraphStats stats = ComputeSummaryGraphStats(points);
 
       int point_index = 0;
       for (const RadiusSummaryPoint& point : points) {
@@ -434,16 +464,28 @@ void WriteR2SummaryGraphs(TDirectory& directory,
       }
 
       mt_directory->cd();
+      auto canvas = std::make_unique<TCanvas>(
+          (graph_names[radius_index] + "_canvas").c_str(),
+          graph->GetTitle(),
+          800,
+          600);
+      canvas->SetTicks(1, 1);
+      canvas->cd();
+      graph->Draw("ALPE1");
+      CreateSummaryInfoBox(graph_names[radius_index], stats)->Draw();
+      canvas->Modified();
+      canvas->Update();
+
       graph->Write();
+      canvas->Write();
     }
   }
 }
 
 }  // namespace
 
-AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
-                               const std::string& input_root_path,
-                               const std::string& output_root_path) {
+AnalysisStatistics RunAnalysis(const ApplicationConfig& application_config) {
+  const AnalysisConfig& config = application_config.analysis;
   if (config.centrality_bins.empty() || config.mt_bins.empty() ||
       config.phi_bins.empty()) {
     throw std::invalid_argument("Analysis bins must not be empty.");
@@ -465,62 +507,20 @@ AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
   const std::array<ProjectionDefinition, 6> directions =
       MakeProjectionDefinitions();
 
-  std::unique_ptr<TFile> input_file(TFile::Open(input_root_path.c_str(), "READ"));
-  if (input_file == nullptr || input_file->IsZombie()) {
-    throw std::runtime_error("Failed to open input ROOT file: " + input_root_path);
-  }
-
-  TTree* tree = dynamic_cast<TTree*>(input_file->Get(config.input.tree_name.c_str()));
-  if (tree == nullptr) {
-    throw std::runtime_error("Failed to find input TTree: " +
-                             config.input.tree_name);
-  }
-
-  TTreeReader reader(tree);
-  TTreeReaderValue<double> centrality(reader, config.input.centrality_branch.c_str());
-  std::unique_ptr<TTreeReaderValue<double>> input_event_plane;
-  if (use_input_event_plane && BranchExists(*tree, config.input.event_plane_branch)) {
-    input_event_plane = std::make_unique<TTreeReaderValue<double>>(
-        reader, config.input.event_plane_branch.c_str());
-  }
-  TTreeReaderValue<std::vector<int>> pdg(reader, config.input.pdg_branch.c_str());
-  TTreeReaderValue<std::vector<double>> px(reader, config.input.px_branch.c_str());
-  TTreeReaderValue<std::vector<double>> py(reader, config.input.py_branch.c_str());
-  TTreeReaderValue<std::vector<double>> pz(reader, config.input.pz_branch.c_str());
-  TTreeReaderValue<std::vector<double>> mass(reader, config.input.mass_branch.c_str());
-  TTreeReaderValue<std::vector<double>> x(reader, config.input.x_branch.c_str());
-  TTreeReaderValue<std::vector<double>> y(reader, config.input.y_branch.c_str());
-  TTreeReaderValue<std::vector<double>> z(reader, config.input.z_branch.c_str());
-  TTreeReaderValue<std::vector<double>> t(reader, config.input.t_branch.c_str());
-
-  ValidateReaderBranch(centrality.GetSetupStatus(), config.input.centrality_branch);
-  if (input_event_plane != nullptr) {
-    ValidateReaderBranch(input_event_plane->GetSetupStatus(),
-                         config.input.event_plane_branch);
-  }
-  ValidateReaderBranch(pdg.GetSetupStatus(), config.input.pdg_branch);
-  ValidateReaderBranch(px.GetSetupStatus(), config.input.px_branch);
-  ValidateReaderBranch(py.GetSetupStatus(), config.input.py_branch);
-  ValidateReaderBranch(pz.GetSetupStatus(), config.input.pz_branch);
-  ValidateReaderBranch(mass.GetSetupStatus(), config.input.mass_branch);
-  ValidateReaderBranch(x.GetSetupStatus(), config.input.x_branch);
-  ValidateReaderBranch(y.GetSetupStatus(), config.input.y_branch);
-  ValidateReaderBranch(z.GetSetupStatus(), config.input.z_branch);
-  ValidateReaderBranch(t.GetSetupStatus(), config.input.t_branch);
+  const std::vector<EventData> events = LoadEventData(application_config);
 
   AnalysisStatistics statistics;
   std::map<SliceKey, SliceHistograms> slice_histograms;
 
-  while (reader.Next()) {
+  for (const EventData& event_data : events) {
     ++statistics.events_read;
 
-    const int cent_index = FindBinIndex(config.centrality_bins, *centrality);
+    const int cent_index = FindBinIndex(config.centrality_bins, event_data.centrality);
     if (cent_index < 0) {
       continue;
     }
 
-    const std::size_t particle_count = ValidateParticleBranches(
-        *pdg, *px, *py, *pz, *mass, *x, *y, *z, *t);
+    const std::size_t particle_count = event_data.particles.size();
 
     std::vector<ParticleState> event_plane_candidates;
     std::vector<ParticleState> selected_particles;
@@ -531,8 +531,7 @@ AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
 
     for (std::size_t particle_index = 0; particle_index < particle_count;
          ++particle_index) {
-      const ParticleState particle =
-          MakeParticleState(*pdg, *px, *py, *pz, *mass, *x, *y, *z, *t, particle_index);
+      const ParticleState& particle = event_data.particles[particle_index];
 
       if (use_internal_event_plane &&
           IsEventPlaneCandidate(particle, config.event_plane)) {
@@ -551,7 +550,7 @@ AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
                           use_internal_event_plane,
                           use_input_event_plane,
                           event_plane_candidates,
-                          input_event_plane.get());
+                          event_data);
     if (!event_plane_result.success) {
       RecordEventPlaneFailure(event_plane_result, statistics);
       continue;
@@ -635,10 +634,10 @@ AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
   }
 
   std::unique_ptr<TFile> output_file(
-      TFile::Open(output_root_path.c_str(), "RECREATE"));
+      TFile::Open(application_config.output_root_path.c_str(), "RECREATE"));
   if (output_file == nullptr || output_file->IsZombie()) {
     throw std::runtime_error("Failed to create output ROOT file: " +
-                             output_root_path);
+                             application_config.output_root_path);
   }
 
   TDirectory* top_directory =
@@ -784,14 +783,19 @@ AnalysisStatistics RunAnalysis(const AnalysisConfig& config,
     for (std::size_t radius_index = 0;
          radius_index < fit_products.hbt_radii_results.size();
          ++radius_index) {
+      const R2SummaryPointDecision decision = DecideHbtR2SummaryPoint(
+          fit_products.hbt_radii_results[radius_index],
+          fit_products.hbt_error_valid[radius_index],
+          config.projection_fit);
       RadiusSummaryPoint point;
       point.phi_center = phi_bin.Center();
       point.phi_error = 0.5 * (phi_bin.max - phi_bin.min);
       point.value = fit_products.hbt_radii_results[radius_index].r2;
-      point.error = fit_products.hbt_error_valid[radius_index]
-                        ? fit_products.hbt_radii_results[radius_index].r2_error
-                        : std::numeric_limits<double>::quiet_NaN();
-      point.valid = fit_products.hbt_error_valid[radius_index];
+      point.error = decision.error;
+      point.valid = decision.write_point;
+      if (decision.skipped_invalid_hbt_error) {
+        ++statistics.r2_summary_points_skipped_invalid_hbt_error;
+      }
       radii_per_phi[radius_index].push_back(point);
     }
   }

@@ -1,0 +1,120 @@
+[input]
+schema = "blastwave_flat_trees"
+input_root = "/Users/allenzhou/Research_software/Blast_wave/qa/test_b8_5000.root"
+
+[input.blastwave]
+events_tree = "events"
+particles_tree = "particles"
+event_id_branch = "event_id"
+centrality_branch = "centrality"
+event_plane_branch = "psi2"
+pid_branch = "pid"
+px_branch = "px"
+py_branch = "py"
+pz_branch = "pz"
+mass_branch = "mass"
+x_branch = "x"
+y_branch = "y"
+z_branch = "z"
+t_branch = "t"
+
+[output]
+output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/test.root"
+top_directory_name = "Femto3D"
+r2_summary_directory_name = "R2Summary"
+
+[event_plane]
+enabled = true
+harmonic_order = 2
+use_internal_reconstruction = false
+fallback_to_input_branch = true
+eta_min = -2.5
+eta_max = -0.5
+weight_mode = "pt"
+allowed_abs_pdg = [211, 321, 2212]
+min_candidates = 2
+min_q_magnitude = 1.0e-6
+
+[selection]
+target_pdg = 211
+femto_eta_min = -0.5
+femto_eta_max = 0.5
+femto_pt_min = 0.2
+femto_pt_max = 1.0
+femto_mt_reference_mass = 0.13957039
+femto_mt_mass_tolerance = 1.0e-3
+
+[histograms]
+warn_on_overflow = false
+
+[histograms.rho_out_axis]
+title = "#rho_{out}"
+min = -20.0
+max = 20.0
+bin_width = 0.5
+
+[histograms.rho_side_axis]
+title = "#rho_{side}"
+min = -20.0
+max = 20.0
+bin_width = 0.5
+
+[histograms.rho_long_axis]
+title = "#rho_{long}"
+min = -20.0
+max = 20.0
+bin_width = 0.5
+
+[histograms.projection_axis]
+title = "r"
+min = -20.0
+max = 20.0
+bin_width = 0.5
+
+[projection_fit]
+use_adaptive_integration = false
+accept_forced_posdef_covariance_as_valid = false
+fail_alpha_result_when_error_invalid = false
+fail_hbt_results_when_error_invalid = false
+fail_directional_results_when_error_invalid = false
+accept_hbt_central_value_only_for_summary = true
+
+[[bins.centrality]]
+min = 0.0
+max = 100.0
+label = "cent_minbias"
+
+# [[bins.centrality]]
+# min = 10.0
+# max = 30.0
+# label = "cent_10_30"
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+label = "femto_mt_0p2_0p4"
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+label = "femto_mt_0p4_0p6"
+
+[[bins.phi]]
+min = -1.57079632679
+max = -0.78539816339
+label = "phi_neg_quadrant"
+
+[[bins.phi]]
+min = -0.78539816339
+max = 0.0
+label = "phi_neg_mid"
+
+[[bins.phi]]
+min = 0.0
+max = 0.78539816339
+label = "phi_pos_mid"
+
+[[bins.phi]]
+min = 0.78539816339
+max = 1.57079632679
+label = "phi_pos_quadrant"

@@ -31,6 +31,7 @@ struct ParticleState {
 struct EventData {
   double centrality = 0.0;
   double event_plane_psi = 0.0;
+  bool has_input_event_plane = false;
   std::vector<ParticleState> particles;
 };
 
@@ -127,6 +128,7 @@ struct AnalysisStatistics {
   std::size_t accepted_pairs = 0;
   std::size_t rejected_close_pairs = 0;
   std::size_t rejected_invalid_pair_kinematics = 0;
+  std::size_t r2_summary_points_skipped_invalid_hbt_error = 0;
 };
 
 inline std::string FormatBinLabel(const std::string& prefix,
