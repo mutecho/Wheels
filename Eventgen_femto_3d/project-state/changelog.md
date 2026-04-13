@@ -9,3 +9,4 @@
 - 在 O2/ROOT 环境下完成构建、全量测试与 wrapper 脚本 smoke。
 - 补写 `project-state`，记录本轮实现结果与流程改进项。
 - 补齐 `project-state/guide.md`，完成面向维护者的人类可读概览。
+- 调整了可执行二进制文件的位置到 `bin` 目录下。

@@ -9,6 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
+set(APP_BIN_DIR  ${PROJECT_SOURCE_DIR}/bin)
+set(TEST_BIN_DIR ${PROJECT_SOURCE_DIR}/bin/tests)
+
 find_package(ROOT REQUIRED COMPONENTS Graf Hist MathCore Tree TreePlayer RIO Minuit2)
 find_package(tomlplusplus CONFIG REQUIRED
   HINTS
@@ -216,10 +219,26 @@ add_test(
           $<TARGET_FILE:r2_summary_visibility_test>
 )
 
-set_tests_properties(
+set_target_properties(eventgen_femto_3d
+  PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${APP_BIN_DIR}
+)
+
+
+set(TEST_TARGETS
   input_adapter_test
   legacy_workflow_smoke_test
   r2_summary_visibility_test
+)
+
+set_tests_properties(
+  ${TEST_TARGETS}
   PROPERTIES
     SKIP_RETURN_CODE 77
+)
+
+
+set_target_properties(${TEST_TARGETS}
+  PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${TEST_BIN_DIR}
 )

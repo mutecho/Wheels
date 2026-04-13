@@ -1,9 +1,9 @@
+#include <filesystem>
+#include <memory>
+
 #include "TFile.h"
 #include "TH3.h"
 #include "THnSparse.h"
-
-#include <filesystem>
-#include <memory>
 
 int main() {
   const std::filesystem::path temp_root =
@@ -31,13 +31,13 @@ int main() {
       return 2;
     }
 
-    auto* sparse = dynamic_cast<THnSparseF*>(input.Get("sparse"));
+    auto *sparse = dynamic_cast<THnSparseF *>(input.Get("sparse"));
     if (sparse == nullptr) {
       std::filesystem::remove(temp_root);
       return 3;
     }
 
-    auto* projection = static_cast<TH3D*>(sparse->Projection(0, 1, 2));
+    auto *projection = static_cast<TH3D *>(sparse->Projection(0, 1, 2));
     if (projection == nullptr) {
       std::filesystem::remove(temp_root);
       return 4;

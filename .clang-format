@@ -1,0 +1,33 @@
+BasedOnStyle: Google   # 或 LLVM / Chromium / Mozilla / WebKit
+
+IndentWidth: 2        # 或 4（C++传统）
+TabWidth: 2
+UseTab: Never
+
+ColumnLimit: 120
+BreakBeforeBraces: Attach
+
+BinPackParameters: false
+BinPackArguments: false
+
+PointerAlignment: Right
+
+SortIncludes: true
+IncludeBlocks: Regroup
+
+NamespaceIndentation: All
+
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Empty
+
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInAngles: false
+
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBinaryOperators: NonAssignment
+
+Cpp11BracedListStyle: true
+Standard: c++17
