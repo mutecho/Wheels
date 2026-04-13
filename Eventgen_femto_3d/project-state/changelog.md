@@ -10,3 +10,6 @@
 - 补写 `project-state`，记录本轮实现结果与流程改进项。
 - 补齐 `project-state/guide.md`，完成面向维护者的人类可读概览。
 - 调整了可执行二进制文件的位置到 `bin` 目录下。
+- 同步 `project-state` 到当前 `HEAD`，将旧的 `6/6` 测试描述更新为当前注册的 `8` 项测试。
+- 记录 `run_eventgen_femto_3d.sh` 已切换为调用 `bin/eventgen_femto_3d`。
+- 补记一次当前 `HEAD` 下的 `ctest` 与 `alienv` wrapper smoke 证据。

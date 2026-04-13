@@ -62,13 +62,25 @@
 - 入口层
   - [main.cpp](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/src/main.cpp)
   - [run_eventgen_femto_3d.sh](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/run_eventgen_femto_3d.sh)
-  - `main` 只做 CLI glue；shell wrapper 负责在 O2/ROOT 环境下透传参数运行二进制。
+  - `main` 只做 CLI glue。
+  - CMake 当前把主程序输出到 `bin/eventgen_femto_3d`。
+  - shell wrapper 负责在 O2/ROOT 环境下透传参数运行 `bin/eventgen_femto_3d`。
 
 - 测试层
-  - 配置解析：`ConfigParseValidationTest.cpp`
-  - 输入适配：`InputAdapterTest.cpp`
-  - legacy smoke：`LegacyWorkflowSmokeTest.cpp`
-  - ROOT runtime guard：`RootRuntimeProbe.cpp` + `run_root_guard.sh`
+  - 纯逻辑/语义测试：
+    - `DirectionalCovarianceFailureSemanticsTest.cpp`
+    - `AlphaHbtErrorSemanticsTest.cpp`
+    - `FitSummaryDirectionalErrorMaskTest.cpp`
+    - `R2SummaryPolicyTest.cpp`
+    - `ConfigParseValidationTest.cpp`
+  - 运行时相关测试：
+    - `InputAdapterTest.cpp`
+    - `LegacyWorkflowSmokeTest.cpp`
+    - `R2SummaryVisibilityTest.cpp`
+  - ROOT runtime guard：
+    - `RootRuntimeProbe.cpp`
+    - `run_root_guard.sh`
+  - 测试二进制当前输出到 `bin/tests/`。
 
 ## 使用方法
 
@@ -81,6 +93,12 @@ cmake -S /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d \
       -B /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/build
 
 cmake --build /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/build
+```
+
+构建完成后，主程序默认位于：
+
+```bash
+/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/bin/eventgen_femto_3d
 ```
 
 ### 2. 运行入口
@@ -101,6 +119,8 @@ eventgen_femto_3d --config <file.toml> \
   --config /path/to/config.toml
 ```
 
+该 wrapper 当前会进入 `alienv setenv O2Physics/latest-master-o2`，然后调用 `bin/eventgen_femto_3d`。
+
 ### 3. 示例配置
 
 示例文件位于：
@@ -116,6 +136,7 @@ ctest --output-on-failure --test-dir /Users/allenzhou/Research_software/Code_bas
 
 当前自动化重点覆盖：
 
+- 拟合语义与 `R2Summary` 策略
 - CLI/TOML 解析
 - blast-wave 输入聚合与 fail-fast
 - legacy workflow smoke

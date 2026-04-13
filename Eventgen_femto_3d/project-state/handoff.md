@@ -2,7 +2,7 @@
 
 ## 最新交接
 
-- 交接时间: 2026-04-13 13:20:15 CST
+- 交接时间: 2026-04-13 23:36:35 CST
 - 当前 owner: 父线程主执行者
 - 下一步 owner: 任意继续维护该模块的执行者
 - verification_status: `verified`
@@ -10,21 +10,18 @@
 
 ## 已完成事项
 
-- 已完成 `Eventgen_femto_3d` 的 blast-wave 输入适配与 legacy 输入兼容。
-- 已完成 `CLI + TOML` 入口改造，`toml++` 接入方式与同仓库 `Exp_femto_3d` 一致。
-- 已完成测试补齐：
-  - 配置解析与 CLI 覆盖
-  - blast-wave 聚合与 fail-fast
-  - legacy workflow smoke
-  - ROOT runtime guard
-- 已在 O2/ROOT 运行时下完成构建、`ctest` 与 wrapper 脚本 smoke。
+- 已把 `project-state` 对齐到当前 `HEAD`，修正了测试基线与 wrapper 路径说明。
+- 已确认 `run_eventgen_femto_3d.sh` 当前启动的是 `bin/eventgen_femto_3d`。
+- 已补记当前验证证据：
+  - `ctest` 共注册 `8` 项测试，当前 shell 下 `5` 项通过、`3` 项按 runtime guard 设计 `SKIP`。
+  - `alienv` 下 wrapper smoke 成功跑通真实 blast-wave 输入并写出输出 ROOT 文件。
+- 之前实现的 blast-wave 输入适配、legacy 输入兼容、`CLI + TOML` 入口以及相关测试覆盖仍然成立。
 
-## 这轮为什么没有在结束前自动写入 project-state
+## 这轮为什么还需要再次同步 project-state
 
-- 根因不是仓库没有 `project-state/`，而是父线程在本轮实现阶段没有显式执行一次“closeout gate”。
-- 这轮一开始把主要精力放在代码改造、构建与 ROOT 运行时问题排查上；中途又遇到子代理未落地、测试失败后快速本地修复的节奏，导致最后的 `project-state` 写回没有被提前保留为强制步骤。
-- 之后会话又因限额中断，进一步放大了这个遗漏。
-- 这说明 `project-state` 目前更多还是流程约束，而不是一个被工具或计划硬性拦截的自动动作。
+- 最近一笔代码提交只改了 wrapper 的二进制路径，但 `project-state` 没有同步反映这一点。
+- 同时，测试台账仍停留在旧的 `6/6` 描述，而当前构建系统已经注册 `8` 个测试。
+- 这说明即使上一次已经做过 closeout，只要后续有小型跟进提交，`project-state` 仍可能再次漂移。
 
 ## 应如何改进这一点
 
@@ -41,19 +38,13 @@
   - next step hint
   父线程据此统一写回，不能指望子代理自己补文档。
 
-## 为什么这轮验证测试没有交给专门 subagent 执行
+## 为什么这轮仍在父线程完成验证与文档同步
 
-- 这轮实际使用过 sidecar 子代理做测试设计，但没有把最终 build/test 执行再单独交给验证子代理。
-- 原因是验证当时已经落到关键路径上：主线程一旦集成完改动，下一步就必须立即构建、跑测、看失败、修复，再重跑。
-- 这些动作依赖：
-  - 最新主线程代码状态
-  - O2/ROOT 本地运行时
-  - `alienv` 下的提权执行
-  - 快速 reproduce-fix-rerun 循环
-- 按当前执行规则，像这种“下一步就阻塞在验证结果上”的工作，应优先在父线程本地完成，而不是再委派一个会增加往返延迟的子代理。
-- 另外，这轮真实失败点出在 ROOT fixture 写盘与 `TTreeReaderValue` 运行时兼容性上，需要一边查环境一边改代码；如果拆给专门验证子代理，主线程仍然会被它的结果阻塞，收益不高。
+- 这次任务本身就是父线程负责的 `project-state` closeout，同步台账不能下放给子代理直接写。
+- 仓库本地 `AGENTS.md` 倾向于把非平凡工程任务交给配对 agent，但当前外层运行规则没有给出“用户已明确要求 delegation”的条件，所以不能主动启用子 agent。
+- 这次验证又直接依赖本地 `build/`、`alienv` 运行时和实时文档写回，放在父线程里完成更直接。
 
 ## 下一步建议
 
 - 先补一条 blast-wave 错误标量类型的自动化 fixture，用来覆盖 `BW-03`。
-- 后续若验证任务不在关键路径上，可以考虑把“只跑已稳定的 smoke/regression 套件”单独委派给测试子代理，但前提是主线程实现已经基本收敛。
+- 后续若再改 `run_eventgen_femto_3d.sh`、`CMakeLists.txt` 或测试注册表，应同步检查 `tests.md` 与 `guide.md` 是否也需要更新。
