@@ -3,7 +3,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-binary_path="${script_dir}/build/eventgen_femto_3d"
+binary_path="${script_dir}/bin/eventgen_femto_3d"
 
 if [[ ! -x "${binary_path}" ]]; then
   echo "Binary not found: ${binary_path}" >&2
