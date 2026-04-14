@@ -1,0 +1,130 @@
+cmake_minimum_required(VERSION 3.16)
+
+project(ExpFemto3D LANGUAGES CXX)
+enable_testing()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export compile_commands.json" FORCE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
+
+if(CMAKE_CONFIGURATION_TYPES)
+  foreach(config ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER "${config}" config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+  endforeach()
+endif()
+
+find_package(ROOT REQUIRED COMPONENTS Core RIO Hist Graf Gpad Tree TreePlayer MathCore Minuit)
+find_package(tomlplusplus CONFIG REQUIRED
+  HINTS
+    /opt/homebrew/lib/cmake/tomlplusplus
+    /opt/homebrew/opt/tomlplusplus
+)
+
+add_library(exp_femto_3d_core
+  src/Config.cpp
+  src/Logging.cpp
+  src/Workflow.cpp
+)
+
+target_include_directories(exp_femto_3d_core
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${ROOT_INCLUDE_DIRS}
+)
+
+target_link_libraries(exp_femto_3d_core
+  PUBLIC
+    ROOT::Core
+    ROOT::RIO
+    ROOT::Hist
+    ROOT::Graf
+    ROOT::Gpad
+    ROOT::Tree
+    ROOT::TreePlayer
+    ROOT::MathCore
+    ROOT::Minuit
+    tomlplusplus::tomlplusplus
+)
+
+target_compile_options(exp_femto_3d_core
+  PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_executable(exp_femto_3d
+  app/main.cpp
+)
+
+target_link_libraries(exp_femto_3d
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_executable(config_parse_validation_test
+  tests/ConfigParseValidationTest.cpp
+)
+
+target_link_libraries(config_parse_validation_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME config_parse_validation_test
+  COMMAND config_parse_validation_test
+)
+
+add_executable(root_runtime_probe
+  tests/RootRuntimeProbe.cpp
+)
+
+target_link_libraries(root_runtime_probe
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_executable(slice_catalog_roundtrip_test
+  tests/SliceCatalogRoundTripTest.cpp
+)
+
+target_link_libraries(slice_catalog_roundtrip_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME slice_catalog_roundtrip_test
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_root_guard.sh
+          $<TARGET_FILE:root_runtime_probe>
+          $<TARGET_FILE:slice_catalog_roundtrip_test>
+)
+
+add_executable(workflow_smoke_test
+  tests/WorkflowSmokeTest.cpp
+)
+
+target_link_libraries(workflow_smoke_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME workflow_smoke_test
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_root_guard.sh
+          $<TARGET_FILE:root_runtime_probe>
+          $<TARGET_FILE:workflow_smoke_test>
+)
+
+set_tests_properties(
+  slice_catalog_roundtrip_test
+  workflow_smoke_test
+  PROPERTIES
+    SKIP_RETURN_CODE 77
+)
