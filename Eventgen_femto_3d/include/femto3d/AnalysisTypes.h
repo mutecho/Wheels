@@ -135,7 +135,7 @@ namespace femto3d {
                                     const double max,
                                     const int precision = 2) {
     std::ostringstream stream;
-    stream << prefix << "_" << std::fixed << std::setprecision(precision) << min << "_" << max;
+    stream << prefix << "_" << std::fixed << std::setprecision(precision) << min << "-" << max;
     return stream.str();
   }
 

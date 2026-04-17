@@ -82,54 +82,54 @@ accept_hbt_central_value_only_for_summary = true
 [[bins.centrality]]
 min = 0.0
 max = 100.0
-label = "cent_minbias"
+label = "cent_0.00-100.00"
 
 # [[bins.centrality]]
 # min = 10.0
 # max = 30.0
-# label = "cent_10_30"
+# label = "cent_10.00-30.00"
 
 [[bins.mt]]
 min = 0.2
 max = 0.4
-label = "femto_mt_0p2_0p4"
+label = "femto_mt_0.20-0.40"
 
 [[bins.mt]]
 min = 0.4
 max = 0.6
-label = "femto_mt_0p4_0p6"
+label = "femto_mt_0.40-0.60"
 
 [[bins.phi]]
 min = -1.570796
 max = -1.121997
-label = "phi_neg_3"
+label = "phi_-1.57--1.12"
 
 [[bins.phi]]
 min = -1.121997
 max = -0.673198
-label = "phi_neg_2"
+label = "phi_-1.12--0.67"
 
 [[bins.phi]]
 min = -0.673198
 max = -0.224399
-label = "phi_neg_1"
+label = "phi_-0.67--0.22"
 
 [[bins.phi]]
 min = -0.224399
 max = 0.224399
-label = "phi_central"
+label = "phi_-0.22-0.22"
 
 [[bins.phi]]
 min = 0.224399
 max = 0.673198
-label = "phi_pos_1"
+label = "phi_0.22-0.67"
 
 [[bins.phi]]
 min = 0.673198
 max = 1.121997
-label = "phi_pos_2"
+label = "phi_0.67-1.12"
 
 [[bins.phi]]
 min = 1.121997
 max = 1.570796
-label = "phi_pos_3"
+label = "phi_1.12-1.57"

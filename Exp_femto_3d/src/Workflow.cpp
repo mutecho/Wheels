@@ -65,24 +65,16 @@ namespace exp_femto_3d {
       return stream.str();
     }
 
-    std::string SanitizeToken(std::string token) {
-      if (std::abs(std::stod(token)) < 5.0e-7) {
-        token = FormatDouble(0.0, 2);
-      }
-      for (char &character : token) {
-        if (character == '-') {
-          character = 'm';
-        } else if (character == '.') {
-          character = 'p';
-        }
-      }
-      return token;
+    // Keep near-zero values stable so directory names do not depend on negative zero formatting.
+    std::string FormatDirectoryValue(const double value, const int precision = 2) {
+      const double stable_value = std::abs(value) < 5.0e-7 ? 0.0 : value;
+      return FormatDouble(stable_value, precision);
     }
 
     std::string BuildGroupId(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
-      return "cent_" + SanitizeToken(FormatDouble(centrality_bin.min, 2)) + "_"
-             + SanitizeToken(FormatDouble(centrality_bin.max, 2)) + "__mt_" + SanitizeToken(FormatDouble(mt_bin.min, 2))
-             + "_" + SanitizeToken(FormatDouble(mt_bin.max, 2));
+      return "cent_" + FormatDirectoryValue(centrality_bin.min, 2) + "-"
+             + FormatDirectoryValue(centrality_bin.max, 2) + "__mt_" + FormatDirectoryValue(mt_bin.min, 2) + "-"
+             + FormatDirectoryValue(mt_bin.max, 2);
     }
 
     std::string BuildSliceId(const std::string &group_id,
@@ -91,7 +83,7 @@ namespace exp_femto_3d {
       if (is_phi_integrated) {
         return group_id + "__phi_all";
       }
-      return group_id + "__phi_" + SanitizeToken(FormatDouble(display_phi_center, 2));
+      return group_id + "__phi_" + FormatDirectoryValue(display_phi_center, 2);
     }
 
     std::string BuildSliceDirectory(const std::string &slice_id) {

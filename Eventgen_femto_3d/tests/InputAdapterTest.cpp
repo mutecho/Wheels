@@ -41,8 +41,8 @@ ApplicationConfig MakeBlastwaveConfig(const std::string& input_root,
   config.input_schema = InputSchema::kBlastwaveFlatTrees;
   config.analysis.event_plane =
       femto3d::MakeDefaultEventPlaneConfigForSchema(config.input_schema);
-  config.analysis.centrality_bins = {{0.0, 100.0, "cent_0_100"}};
-  config.analysis.mt_bins = {{0.0, 1.0, "femto_mt_0_1"}};
+  config.analysis.centrality_bins = {{0.0, 100.0, "cent_0.00-100.00"}};
+  config.analysis.mt_bins = {{0.0, 1.0, "femto_mt_0.00-1.00"}};
   config.analysis.phi_bins = {{-femto3d::kPi / 2.0, femto3d::kPi / 2.0, "phi_all"}};
   config.analysis.selection.target_pdg = 211;
   config.analysis.selection.femto_eta_min = -1.0;
