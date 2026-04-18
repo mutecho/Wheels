@@ -73,14 +73,14 @@
 项目主程序为：
 
 ```bash
-./build/exp_femto_3d
+./bin/exp_femto_3d
 ```
 
 支持两个子命令：
 
 ```bash
-./build/exp_femto_3d build-cf --config <config.toml>
-./build/exp_femto_3d fit --config <config.toml>
+./bin/exp_femto_3d build-cf --config <config.toml>
+./bin/exp_femto_3d fit --config <config.toml>
 ```
 
 可选 fit 覆盖参数：
