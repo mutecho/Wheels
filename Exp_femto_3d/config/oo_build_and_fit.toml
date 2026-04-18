@@ -1,5 +1,5 @@
 [input]
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_25ae_pass2.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_merged.root"
 task_name = "femto-dream-pair-task-track-track"
 same_event_subtask = "SameEvent_3Dqn"
 mixed_event_subtask = "MixedEvent_3Dqn"
@@ -7,10 +7,10 @@ sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
 
 [output]
 output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
-cf_root_name = "EP_dependence_CF_25ae_pass2.root"
-fit_root_name = "EP_dependence_CF_full_fit_v2_25ae_pass2.root"
-fit_summary_name = "25ae_pass2_fit_summary.tsv"
-log_level = "info"
+cf_root_name = "EP_dependence_CF_3d_25ae_pass2.root"
+fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root"
+fit_summary_name = "3d_25ae_pass2_fit_summary.tsv"
+log_level = "warn"
 
 [build]
 map_pair_phi_to_symmetric_range = false
@@ -46,24 +46,44 @@ min = 80
 max = 100
 
 [[bins.mt]]
-min = 0.244131
-max = 0.331059
+min = 0.0
+max = 0.519
 
 [[bins.mt]]
-min = 0.331059
-max = 0.423792
+min = 0.519
+max = 0.812
 
 [[bins.mt]]
-min = 0.423792
-max = 0.51923
+min = 0.812
+max = 1.208
 
 [[bins.mt]]
-min = 0.51923
-max = 0.713863
+min = 1.208
+max = 1.606
 
 [[bins.mt]]
-min = 0.244131
-max = 0.713863
+min = 1.606
+max = 2.005
+
+[[bins.mt]]
+min = 2.005
+max = 2.504
+
+[[bins.mt]]
+min = 2.504
+max = 3.003
+
+[[bins.mt]]
+min = 3.003
+max = 4.002
+
+[[bins.mt]]
+min = 4.002
+max = 5.002
+
+[[bins.mt]]
+min = 5.002
+max = 8.001
 
 [[fit_selection.centrality]]
 min = 0
@@ -77,14 +97,20 @@ max = 30
 min = 30
 max = 50
 
-[[fit_selection.mt]]
-min = 0.244131
-max = 0.331059
 
 [[fit_selection.mt]]
-min = 0.423792
-max = 0.51923
+min = 0.0
+max = 0.519
 
 [[fit_selection.mt]]
-min = 0.51923
-max = 0.713863
+min = 0.519
+max = 0.812
+
+[[fit_selection.mt]]
+min = 0.812
+max = 1.208
+
+[[fit_selection.mt]]
+min = 1.208
+max = 1.606
+

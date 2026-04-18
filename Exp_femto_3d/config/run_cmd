@@ -1,0 +1,6 @@
+//oo_build_and_fit
+
+/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/bin/exp_femto_3d build-cf --config /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/config/oo_build_and_fit.toml
+
+
+/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/bin/exp_femto_3d fit --config /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/config/oo_build_and_fit.toml

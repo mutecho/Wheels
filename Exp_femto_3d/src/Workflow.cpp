@@ -1832,6 +1832,11 @@ namespace exp_femto_3d {
     BuildCfRunStatistics statistics;
     statistics.requested_groups = config.centrality_bins.size() * config.mt_bins.size();
     std::vector<SliceCatalogEntry> catalog_entries;
+    // Count planned slices up front so skipped branches still advance the CLI progress bar.
+    const std::size_t slices_per_group = static_cast<std::size_t>(n_phi_bins + 1);
+    const std::size_t planned_slices = statistics.requested_groups * slices_per_group;
+    std::size_t processed_slices = 0;
+    ProgressReporter progress(logger, "build-cf", planned_slices);
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.build.reopen_output_file_per_slice) {
@@ -1839,6 +1844,7 @@ namespace exp_femto_3d {
     }
 
     logger.Info("Starting build-cf stage.");
+    progress.Update(0);
 
     for (std::size_t centrality_index = 0; centrality_index < config.centrality_bins.size(); ++centrality_index) {
       const RangeBin &centrality_bin = config.centrality_bins[centrality_index];
@@ -1861,6 +1867,8 @@ namespace exp_femto_3d {
         if (int_me == 0.0) {
           logger.Warn("Zero mixed-event integral for " + group_id + "; skipping group.");
           ++statistics.skipped_zero_mixed_event_groups;
+          processed_slices += slices_per_group;
+          progress.Update(processed_slices);
           delete h_me_raw;
           delete h_me_norm;
           continue;
@@ -1900,6 +1908,8 @@ namespace exp_femto_3d {
           output_file->cd();
           catalog_entries.push_back(entry);
           ++statistics.stored_slices;
+          ++processed_slices;
+          progress.Update(processed_slices);
 
           delete h_me_write;
           delete h_cf;
@@ -1914,6 +1924,8 @@ namespace exp_femto_3d {
         if (int_se_all == 0.0) {
           logger.Warn("Zero same-event integral for " + group_id + " phi=all.");
           ++statistics.skipped_zero_same_event_slices;
+          ++processed_slices;
+          progress.Update(processed_slices);
         } else {
           h_se_all_norm->Scale(1.0 / int_se_all);
           const double raw_phi_low = phi_axis->GetBinLowEdge(1);
@@ -1946,6 +1958,8 @@ namespace exp_femto_3d {
             logger.Warn("Zero same-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
                         + "; skipping slice.");
             ++statistics.skipped_zero_same_event_slices;
+            ++processed_slices;
+            progress.Update(processed_slices);
             delete h_se_raw;
             delete h_se_norm;
             continue;
@@ -1998,6 +2012,7 @@ namespace exp_femto_3d {
       catalog_output_file->Close();
     }
 
+    progress.Finish();
     TH1::AddDirectory(old_add_directory);
     logger.Info("Completed build-cf stage: stored " + std::to_string(statistics.stored_slices) + " slices.");
     return statistics;
@@ -2023,6 +2038,12 @@ namespace exp_femto_3d {
 
     FitRunStatistics statistics;
     statistics.catalog_slices = catalog_entries.size();
+    const std::size_t total_selected_slices = static_cast<std::size_t>(std::count_if(
+        catalog_entries.begin(), catalog_entries.end(), [&](const SliceCatalogEntry &entry) {
+          return MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins);
+        }));
+    std::size_t processed_selected_slices = 0;
+    ProgressReporter progress(logger, "fit", total_selected_slices);
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.fit.reopen_output_file_per_slice) {
@@ -2031,6 +2052,7 @@ namespace exp_femto_3d {
 
     const FitModel model = override_model.value_or(config.fit.model);
     logger.Info("Starting fit stage with model=" + ToString(model) + ".");
+    progress.Update(0);
 
     std::vector<LevyFitResult> fit_results;
     for (const SliceCatalogEntry &entry : catalog_entries) {
@@ -2044,6 +2066,8 @@ namespace exp_femto_3d {
       if (!h_cf) {
         logger.Warn("Missing CF histogram for slice " + entry.slice_id);
         ++statistics.skipped_missing_objects;
+        ++processed_selected_slices;
+        progress.Update(processed_selected_slices);
         continue;
       }
 
@@ -2055,6 +2079,8 @@ namespace exp_femto_3d {
         if (!h_se_raw || !h_me_raw) {
           logger.Warn("PML requested but raw SE/ME histograms are missing for " + entry.slice_id);
           ++statistics.skipped_missing_raw_histograms;
+          ++processed_selected_slices;
+          progress.Update(processed_selected_slices);
           continue;
         }
       }
@@ -2072,6 +2098,8 @@ namespace exp_femto_3d {
         fit_results.push_back(fit_result);
         ++statistics.fitted_slices;
       }
+      ++processed_selected_slices;
+      progress.Update(processed_selected_slices);
     }
 
     if (shared_output_file) {
@@ -2087,6 +2115,7 @@ namespace exp_femto_3d {
     }
     WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
 
+    progress.Finish();
     TH1::AddDirectory(old_add_directory);
     logger.Info("Completed fit stage: fitted " + std::to_string(statistics.fitted_slices) + " slices.");
     return statistics;
