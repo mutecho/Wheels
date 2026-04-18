@@ -24,6 +24,12 @@ namespace exp_femto_3d {
     kFull,
   };
 
+  enum class ProgressMode {
+    kAuto,
+    kEnabled,
+    kDisabled,
+  };
+
   struct RangeBin {
     double min = 0.0;
     double max = 0.0;
@@ -54,6 +60,7 @@ namespace exp_femto_3d {
     bool map_pair_phi_to_symmetric_range = false;
     bool write_normalized_se_me_1d_projections = false;
     bool reopen_output_file_per_slice = true;
+    ProgressMode progress = ProgressMode::kAuto;
   };
 
   struct LevyFitOptions {
@@ -67,7 +74,9 @@ namespace exp_femto_3d {
   struct FitConfig {
     FitModel model = FitModel::kFull;
     LevyFitOptions options;
+    std::optional<bool> map_pair_phi_to_symmetric_range;
     bool reopen_output_file_per_slice = true;
+    ProgressMode progress = ProgressMode::kAuto;
   };
 
   struct ApplicationConfig {
@@ -104,6 +113,7 @@ namespace exp_femto_3d {
     double display_phi_low = 0.0;
     double display_phi_high = 0.0;
     double display_phi_center = 0.0;
+    bool build_uses_symmetric_phi_range = false;
     bool is_phi_integrated = false;
   };
 
@@ -120,6 +130,7 @@ namespace exp_femto_3d {
     double mt_low = 0.0;
     double mt_high = 0.0;
     double phi = std::numeric_limits<double>::quiet_NaN();
+    bool fit_uses_symmetric_phi_range = false;
     bool is_phi_integrated = false;
     double norm = std::numeric_limits<double>::quiet_NaN();
     double norm_err = std::numeric_limits<double>::quiet_NaN();

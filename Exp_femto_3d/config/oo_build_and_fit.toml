@@ -24,6 +24,8 @@ use_core_halo_lambda = true
 use_q2_baseline = true
 use_pml = true
 fit_q_max = 0.15
+# omit to follow the input CF metadata written by build-cf
+map_pair_phi_to_symmetric_range = true
 
 [[bins.centrality]]
 min = 0
@@ -113,4 +115,3 @@ max = 1.208
 [[fit_selection.mt]]
 min = 1.208
 max = 1.606
-

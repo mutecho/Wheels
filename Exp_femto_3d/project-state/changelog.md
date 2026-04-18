@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-19
+
+- Synced `project-state/` to the current `3d_cf_from_exp` refactor work rather
+  than leaving it at the earlier ROOT-runtime bootstrap state.
+- Recorded the new build/fit progress-mode controls exposed through TOML.
+- Recorded that build now persists `build_uses_symmetric_phi_range` into
+  `meta/SliceCatalog`.
+- Recorded that fit can either follow the input CF phi metadata or override it
+  from stored `raw_phi_*` coordinates without rebuilding the CF file.
+- Recorded backward-compatible inference for legacy `SliceCatalog` trees that do
+  not yet carry the new branch.
+- Recorded the authoritative `2026-04-19` non-sandboxed O2Physics `ctest` pass
+  and the matching sandbox skip signature for context.
+
 ## 2026-04-11
 
 - Bootstrapped `project-state/` for `Exp_femto_3d`.

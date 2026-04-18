@@ -13,5 +13,7 @@ namespace exp_femto_3d {
   [[nodiscard]] LogLevel ParseLogLevel(const std::string &token);
   [[nodiscard]] std::string ToString(FitModel model);
   [[nodiscard]] FitModel ParseFitModel(const std::string &token);
+  [[nodiscard]] std::string ToString(ProgressMode mode);
+  [[nodiscard]] ProgressMode ParseProgressMode(const std::string &token);
 
 }  // namespace exp_femto_3d

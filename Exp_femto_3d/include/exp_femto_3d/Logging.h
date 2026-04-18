@@ -34,7 +34,7 @@ namespace exp_femto_3d {
       bool line_closed = true;
     };
 
-    void BeginProgress(const std::string &label, std::size_t total_steps) const;
+    void BeginProgress(const std::string &label, std::size_t total_steps, ProgressMode mode) const;
     void UpdateProgress(std::size_t completed_steps) const;
     void FinishProgress() const;
     void AbortProgress() const;
@@ -49,7 +49,7 @@ namespace exp_femto_3d {
   // only expose completed-slice counts to the CLI layer.
   class ProgressReporter {
    public:
-    ProgressReporter(const Logger &logger, const std::string &label, std::size_t total_steps);
+    ProgressReporter(const Logger &logger, const std::string &label, std::size_t total_steps, ProgressMode mode);
     ~ProgressReporter();
 
     void Update(std::size_t completed_steps) const;

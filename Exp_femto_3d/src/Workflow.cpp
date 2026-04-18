@@ -48,6 +48,7 @@ namespace exp_femto_3d {
     constexpr double kLevyArgumentTolerance = 1e-12;
     constexpr double kInvalidFullModelCFValue = 1e6;
     constexpr double kFitPenaltyValue = 1e30;
+    constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
 
     struct Levy3DPMLContext {
       TH3D *h_se_raw = nullptr;
@@ -58,6 +59,12 @@ namespace exp_femto_3d {
     };
 
     Levy3DPMLContext g_levy_3d_pml_context;
+
+    struct PhiSliceCoordinates {
+      double low = 0.0;
+      double high = 0.0;
+      double center = std::numeric_limits<double>::quiet_NaN();
+    };
 
     std::string FormatDouble(const double value, const int precision = 2) {
       std::ostringstream stream;
@@ -92,6 +99,109 @@ namespace exp_femto_3d {
 
     std::string BuildFitDirectory(const std::string &slice_id) {
       return "fits/" + slice_id;
+    }
+
+    // Keep build and fit on the same phi remapping rule so the catalog is the
+    // single source of truth for later reinterpretation.
+    PhiSliceCoordinates BuildPhiSliceCoordinatesFromRaw(const double raw_phi_low,
+                                                        const double raw_phi_high,
+                                                        const double raw_phi_center,
+                                                        const bool use_symmetric_phi_range) {
+      PhiSliceCoordinates coordinates{raw_phi_low, raw_phi_high, raw_phi_center};
+      if (use_symmetric_phi_range && raw_phi_center > TMath::Pi() / 2.0) {
+        coordinates.low -= TMath::Pi();
+        coordinates.high -= TMath::Pi();
+        coordinates.center -= TMath::Pi();
+      }
+      return coordinates;
+    }
+
+    // Integrated slices do not carry a phi center, but fit-side reinterpretation
+    // still needs a stable helper for non-integrated slices.
+    PhiSliceCoordinates ResolveSlicePhiCoordinates(const SliceCatalogEntry &entry, const bool use_symmetric_phi_range) {
+      if (entry.is_phi_integrated) {
+        return {entry.raw_phi_low, entry.raw_phi_high, std::numeric_limits<double>::quiet_NaN()};
+      }
+      return BuildPhiSliceCoordinatesFromRaw(
+          entry.raw_phi_low, entry.raw_phi_high, entry.raw_phi_center, use_symmetric_phi_range);
+    }
+
+    bool PhiCoordinateMatches(const double lhs, const double rhs) {
+      if (std::isnan(lhs) && std::isnan(rhs)) {
+        return true;
+      }
+      return NearlyEqual(lhs, rhs);
+    }
+
+    bool MatchesStoredDisplayPhiCoordinates(const SliceCatalogEntry &entry, const PhiSliceCoordinates &coordinates) {
+      return PhiCoordinateMatches(entry.display_phi_low, coordinates.low)
+             && PhiCoordinateMatches(entry.display_phi_high, coordinates.high)
+             && PhiCoordinateMatches(entry.display_phi_center, coordinates.center);
+    }
+
+    // Legacy SliceCatalog trees do not store the build-side phi mapping flag, so
+    // infer one file-level state from the raw/display coordinate pairs.
+    bool InferLegacyBuildPhiMappingState(std::vector<SliceCatalogEntry> &entries, const Logger *logger) {
+      bool saw_explicit_mapped_slice = false;
+      bool saw_explicit_raw_slice = false;
+      for (const SliceCatalogEntry &entry : entries) {
+        if (entry.is_phi_integrated) {
+          continue;
+        }
+        const PhiSliceCoordinates raw_coordinates = ResolveSlicePhiCoordinates(entry, false);
+        const PhiSliceCoordinates mapped_coordinates = ResolveSlicePhiCoordinates(entry, true);
+        const bool matches_raw = MatchesStoredDisplayPhiCoordinates(entry, raw_coordinates);
+        const bool matches_mapped = MatchesStoredDisplayPhiCoordinates(entry, mapped_coordinates);
+        if (matches_mapped && !matches_raw) {
+          saw_explicit_mapped_slice = true;
+        }
+        if (matches_raw && !matches_mapped) {
+          saw_explicit_raw_slice = true;
+        }
+      }
+
+      bool inferred_uses_symmetric_phi_range = false;
+      std::string inference_reason = "defaulted to raw phi because no discriminating slice was found";
+      if (saw_explicit_mapped_slice && !saw_explicit_raw_slice) {
+        inferred_uses_symmetric_phi_range = true;
+        inference_reason = "found remapped phi slices";
+      } else if (saw_explicit_raw_slice && !saw_explicit_mapped_slice) {
+        inference_reason = "found raw phi slices above pi/2";
+      } else if (saw_explicit_mapped_slice && saw_explicit_raw_slice) {
+        inferred_uses_symmetric_phi_range = true;
+        inference_reason = "found conflicting raw/display phi pairs, keeping the mapped interpretation";
+      }
+
+      for (SliceCatalogEntry &entry : entries) {
+        entry.build_uses_symmetric_phi_range = inferred_uses_symmetric_phi_range;
+      }
+
+      if (logger != nullptr) {
+        logger->Warn("SliceCatalog is missing '" + std::string(kSliceCatalogBuildPhiMappingBranch)
+                     + "'; inferred build phi mapping state from raw/display coordinates (" + inference_reason + ").");
+      }
+      return inferred_uses_symmetric_phi_range;
+    }
+
+    // Build is expected to write one global phi mapping mode per CF file, so
+    // normalize inconsistent metadata before fit consumes it.
+    bool NormalizeCatalogBuildPhiMappingState(std::vector<SliceCatalogEntry> &entries, const Logger *logger) {
+      if (entries.empty()) {
+        return false;
+      }
+
+      const bool normalized_state = entries.front().build_uses_symmetric_phi_range;
+      const bool has_inconsistent_state = std::any_of(entries.begin(), entries.end(), [&](const SliceCatalogEntry &entry) {
+        return entry.build_uses_symmetric_phi_range != normalized_state;
+      });
+      if (has_inconsistent_state && logger != nullptr) {
+        logger->Warn("SliceCatalog contains inconsistent build phi mapping metadata; using the first entry as the"
+                     " file-level truth.");
+      }
+      for (SliceCatalogEntry &entry : entries) {
+        entry.build_uses_symmetric_phi_range = normalized_state;
+      }
+      return normalized_state;
     }
 
     std::string ResolvePath(const std::string &directory, const std::string &file_name) {
@@ -249,6 +359,7 @@ namespace exp_femto_3d {
                                             const double display_phi_low,
                                             const double display_phi_high,
                                             const double display_phi_center,
+                                            const bool build_uses_symmetric_phi_range,
                                             const bool is_phi_integrated) {
       SliceCatalogEntry entry;
       entry.group_id = BuildGroupId(centrality_bin, mt_bin);
@@ -273,6 +384,7 @@ namespace exp_femto_3d {
       entry.display_phi_low = display_phi_low;
       entry.display_phi_high = display_phi_high;
       entry.display_phi_center = display_phi_center;
+      entry.build_uses_symmetric_phi_range = build_uses_symmetric_phi_range;
       entry.is_phi_integrated = is_phi_integrated;
       return entry;
     }
@@ -304,6 +416,7 @@ namespace exp_femto_3d {
       double display_phi_low = 0.0;
       double display_phi_high = 0.0;
       double display_phi_center = 0.0;
+      int build_uses_symmetric_phi_range = 0;
       int is_phi_integrated = 0;
 
       tree->Branch("slice_id", &slice_id);
@@ -328,6 +441,7 @@ namespace exp_femto_3d {
       tree->Branch("display_phi_low", &display_phi_low);
       tree->Branch("display_phi_high", &display_phi_high);
       tree->Branch("display_phi_center", &display_phi_center);
+      tree->Branch(kSliceCatalogBuildPhiMappingBranch, &build_uses_symmetric_phi_range);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
       for (const SliceCatalogEntry &entry : entries) {
@@ -353,6 +467,7 @@ namespace exp_femto_3d {
         display_phi_low = entry.display_phi_low;
         display_phi_high = entry.display_phi_high;
         display_phi_center = entry.display_phi_center;
+        build_uses_symmetric_phi_range = entry.build_uses_symmetric_phi_range ? 1 : 0;
         is_phi_integrated = entry.is_phi_integrated ? 1 : 0;
         tree->Fill();
       }
@@ -361,7 +476,7 @@ namespace exp_femto_3d {
       output_file.cd();
     }
 
-    std::vector<SliceCatalogEntry> ReadSliceCatalogTree(TFile &input_file) {
+    std::vector<SliceCatalogEntry> ReadSliceCatalogTree(TFile &input_file, const Logger *logger = nullptr) {
       auto *tree = dynamic_cast<TTree *>(input_file.Get("meta/SliceCatalog"));
       if (tree == nullptr) {
         throw std::runtime_error("Missing meta/SliceCatalog in ROOT file.");
@@ -390,6 +505,11 @@ namespace exp_femto_3d {
       TTreeReaderValue<double> display_phi_low(reader, "display_phi_low");
       TTreeReaderValue<double> display_phi_high(reader, "display_phi_high");
       TTreeReaderValue<double> display_phi_center(reader, "display_phi_center");
+      std::unique_ptr<TTreeReaderValue<int>> build_uses_symmetric_phi_range;
+      if (tree->GetBranch(kSliceCatalogBuildPhiMappingBranch) != nullptr) {
+        build_uses_symmetric_phi_range =
+            std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogBuildPhiMappingBranch);
+      }
       TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
 
       std::vector<SliceCatalogEntry> entries;
@@ -417,9 +537,15 @@ namespace exp_femto_3d {
         entry.display_phi_low = *display_phi_low;
         entry.display_phi_high = *display_phi_high;
         entry.display_phi_center = *display_phi_center;
+        entry.build_uses_symmetric_phi_range =
+            build_uses_symmetric_phi_range ? (**build_uses_symmetric_phi_range != 0) : false;
         entry.is_phi_integrated = (*is_phi_integrated != 0);
         entries.push_back(entry);
       }
+      if (!build_uses_symmetric_phi_range) {
+        InferLegacyBuildPhiMappingState(entries, logger);
+      }
+      NormalizeCatalogBuildPhiMappingState(entries, logger);
       return entries;
     }
 
@@ -1283,6 +1409,7 @@ namespace exp_femto_3d {
                                    TF3 *fit_function,
                                    const FitModel model,
                                    const LevyFitOptions &fit_options,
+                                   const bool fit_uses_symmetric_phi_range,
                                    const double fit_statistic,
                                    const int fit_ndf,
                                    const int fit_status,
@@ -1300,8 +1427,10 @@ namespace exp_femto_3d {
       fit_result.cent_high = entry.cent_high;
       fit_result.mt_low = entry.mt_low;
       fit_result.mt_high = entry.mt_high;
+      const PhiSliceCoordinates fit_phi_coordinates = ResolveSlicePhiCoordinates(entry, fit_uses_symmetric_phi_range);
       fit_result.is_phi_integrated = entry.is_phi_integrated;
-      fit_result.phi = entry.is_phi_integrated ? std::numeric_limits<double>::quiet_NaN() : entry.display_phi_center;
+      fit_result.phi = fit_phi_coordinates.center;
+      fit_result.fit_uses_symmetric_phi_range = fit_uses_symmetric_phi_range;
       fit_result.has_off_diagonal = model == FitModel::kFull;
       fit_result.uses_coulomb = fit_options.use_coulomb;
       fit_result.uses_core_halo_lambda = fit_options.use_core_halo_lambda;
@@ -1347,6 +1476,7 @@ namespace exp_femto_3d {
                                 const SliceCatalogEntry &entry,
                                 const FitModel model,
                                 const LevyFitOptions &fit_options,
+                                const bool fit_uses_symmetric_phi_range,
                                 const std::string &fit_root_path,
                                 LevyFitResult &fit_result,
                                 TFile *shared_output_file) {
@@ -1383,6 +1513,7 @@ namespace exp_femto_3d {
                                 fit_function,
                                 model,
                                 fit_options,
+                                fit_uses_symmetric_phi_range,
                                 fit_statistic,
                                 fit_ndf,
                                 fit_status,
@@ -1511,6 +1642,7 @@ namespace exp_femto_3d {
       double mt_low = 0.0;
       double mt_high = 0.0;
       double phi = 0.0;
+      int fit_uses_symmetric_phi_range = 0;
       int is_phi_integrated = 0;
       double norm = 0.0;
       double norm_err = 0.0;
@@ -1554,6 +1686,7 @@ namespace exp_femto_3d {
       tree->Branch("mt_low", &mt_low);
       tree->Branch("mt_high", &mt_high);
       tree->Branch("phi", &phi);
+      tree->Branch("fit_uses_symmetric_phi_range", &fit_uses_symmetric_phi_range);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
       tree->Branch("norm", &norm);
       tree->Branch("norm_err", &norm_err);
@@ -1598,6 +1731,7 @@ namespace exp_femto_3d {
         mt_low = result.mt_low;
         mt_high = result.mt_high;
         phi = result.phi;
+        fit_uses_symmetric_phi_range = result.fit_uses_symmetric_phi_range ? 1 : 0;
         is_phi_integrated = result.is_phi_integrated ? 1 : 0;
         norm = result.norm;
         norm_err = result.norm_err;
@@ -1656,10 +1790,7 @@ namespace exp_femto_3d {
         auto *directory = GetOrCreateDirectoryPath(output_file, "summary/R2_vs_phi/" + group_id);
         directory->cd();
 
-        const bool uses_mapped_phi_range =
-            std::any_of(group_results.begin(), group_results.end(), [](const LevyFitResult &result) {
-              return result.phi < -1.0e-6;
-            });
+        const bool uses_mapped_phi_range = group_results.front().fit_uses_symmetric_phi_range;
         const double phi_fit_min = uses_mapped_phi_range ? -TMath::Pi() / 2.0 : 0.0;
         const double phi_fit_max = uses_mapped_phi_range ? TMath::Pi() / 2.0 : TMath::Pi();
         const int n_points = static_cast<int>(group_results.size());
@@ -1836,7 +1967,7 @@ namespace exp_femto_3d {
     const std::size_t slices_per_group = static_cast<std::size_t>(n_phi_bins + 1);
     const std::size_t planned_slices = statistics.requested_groups * slices_per_group;
     std::size_t processed_slices = 0;
-    ProgressReporter progress(logger, "build-cf", planned_slices);
+    ProgressReporter progress(logger, "build-cf", planned_slices, config.build.progress);
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.build.reopen_output_file_per_slice) {
@@ -1941,6 +2072,7 @@ namespace exp_femto_3d {
                                                    raw_phi_low,
                                                    raw_phi_high,
                                                    std::numeric_limits<double>::quiet_NaN(),
+                                                   config.build.map_pair_phi_to_symmetric_range,
                                                    true);
           write_slice(h_se_all_raw, h_se_all_norm, entry);
         }
@@ -1969,14 +2101,10 @@ namespace exp_femto_3d {
           const double raw_phi_low = phi_axis->GetBinLowEdge(phi_index);
           const double raw_phi_high = phi_axis->GetBinUpEdge(phi_index);
           const double raw_phi_center = phi_axis->GetBinCenter(phi_index);
-          double display_phi_low = raw_phi_low;
-          double display_phi_high = raw_phi_high;
-          double display_phi_center = raw_phi_center;
-          if (config.build.map_pair_phi_to_symmetric_range && raw_phi_center > TMath::Pi() / 2.0) {
-            display_phi_low -= TMath::Pi();
-            display_phi_high -= TMath::Pi();
-            display_phi_center -= TMath::Pi();
-          }
+          // Build records both raw and display phi so fit can later follow or override
+          // the original mapping choice without rebuilding the CF histograms.
+          const PhiSliceCoordinates display_phi_coordinates = BuildPhiSliceCoordinatesFromRaw(
+              raw_phi_low, raw_phi_high, raw_phi_center, config.build.map_pair_phi_to_symmetric_range);
 
           const auto entry = MakeSliceCatalogEntry(centrality_bin,
                                                    mt_bin,
@@ -1986,9 +2114,10 @@ namespace exp_femto_3d {
                                                    raw_phi_low,
                                                    raw_phi_high,
                                                    raw_phi_center,
-                                                   display_phi_low,
-                                                   display_phi_high,
-                                                   display_phi_center,
+                                                   display_phi_coordinates.low,
+                                                   display_phi_coordinates.high,
+                                                   display_phi_coordinates.center,
+                                                   config.build.map_pair_phi_to_symmetric_range,
                                                    false);
           write_slice(h_se_raw, h_se_norm, entry);
           delete h_se_raw;
@@ -2034,7 +2163,15 @@ namespace exp_femto_3d {
     TH1::AddDirectory(kFALSE);
 
     auto input_file = OpenRootFile(cf_root_path, "READ");
-    const std::vector<SliceCatalogEntry> catalog_entries = ReadSliceCatalogTree(*input_file);
+    const std::vector<SliceCatalogEntry> catalog_entries = ReadSliceCatalogTree(*input_file, &logger);
+    const bool input_cf_uses_symmetric_phi_range =
+        !catalog_entries.empty() && catalog_entries.front().build_uses_symmetric_phi_range;
+    if (!catalog_entries.empty() && input_cf_uses_symmetric_phi_range != config.build.map_pair_phi_to_symmetric_range) {
+      logger.Warn("Input CF build phi mapping metadata does not match config.build.map_pair_phi_to_symmetric_range;"
+                  " using the CF metadata as the build-stage truth.");
+    }
+    const bool fit_uses_symmetric_phi_range =
+        config.fit.map_pair_phi_to_symmetric_range.value_or(input_cf_uses_symmetric_phi_range);
 
     FitRunStatistics statistics;
     statistics.catalog_slices = catalog_entries.size();
@@ -2043,7 +2180,7 @@ namespace exp_femto_3d {
           return MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins);
         }));
     std::size_t processed_selected_slices = 0;
-    ProgressReporter progress(logger, "fit", total_selected_slices);
+    ProgressReporter progress(logger, "fit", total_selected_slices, config.fit.progress);
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.fit.reopen_output_file_per_slice) {
@@ -2051,7 +2188,9 @@ namespace exp_femto_3d {
     }
 
     const FitModel model = override_model.value_or(config.fit.model);
-    logger.Info("Starting fit stage with model=" + ToString(model) + ".");
+    logger.Info("Starting fit stage with model=" + ToString(model) + ", inputCFPhiMapping="
+                + std::string(input_cf_uses_symmetric_phi_range ? "symmetric" : "raw") + ", fitPhiMapping="
+                + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
     progress.Update(0);
 
     std::vector<LevyFitResult> fit_results;
@@ -2092,6 +2231,7 @@ namespace exp_femto_3d {
                                  entry,
                                  model,
                                  config.fit.options,
+                                 fit_uses_symmetric_phi_range,
                                  fit_root_path,
                                  fit_result,
                                  shared_output_file.get())) {

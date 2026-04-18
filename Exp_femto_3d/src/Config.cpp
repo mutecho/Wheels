@@ -104,6 +104,25 @@ namespace exp_femto_3d {
       return fallback;
     }
 
+    std::optional<bool> ReadOptionalNullableBool(const toml::table &table, const std::string &key) {
+      if (const auto value = table[key].value<bool>(); value.has_value()) {
+        return *value;
+      }
+      return std::nullopt;
+    }
+
+    ProgressMode ReadOptionalProgressMode(const toml::table &table,
+                                          const std::string &key,
+                                          const ProgressMode fallback) {
+      if (const auto value = table[key].value<bool>(); value.has_value()) {
+        return *value ? ProgressMode::kEnabled : ProgressMode::kDisabled;
+      }
+      if (const auto value = table[key].value<std::string>(); value.has_value()) {
+        return ParseProgressMode(*value);
+      }
+      return fallback;
+    }
+
     double ReadOptionalDouble(const toml::table &table, const std::string &key, const double fallback) {
       if (const auto value = table[key].value<double>(); value.has_value()) {
         return *value;
@@ -185,6 +204,7 @@ namespace exp_femto_3d {
         build, "write_normalized_se_me_1d_projections", config.build.write_normalized_se_me_1d_projections);
     config.build.reopen_output_file_per_slice =
         ReadOptionalBool(build, "reopen_output_file_per_slice", config.build.reopen_output_file_per_slice);
+    config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
     config.fit.options.use_coulomb = ReadOptionalBool(fit, "use_coulomb", config.fit.options.use_coulomb);
@@ -193,8 +213,10 @@ namespace exp_femto_3d {
     config.fit.options.use_q2_baseline = ReadOptionalBool(fit, "use_q2_baseline", config.fit.options.use_q2_baseline);
     config.fit.options.use_pml = ReadOptionalBool(fit, "use_pml", config.fit.options.use_pml);
     config.fit.options.fit_q_max = ReadOptionalDouble(fit, "fit_q_max", config.fit.options.fit_q_max);
+    config.fit.map_pair_phi_to_symmetric_range = ReadOptionalNullableBool(fit, "map_pair_phi_to_symmetric_range");
     config.fit.reopen_output_file_per_slice =
         ReadOptionalBool(fit, "reopen_output_file_per_slice", config.fit.reopen_output_file_per_slice);
+    config.fit.progress = ReadOptionalProgressMode(fit, "progress", config.fit.progress);
 
     if (const auto *bins = root["bins"].as_table(); bins != nullptr) {
       config.centrality_bins = ParseRangeBinArray(GetOptionalArray(*bins, "centrality"), "bins.centrality");
@@ -313,6 +335,32 @@ namespace exp_femto_3d {
       return FitModel::kFull;
     }
     throw ConfigError("Unsupported fit model: " + token);
+  }
+
+  std::string ToString(const ProgressMode mode) {
+    switch (mode) {
+      case ProgressMode::kAuto:
+        return "auto";
+      case ProgressMode::kEnabled:
+        return "enabled";
+      case ProgressMode::kDisabled:
+        return "disabled";
+    }
+    return "auto";
+  }
+
+  ProgressMode ParseProgressMode(const std::string &token) {
+    const std::string lowered = ToLower(token);
+    if (lowered == "auto") {
+      return ProgressMode::kAuto;
+    }
+    if (lowered == "enabled" || lowered == "enable" || lowered == "on" || lowered == "true") {
+      return ProgressMode::kEnabled;
+    }
+    if (lowered == "disabled" || lowered == "disable" || lowered == "off" || lowered == "false") {
+      return ProgressMode::kDisabled;
+    }
+    throw ConfigError("Unsupported progress mode: " + token);
   }
 
 }  // namespace exp_femto_3d

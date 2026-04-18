@@ -38,6 +38,25 @@ Optional fit overrides:
 - `--model full|diag`
 - `--input-cf-root /absolute/or/relative/path.root`
 
+TOML progress control:
+
+- `[build].progress`
+- `[fit].progress`
+- accepted values: `true`, `false`, or `"auto"` (also `"enabled"` / `"disabled"`)
+- default when omitted: `"auto"`; the bar only appears when `stderr` is attached to a TTY
+
+Phi mapping control:
+
+- `[build].map_pair_phi_to_symmetric_range` controls how build writes `display_phi_*`
+  into `meta/SliceCatalog`
+- `[fit].map_pair_phi_to_symmetric_range` is optional; when omitted, fit follows the
+  input CF metadata from `SliceCatalog`
+- when `[fit].map_pair_phi_to_symmetric_range` is set explicitly, fit reinterprets the
+  stored slices from `raw_phi_*`, so the summary `R2_vs_phi` graphs can use either the
+  raw `[0, pi]` range or the symmetric `[-pi/2, pi/2]` range without rebuilding the CF
+- if the current config's `[build]` mapping flag disagrees with the input CF metadata,
+  fit warns and trusts the input CF file
+
 ## Output Contract
 
 - `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`

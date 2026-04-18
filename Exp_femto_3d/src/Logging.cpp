@@ -13,8 +13,16 @@ namespace exp_femto_3d {
 
     constexpr int kProgressBarWidth = 20;
 
-    bool ShouldEnableProgress() {
-      return ::isatty(STDERR_FILENO) != 0;
+    bool ShouldEnableProgress(const ProgressMode mode) {
+      switch (mode) {
+        case ProgressMode::kAuto:
+          return ::isatty(STDERR_FILENO) != 0;
+        case ProgressMode::kEnabled:
+          return true;
+        case ProgressMode::kDisabled:
+          return false;
+      }
+      return false;
     }
 
   }  // namespace
@@ -38,12 +46,12 @@ namespace exp_femto_3d {
     Log(LogLevel::kError, message);
   }
 
-  void Logger::BeginProgress(const std::string &label, const std::size_t total_steps) const {
+  void Logger::BeginProgress(const std::string &label, const std::size_t total_steps, const ProgressMode mode) const {
     AbortProgress();
     progress_state_.label = label;
     progress_state_.total_steps = total_steps;
     progress_state_.last_percent = -1;
-    progress_state_.enabled = total_steps > 0 && ShouldEnableProgress();
+    progress_state_.enabled = total_steps > 0 && ShouldEnableProgress(mode);
     progress_state_.drawn = false;
     progress_state_.line_closed = true;
   }
@@ -115,9 +123,12 @@ namespace exp_femto_3d {
     stream << "[" << ToString(level) << "] " << message << "\n";
   }
 
-  ProgressReporter::ProgressReporter(const Logger &logger, const std::string &label, const std::size_t total_steps)
+  ProgressReporter::ProgressReporter(const Logger &logger,
+                                     const std::string &label,
+                                     const std::size_t total_steps,
+                                     const ProgressMode mode)
       : logger_(logger) {
-    logger_.BeginProgress(label, total_steps);
+    logger_.BeginProgress(label, total_steps, mode);
   }
 
   ProgressReporter::~ProgressReporter() {
