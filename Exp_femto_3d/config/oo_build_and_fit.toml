@@ -8,8 +8,8 @@ sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
 [output]
 output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
 cf_root_name = "EP_dependence_CF_3d_25ae_pass2.root"
-fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root"
-fit_summary_name = "3d_25ae_pass2_fit_summary.tsv"
+fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root"
+fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold.tsv"
 log_level = "warn"
 
 [build]
@@ -25,7 +25,7 @@ use_q2_baseline = true
 use_pml = true
 fit_q_max = 0.15
 # omit to follow the input CF metadata written by build-cf
-map_pair_phi_to_symmetric_range = true
+map_pair_phi_to_symmetric_range = false
 
 [[bins.centrality]]
 min = 0

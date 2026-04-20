@@ -1,0 +1,37 @@
+[input]
+input_root = "/tmp/input.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_EP"
+mixed_event_subtask = "MixedEvent_EP"
+sparse_object_name = "relPairkstarmTMultMultPercentileQn"
+
+[output]
+output_directory = "/tmp/exp_femto_1d_out"
+cf_root_name = "cf_output"
+fit_root_name = "fit_output"
+fit_summary_name = "fit_summary"
+log_level = "info"
+
+[build]
+norm_low = 0.5
+norm_high = 0.8
+kstar_min = 0.0
+kstar_max = 0.8
+reopen_output_file_per_slice = true
+progress = false
+
+[fit]
+fit_kstar_max = 0.25
+use_coulomb = true
+reopen_output_file_per_slice = true
+progress = false
+
+[[bins.centrality]]
+min = 0
+max = 10
+label = "cent_0_10"
+
+[[bins.mt]]
+min = 0.24
+max = 0.33
+label = "mt_0p24_0p33"

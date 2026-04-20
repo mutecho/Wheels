@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ExpFemto3D LANGUAGES CXX)
+project(ExpFemto1D LANGUAGES CXX)
 enable_testing()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -19,25 +19,55 @@ if(CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(ROOT REQUIRED COMPONENTS Core RIO Hist Graf Gpad Tree TreePlayer MathCore Minuit)
+find_package(GSL REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED
   HINTS
     /opt/homebrew/lib/cmake/tomlplusplus
     /opt/homebrew/opt/tomlplusplus
 )
 
-add_library(exp_femto_3d_core
+set(EXP_FEMTO_1D_DEFAULT_CATS_ROOT "/Users/allenzhou/Research_software/CATS/install")
+set(CATS_ROOT "${CATS_ROOT}" CACHE PATH "Installed CATS prefix")
+if(NOT CATS_ROOT)
+  set(CATS_ROOT "${EXP_FEMTO_1D_DEFAULT_CATS_ROOT}")
+endif()
+
+find_path(CATS_INCLUDE_DIR
+  NAMES CATS.h
+  HINTS
+    "${CATS_ROOT}/include"
+    "${EXP_FEMTO_1D_DEFAULT_CATS_ROOT}/include"
+)
+
+find_library(CATS_LIBRARY
+  NAMES CATS libCATS.dylib
+  HINTS
+    "${CATS_ROOT}/lib"
+    "${EXP_FEMTO_1D_DEFAULT_CATS_ROOT}/lib"
+)
+
+if(NOT CATS_INCLUDE_DIR OR NOT CATS_LIBRARY)
+  message(FATAL_ERROR "Failed to locate installed CATS headers or library. Set CATS_ROOT to the install prefix.")
+endif()
+
+get_filename_component(CATS_LIBRARY_DIR "${CATS_LIBRARY}" DIRECTORY)
+list(APPEND CMAKE_BUILD_RPATH "${CATS_LIBRARY_DIR}")
+
+add_library(exp_femto_1d_core
+  src/CatsModel.cpp
   src/Config.cpp
   src/Logging.cpp
   src/Workflow.cpp
 )
 
-target_include_directories(exp_femto_3d_core
+target_include_directories(exp_femto_1d_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${ROOT_INCLUDE_DIRS}
+    ${CATS_INCLUDE_DIR}
 )
 
-target_link_libraries(exp_femto_3d_core
+target_link_libraries(exp_femto_1d_core
   PUBLIC
     ROOT::Core
     ROOT::RIO
@@ -49,22 +79,25 @@ target_link_libraries(exp_femto_3d_core
     ROOT::MathCore
     ROOT::Minuit
     tomlplusplus::tomlplusplus
+    GSL::gsl
+    GSL::gslcblas
+    ${CATS_LIBRARY}
 )
 
-target_compile_options(exp_femto_3d_core
+target_compile_options(exp_femto_1d_core
   PRIVATE
     -Wall
     -Wextra
     -Wpedantic
 )
 
-add_executable(exp_femto_3d
+add_executable(exp_femto_1d
   app/main.cpp
 )
 
-target_link_libraries(exp_femto_3d
+target_link_libraries(exp_femto_1d
   PRIVATE
-    exp_femto_3d_core
+    exp_femto_1d_core
 )
 
 add_executable(config_parse_validation_test
@@ -73,7 +106,7 @@ add_executable(config_parse_validation_test
 
 target_link_libraries(config_parse_validation_test
   PRIVATE
-    exp_femto_3d_core
+    exp_femto_1d_core
 )
 
 add_test(
@@ -87,7 +120,7 @@ add_executable(root_runtime_probe
 
 target_link_libraries(root_runtime_probe
   PRIVATE
-    exp_femto_3d_core
+    exp_femto_1d_core
 )
 
 add_executable(slice_catalog_roundtrip_test
@@ -96,7 +129,7 @@ add_executable(slice_catalog_roundtrip_test
 
 target_link_libraries(slice_catalog_roundtrip_test
   PRIVATE
-    exp_femto_3d_core
+    exp_femto_1d_core
 )
 
 add_test(
@@ -112,7 +145,7 @@ add_executable(workflow_smoke_test
 
 target_link_libraries(workflow_smoke_test
   PRIVATE
-    exp_femto_3d_core
+    exp_femto_1d_core
 )
 
 add_test(
@@ -122,9 +155,26 @@ add_test(
           $<TARGET_FILE:workflow_smoke_test>
 )
 
+add_executable(cats_fit_smoke_test
+  tests/CatsFitSmokeTest.cpp
+)
+
+target_link_libraries(cats_fit_smoke_test
+  PRIVATE
+    exp_femto_1d_core
+)
+
+add_test(
+  NAME cats_fit_smoke_test
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_root_guard.sh
+          $<TARGET_FILE:root_runtime_probe>
+          $<TARGET_FILE:cats_fit_smoke_test>
+)
+
 set_tests_properties(
   slice_catalog_roundtrip_test
   workflow_smoke_test
+  cats_fit_smoke_test
   PROPERTIES
     SKIP_RETURN_CODE 77
 )

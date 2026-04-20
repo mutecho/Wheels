@@ -1,0 +1,81 @@
+[input]
+input_root = "/path/to/input.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_EP"
+mixed_event_subtask = "MixedEvent_EP"
+sparse_object_name = "relPairkstarmTMultMultPercentileQn"
+
+[output]
+output_directory = "/path/to/output_directory"
+cf_root_name = "cf_output.root"
+fit_root_name = "fit_output.root"
+fit_summary_name = "fit_summary.tsv"
+log_level = "info"
+
+[build]
+norm_low = 0.5
+norm_high = 0.8
+kstar_min = 0.0
+kstar_max = 0.8
+reopen_output_file_per_slice = true
+progress = "auto"
+
+[fit]
+fit_kstar_max = 0.25
+use_coulomb = true
+reopen_output_file_per_slice = true
+progress = "auto"
+
+baseline_p0_init = 1.0
+baseline_p0_min = 0.9
+baseline_p0_max = 1.1
+
+baseline_p1_init = 0.0
+baseline_p1_min = -0.2
+baseline_p1_max = 0.2
+
+baseline_p2_init = 1.0e-5
+baseline_p2_min = -5.0
+baseline_p2_max = 5.0
+
+baseline_p3_fixed = true
+baseline_p3_value = 0.0
+
+baseline_p4_fixed = true
+baseline_p4_value = 0.0
+
+source_size_init = 6.0
+source_size_min = 3.0
+source_size_max = 16.0
+
+cats_num_mom_bins = 250
+cats_kmin_mev = 0
+cats_kmax_mev = 250
+
+[[bins.centrality]]
+min = 0
+max = 10
+label = "cent_0_10"
+
+[[bins.centrality]]
+min = 10
+max = 30
+label = "cent_10_30"
+
+[[bins.mt]]
+min = 0.244131
+max = 0.331059
+label = "mt_0p244_0p331"
+
+[[bins.mt]]
+min = 0.331059
+max = 0.423792
+label = "mt_0p331_0p424"
+
+[[fit_selection.centrality]]
+min = 0
+max = 10
+
+[[fit_selection.mt]]
+min = 0.244131
+max = 0.331059
