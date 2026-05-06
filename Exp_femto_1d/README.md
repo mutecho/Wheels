@@ -33,6 +33,7 @@ Version `v1` is intentionally narrow:
 - `src/`: config parsing, logging, build/fit workflow, and CATS implementation
 - `app/`: CLI entry point
 - `config/examples/`: minimal and commented TOML examples
+- `scripts/`: project-local run helpers for config-driven workflows
 - `tests/`: config-only tests plus ROOT-guarded workflow/CATS smoke tests
 - `legacy/`: archived macro reference kept out of the CMake build
 - `project-state/`: coordination ledger for status, decisions, tests, and follow-up work
@@ -60,6 +61,29 @@ Configured build trees live under `build/`, while executable targets are
 emitted into `bin/`.
 
 ## Run
+
+The project-local helper runs the config-driven workflow from any current
+directory. By default, it runs only `build-cf` with
+`config/pbpb_build_and_fit.toml`; use `--stage all` when the slower fit stage
+should run immediately afterward. Direct shell invocations automatically
+re-enter `O2Physics/latest-master-o2` with `alienv` when the current shell does
+not already provide a complete ROOT runtime:
+
+```bash
+/Users/allenzhou/Research_software/Code_base/Exp_femto_1d/scripts/run_exp_femto_1d.sh
+```
+
+Common variants:
+
+```bash
+./scripts/run_exp_femto_1d.sh --config config/pbpb_build_and_fit.toml
+./scripts/run_exp_femto_1d.sh --stage all --config config/pbpb_build_and_fit.toml
+./scripts/run_exp_femto_1d.sh --stage build-cf --config config/pbpb_build_and_fit.toml
+./scripts/run_exp_femto_1d.sh --stage fit --config config/pbpb_build_and_fit.toml
+./scripts/run_exp_femto_1d.sh --stage fit --config config/pbpb_build_and_fit.toml --input-cf-root /path/to/cf.root
+```
+
+The helper preserves the underlying CLI contract:
 
 ```bash
 ./bin/exp_femto_1d build-cf --config config/pbpb_build_and_fit.toml

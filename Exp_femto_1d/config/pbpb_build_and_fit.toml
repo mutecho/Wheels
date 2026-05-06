@@ -1,20 +1,22 @@
 [input]
-input_root = "/path/to/pbpb_input.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_morebin.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_fulltof.root"
 task_name = "femto-dream-pair-task-track-track"
 same_event_subtask = "SameEvent_EP"
 mixed_event_subtask = "MixedEvent_EP"
 sparse_object_name = "relPairkstarmTMultMultPercentileQn"
 
 [output]
-output_directory = "/tmp/exp_femto_1d_pbpb"
-cf_root_name = "cf_output.root"
-fit_root_name = "fit_output.root"
-fit_summary_name = "fit_summary.tsv"
+output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
+# cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_morebin.root"
+cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_fulltof.root"
+fit_root_name = "xxxxfit_output.root"
+fit_summary_name = "xxxxfit_summary.tsv"
 log_level = "info"
 
 [build]
-norm_low = 0.5
-norm_high = 0.8
+norm_low = 0.15
+norm_high = 0.25
 kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
@@ -24,7 +26,7 @@ progress = "auto"
 fit_kstar_max = 0.25
 use_coulomb = true
 reopen_output_file_per_slice = true
-progress = "auto"
+progress = false
 
 [[bins.centrality]]
 min = 0

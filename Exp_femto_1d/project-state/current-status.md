@@ -6,7 +6,8 @@
   `project-state/`
 - current conclusion: the project has been scaffolded as an independent CMake
   package with public config/logging/workflow/model interfaces, structured CF
-  output, fit workflow, example configs, and test entry points
+  output, fit workflow, example configs, test entry points, and a project-local
+  config-driven run helper under `scripts/`
 
 ## Verification Status
 
@@ -18,11 +19,24 @@ Reason:
 - config, workflow, and CATS smoke tests are implemented in-tree
 - `2026-04-20` non-sandboxed O2Physics configure/build/`ctest --output-on-failure`
   passed all registered tests
+- `2026-05-06` script-level validation checked
+  `scripts/run_exp_femto_1d.sh` syntax, help output, and stage dispatch
+- `2026-05-06` direct script execution without a pre-entered ROOT shell was
+  fixed to re-enter `O2Physics/latest-master-o2` before launching the binary;
+  `--stage build-cf` completed with 75 stored slices
+- `2026-05-06` internal `THnSparse` projection ownership was fixed so repeated
+  EP interval projections no longer emit `TROOT::Append` replacement warnings;
+  O2Physics `ctest --output-on-failure` passed all 4 registered tests
 - real-data equivalence to the legacy macro has not yet been run
 
 ## Active Constraints
 
-- ROOT-backed validation requires a full O2Physics environment
+- ROOT-backed validation requires a full O2Physics environment; the run helper
+  now enters the default `O2Physics/latest-master-o2` module automatically when
+  `alienv` is available
+- direct helper execution defaults to `build-cf`; full build-and-fit execution
+  requires explicit `--stage all`
+- the run helper still requires a built `bin/exp_femto_1d` executable
 - real-data closure is still pending for both `build-cf` and `fit`
 
 ## Ledger Convention

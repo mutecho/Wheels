@@ -8,6 +8,9 @@
 - added fit-side `FitCatalog`, per-slice fit artifacts, summary histograms, and TSV writing
 - created example TOML configs, README, ROOT runtime note, and `project-state/`
 - passed non-sandboxed O2Physics configure/build/`ctest --output-on-failure` on `2026-04-20`
+- added `scripts/run_exp_femto_1d.sh` as the config-driven run helper on `2026-05-06`
+- fixed direct run-helper execution to re-enter `O2Physics/latest-master-o2`
+  automatically when the caller has not already entered a complete ROOT runtime
 
 ## Current Risk
 
@@ -24,9 +27,8 @@
 
 ```bash
 alienv setenv O2Physics/latest-master-o2 -c sh -lc '
-  /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/bin/exp_femto_1d build-cf \
-    --config /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/config/pbpb_build_and_fit.toml &&
-  /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/bin/exp_femto_1d fit \
+  /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/scripts/run_exp_femto_1d.sh \
+    --stage all \
     --config /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/config/pbpb_build_and_fit.toml
 '
 ```

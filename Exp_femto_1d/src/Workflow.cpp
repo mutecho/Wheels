@@ -215,8 +215,21 @@ namespace exp_femto_1d {
       return histogram;
     }
 
+    // ROOT auto-registers THnSparse projections in the current directory; detach
+    // immediately so repeated internal projections do not replace same-named TH1s.
+    std::unique_ptr<TH1D> ProjectKStarDetached(THnSparseF &sparse) {
+      auto *projection = static_cast<TH1D *>(sparse.Projection(0));
+      if (projection != nullptr) {
+        projection->SetDirectory(nullptr);
+      }
+      return std::unique_ptr<TH1D>(projection);
+    }
+
     // Project one EP region from the 4D sparse after selecting the requested cent/mT slice.
-    std::unique_ptr<TH1D> BuildProjection(THnSparseF &sparse, const RangeBin &cent_bin, const RangeBin &mt_bin, const RegionDefinition &region) {
+    std::unique_ptr<TH1D> BuildProjection(THnSparseF &sparse,
+                                          const RangeBin &cent_bin,
+                                          const RangeBin &mt_bin,
+                                          const RegionDefinition &region) {
       auto *axis_mt = sparse.GetAxis(1);
       auto *axis_cent = sparse.GetAxis(2);
       auto *axis_ep = sparse.GetAxis(3);
@@ -224,18 +237,17 @@ namespace exp_femto_1d {
       axis_cent->SetRangeUser(cent_bin.min, cent_bin.max);
       axis_mt->SetRangeUser(mt_bin.min, mt_bin.max);
       axis_ep->SetRangeUser(region.low_1, region.high_1);
-      auto *projection = static_cast<TH1D *>(sparse.Projection(0));
-      if (projection == nullptr) {
+      auto merged_projection = ProjectKStarDetached(sparse);
+      if (merged_projection == nullptr) {
         ResetAxisSelection(*axis_ep);
         ResetAxisSelection(*axis_mt);
         ResetAxisSelection(*axis_cent);
         throw std::runtime_error("Failed to project THnSparseF to TH1D.");
       }
 
-      std::unique_ptr<TH1D> merged_projection(projection);
       if (region.has_second_interval) {
         axis_ep->SetRangeUser(region.low_2, region.high_2);
-        std::unique_ptr<TH1D> second_projection(static_cast<TH1D *>(sparse.Projection(0)));
+        auto second_projection = ProjectKStarDetached(sparse);
         if (second_projection != nullptr) {
           merged_projection->Add(second_projection.get());
         }
@@ -245,7 +257,6 @@ namespace exp_femto_1d {
       ResetAxisSelection(*axis_mt);
       ResetAxisSelection(*axis_cent);
 
-      merged_projection->SetDirectory(nullptr);
       merged_projection->Sumw2();
       merged_projection->GetXaxis()->SetTitle("k* (GeV/c)");
       merged_projection->GetYaxis()->SetTitle("Counts");

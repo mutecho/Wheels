@@ -31,6 +31,26 @@ The project is driven by TOML:
 
 If `fit_selection` is omitted, fit follows the full build bin grid.
 
+## Run Helper
+
+`scripts/run_exp_femto_1d.sh` is the project-local entry point for the
+config-driven run workflow. It defaults to
+`config/pbpb_build_and_fit.toml` and runs `build-cf`; use `--stage all` to run
+`build-cf` followed by the slower `fit` stage.
+Direct shell invocations automatically re-enter `O2Physics/latest-master-o2`
+with `alienv` when `ROOTSYS`, `ROOT_DYN_PATH`, or `root-config` are missing.
+
+Supported operator controls:
+
+- `--config <file.toml>` selects the TOML configuration file
+- `--stage all|build-cf|fit` selects the workflow stage; default is `build-cf`
+- `--input-cf-root <path>` forwards the fit-side CF input override
+- `--binary <path>` points to a non-default `exp_femto_1d` executable
+
+The helper expects a built executable. Override the runtime module with
+`EXP_FEMTO_1D_O2_MODULE` only when validating against another compatible
+O2Physics stack.
+
 ## Output Contract
 
 Build output:
