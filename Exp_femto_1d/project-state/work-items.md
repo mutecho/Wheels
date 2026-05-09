@@ -4,6 +4,7 @@
 
 - run authoritative O2Physics configure/build/ctest
 - validate real-data `build-cf` equivalence against the legacy macro
+- inspect `cent_slices/*/*/CFByMtCanvas` overlays on a real output file
 - inspect fit stability on real slices
 
 ## Deferred Future Work

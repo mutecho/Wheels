@@ -4,13 +4,20 @@
 
 - `config_parse_validation_test`
   - covers required fields, extension normalization, progress parsing, invalid
-    fit limits, duplicate bins, invalid `fit_selection`, and example config parsing
+    fit limits, duplicate bins, invalid `fit_selection`, `cf_by_mt_show_markers`,
+    and example config parsing
 - `slice_catalog_roundtrip_test`
   - builds a toy 4D sparse input and verifies `SliceCatalog` metadata plus
     structured slice paths
+  - verifies build-only CF-by-mT canvases for two mT bins under the cent-slice
+    output tree
 - `workflow_smoke_test`
   - runs toy `build-cf` and `fit`, then checks `SliceCatalog`, `FitCatalog`,
     per-slice objects, summaries, and TSV headers
+  - verifies shared-output CF-by-mT canvas keys while limiting fit selection to
+    one mT bin to keep CATS smoke cost bounded
+  - verifies explicit `cf_by_mt_show_markers = true` enables markers on
+    CF-by-mT trend graphs
 - `cats_fit_smoke_test`
   - fits a synthetic `baseline x CATS` histogram and checks `p0` plus source-size recovery
 - `root_runtime_probe`
@@ -48,6 +55,17 @@
 - `2026-05-06` real zero-argument
   `scripts/run_exp_femto_1d.sh` completed `build-cf` with 75 stored slices and
   exited with status 0
+- `2026-05-08` `cmake --build Exp_femto_1d/build` passed after adding
+  `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
+- `2026-05-08` sandboxed `ctest --test-dir Exp_femto_1d/build
+  --output-on-failure` passed with ROOT-backed tests guarded/skipped
+- `2026-05-08` non-sandboxed
+  `alienv setenv O2Physics/latest-master-o2 -c sh -lc 'cd .../Exp_femto_1d/build && ctest --output-on-failure'`
+  passed all 4 registered tests; ROOT-backed canvas checks ran instead of
+  skipping
+- `2026-05-08` local build and guarded `ctest` passed after adding
+  `build.cf_by_mt_show_markers`; O2Physics ROOT executor also passed
+  `slice_catalog_roundtrip_test` and exported the line-only default canvas
 - real-data regression against the legacy macro is still pending
 
 ## Required Follow-up Validation

@@ -25,7 +25,9 @@ USAGE
 # Resolve project-local defaults from the script path so callers can run from any cwd.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "${script_dir}/.." && pwd)"
-config_path="${project_root}/config/pbpb_build_and_fit.toml"
+# config_path="${project_root}/config/pbpb_build_and_fit.toml"
+config_path="${project_root}/config/oo_build_and_fit.toml"
+# config_path="${project_root}/config/oo_fulltof_build_and_fit.toml"
 binary_path="${project_root}/bin/exp_femto_1d"
 stage="build-cf"
 input_cf_root=""

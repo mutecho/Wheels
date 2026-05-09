@@ -63,6 +63,7 @@ namespace exp_femto_1d {
     double kstar_min = 0.0;
     double kstar_max = 0.8;
     bool reopen_output_file_per_slice = true;
+    bool cf_by_mt_show_markers = false;
     ProgressMode progress = ProgressMode::kAuto;
   };
 

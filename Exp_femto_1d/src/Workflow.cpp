@@ -23,6 +23,7 @@
 #include "TFile.h"
 #include "TFitResult.h"
 #include "TFitResultPtr.h"
+#include "TGraph.h"
 #include "TH1.h"
 #include "TH1D.h"
 #include "THnSparse.h"
@@ -56,6 +57,21 @@ namespace exp_femto_1d {
       std::unique_ptr<TH1D> cf;
     };
 
+    // Restore ROOT batch mode after temporary canvas creation, including failures.
+    class ScopedRootBatchMode {
+     public:
+      explicit ScopedRootBatchMode(const bool enabled) : old_state_(gROOT->IsBatch()) {
+        gROOT->SetBatch(enabled);
+      }
+
+      ~ScopedRootBatchMode() {
+        gROOT->SetBatch(old_state_);
+      }
+
+     private:
+      bool old_state_ = false;
+    };
+
     std::string FormatDouble(const double value, const int precision = 2) {
       std::ostringstream stream;
       stream << std::fixed << std::setprecision(precision) << value;
@@ -83,6 +99,19 @@ namespace exp_femto_1d {
 
     std::string BuildSliceDirectory(const std::string &slice_id) {
       return "slices/" + slice_id;
+    }
+
+    // Name centrality-level output paths used by build-cf overlay canvases.
+    std::string BuildCentralityId(const double cent_low, const double cent_high) {
+      return "cent_" + FormatDirectoryValue(cent_low, 2) + "-" + FormatDirectoryValue(cent_high, 2);
+    }
+
+    std::string BuildCentSliceDirectory(const SliceCatalogEntry &entry) {
+      return "cent_slices/" + BuildCentralityId(entry.cent_low, entry.cent_high);
+    }
+
+    std::string BuildCentRegionDirectory(const SliceCatalogEntry &entry) {
+      return BuildCentSliceDirectory(entry) + "/" + entry.region_name;
     }
 
     std::string BuildFitDirectory(const std::string &slice_id) {
@@ -298,6 +327,184 @@ namespace exp_femto_1d {
       histograms.se_raw->Write("SE_raw1d", TObject::kOverwrite);
       histograms.me_raw->Write("ME_raw1d", TObject::kOverwrite);
       histograms.cf->Write("CF1D", TObject::kOverwrite);
+    }
+
+    // Format labels and object names for cent-slice CF overlay canvases.
+    std::string BuildRegionRangeLabel(const SliceCatalogEntry &entry) {
+      std::string label =
+          "phi-psi [" + FormatDouble(entry.ep_low_1, 2) + ", " + FormatDouble(entry.ep_high_1, 2) + "]";
+      if (entry.has_second_interval) {
+        label += " U [" + FormatDouble(entry.ep_low_2, 2) + ", " + FormatDouble(entry.ep_high_2, 2) + "]";
+      }
+      return label;
+    }
+
+    std::string BuildMtLegendLabel(const SliceCatalogEntry &entry) {
+      return "mT " + FormatDouble(entry.mt_low, 3) + "-" + FormatDouble(entry.mt_high, 3);
+    }
+
+    std::string BuildMtObjectSuffix(const SliceCatalogEntry &entry) {
+      return "mt_" + FormatDirectoryValue(entry.mt_low, 3) + "-" + FormatDirectoryValue(entry.mt_high, 3);
+    }
+
+    std::string BuildCentRegionCanvasName(const SliceCatalogEntry &entry) {
+      return "CFByMtCanvas__" + BuildCentralityId(entry.cent_low, entry.cent_high) + "__region_" + entry.region_name;
+    }
+
+    std::string BuildCentRegionCanvasTitle(const SliceCatalogEntry &entry) {
+      return "CF by mT, " + BuildCentralityId(entry.cent_low, entry.cent_high) + ", " + entry.region_name + " "
+             + BuildRegionRangeLabel(entry) + "; k* (GeV/c); C(k*)";
+    }
+
+    // Apply stable visual channels so mT overlays remain comparable across centrality slices.
+    void StyleMtOverlayGraph(TGraph &graph, const std::size_t curve_index, const bool show_markers) {
+      static constexpr std::array<int, 10> colors = {
+          kBlue + 1, kOrange + 7, kGreen + 2, kMagenta + 1, kCyan + 2,
+          kRed + 1, kViolet + 1, kTeal + 3, kGray + 2, kPink + 7,
+      };
+      static constexpr std::array<int, 10> line_styles = {1, 2, 3, 4, 5, 7, 8, 9, 10, 6};
+      static constexpr std::array<int, 10> marker_styles = {24, 25, 26, 27, 28, 30, 32, 33, 34, 47};
+      const int color = colors[curve_index % colors.size()];
+      graph.SetLineColor(color);
+      graph.SetMarkerColor(color);
+      graph.SetLineStyle(line_styles[curve_index % line_styles.size()]);
+      graph.SetMarkerStyle(marker_styles[curve_index % marker_styles.size()]);
+      graph.SetMarkerSize(show_markers ? 0.45 : 0.0);
+      graph.SetLineWidth(2);
+    }
+
+    TGraph *BuildMtTrendGraph(const TH1D &histogram,
+                              const SliceCatalogEntry &entry,
+                              const std::size_t curve_index,
+                              const bool show_markers) {
+      auto *graph = new TGraph();
+      graph->SetName(("CFTrend__" + BuildMtObjectSuffix(entry)).c_str());
+      graph->SetTitle(BuildCentRegionCanvasTitle(entry).c_str());
+      StyleMtOverlayGraph(*graph, curve_index, show_markers);
+
+      int point_index = 0;
+      for (int bin = 1; bin <= histogram.GetNbinsX(); ++bin) {
+        const double value = histogram.GetBinContent(bin);
+        const double error = histogram.GetBinError(bin);
+        if (!std::isfinite(value)) {
+          continue;
+        }
+        // Empty toy bins are omitted from the trend overlay; the source CF1D keeps the full bin/error content.
+        if (value == 0.0 && (!std::isfinite(error) || error == 0.0)) {
+          continue;
+        }
+        graph->SetPoint(point_index++, histogram.GetXaxis()->GetBinCenter(bin), value);
+      }
+
+      if (point_index == 0) {
+        delete graph;
+        return nullptr;
+      }
+      graph->SetBit(kCanDelete);
+      return graph;
+    }
+
+    // Use plotted points rather than error bars to choose a stable trend-display range.
+    std::pair<double, double> FindOverlayYRange(const std::vector<TGraph *> &graphs) {
+      double y_min = std::numeric_limits<double>::infinity();
+      double y_max = -std::numeric_limits<double>::infinity();
+      for (const TGraph *graph : graphs) {
+        for (int point = 0; point < graph->GetN(); ++point) {
+          double x = 0.0;
+          double value = 0.0;
+          graph->GetPoint(point, x, value);
+          if (!std::isfinite(value)) {
+            continue;
+          }
+          y_min = std::min(y_min, value);
+          y_max = std::max(y_max, value);
+        }
+      }
+
+      if (!std::isfinite(y_min) || !std::isfinite(y_max)) {
+        return {0.0, 1.0};
+      }
+      if (std::abs(y_max - y_min) < 1.0e-9) {
+        return {y_min - 0.5, y_max + 0.5};
+      }
+
+      const double padding = 0.10 * (y_max - y_min);
+      const double display_min = y_min > 0.0 ? std::max(0.0, y_min - padding) : y_min - padding;
+      return {display_min, y_max + padding};
+    }
+
+    // Store one per-centrality, per-region canvas with every available mT CF overlaid.
+    void WriteCentSliceCfCanvases(TFile &output_file,
+                                  const std::vector<SliceCatalogEntry> &entries,
+                                  const bool show_markers) {
+      std::map<std::pair<int, int>, std::vector<const SliceCatalogEntry *>> grouped_entries;
+      for (const SliceCatalogEntry &entry : entries) {
+        grouped_entries[{entry.centrality_index, entry.region_index}].push_back(&entry);
+      }
+
+      for (auto &group : grouped_entries) {
+        auto &group_entries = group.second;
+        std::sort(group_entries.begin(), group_entries.end(), [](const SliceCatalogEntry *lhs, const SliceCatalogEntry *rhs) {
+          if (lhs->mt_index != rhs->mt_index) {
+            return lhs->mt_index < rhs->mt_index;
+          }
+          return lhs->mt_low < rhs->mt_low;
+        });
+
+        std::vector<TGraph *> overlay_graphs;
+        std::vector<const SliceCatalogEntry *> graph_entries;
+        overlay_graphs.reserve(group_entries.size());
+        graph_entries.reserve(group_entries.size());
+        for (std::size_t index = 0; index < group_entries.size(); ++index) {
+          const SliceCatalogEntry &entry = *group_entries[index];
+          auto *stored_histogram = dynamic_cast<TH1D *>(output_file.Get(entry.cf_object_path.c_str()));
+          if (stored_histogram == nullptr) {
+            throw std::runtime_error("Missing CF1D object while building mT overlay canvas: " + entry.cf_object_path);
+          }
+
+          TGraph *trend_graph = BuildMtTrendGraph(*stored_histogram, entry, index, show_markers);
+          if (trend_graph != nullptr) {
+            overlay_graphs.push_back(trend_graph);
+            graph_entries.push_back(&entry);
+          }
+        }
+
+        if (overlay_graphs.empty()) {
+          continue;
+        }
+
+        const auto [display_min, display_max] = FindOverlayYRange(overlay_graphs);
+
+        const SliceCatalogEntry &reference_entry = *graph_entries.front();
+        auto *cent_region_directory = GetOrCreateDirectoryPath(output_file, BuildCentRegionDirectory(reference_entry));
+        cent_region_directory->cd();
+
+        TCanvas canvas(BuildCentRegionCanvasName(reference_entry).c_str(),
+                       BuildCentRegionCanvasTitle(reference_entry).c_str(),
+                       900,
+                       700);
+        canvas.SetTicks(1, 1);
+        auto *frame = canvas.DrawFrame(reference_entry.kstar_min,
+                                       display_min,
+                                       reference_entry.kstar_max,
+                                       display_max,
+                                       BuildCentRegionCanvasTitle(reference_entry).c_str());
+        frame->SetBit(kCanDelete);
+
+        auto *legend = new TLegend(0.58, 0.70, 0.88, 0.88);
+        legend->SetBorderSize(0);
+        legend->SetFillStyle(0);
+        legend->SetBit(kCanDelete);
+
+        for (std::size_t index = 0; index < overlay_graphs.size(); ++index) {
+          TGraph *graph = overlay_graphs[index];
+          graph->Draw(show_markers ? "LP SAME" : "L SAME");
+          legend->AddEntry(graph, BuildMtLegendLabel(*graph_entries[index]).c_str(), show_markers ? "lp" : "l");
+        }
+        legend->Draw();
+        canvas.Update();
+        canvas.Write("CFByMtCanvas", TObject::kOverwrite);
+      }
     }
 
     // Persist the catalog so fit never has to recover metadata from object names.
@@ -879,6 +1086,8 @@ namespace exp_femto_1d {
       shared_output_file = OpenRootFile(output_root_path, "UPDATE");
     }
     WriteSliceCatalogTree(*shared_output_file, catalog_entries);
+    const ScopedRootBatchMode batch_mode(true);
+    WriteCentSliceCfCanvases(*shared_output_file, catalog_entries, config.build.cf_by_mt_show_markers);
     progress.Finish();
     return statistics;
   }

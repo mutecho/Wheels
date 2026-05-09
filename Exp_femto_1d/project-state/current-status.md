@@ -6,8 +6,8 @@
   `project-state/`
 - current conclusion: the project has been scaffolded as an independent CMake
   package with public config/logging/workflow/model interfaces, structured CF
-  output, fit workflow, example configs, test entry points, and a project-local
-  config-driven run helper under `scripts/`
+  output, per-centrality CF-by-mT overlay canvases, fit workflow, example configs,
+  test entry points, and a project-local config-driven run helper under `scripts/`
 
 ## Verification Status
 
@@ -27,6 +27,11 @@ Reason:
 - `2026-05-06` internal `THnSparse` projection ownership was fixed so repeated
   EP interval projections no longer emit `TROOT::Append` replacement warnings;
   O2Physics `ctest --output-on-failure` passed all 4 registered tests
+- `2026-05-08` `build-cf` started writing
+  `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`; local build passed and
+  O2Physics `ctest --output-on-failure` passed all 4 registered tests
+- `2026-05-08` `CFByMtCanvas` markers became opt-in through
+  `build.cf_by_mt_show_markers`; default output is line-only for clearer trends
 - real-data equivalence to the legacy macro has not yet been run
 
 ## Active Constraints

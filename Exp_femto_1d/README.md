@@ -118,6 +118,8 @@ Key semantics:
 - `PiPiCatsModel` converts the fit-side `k*` to `MeV/c` before calling CATS
 - missing `fit_selection` falls back to the full build bin lists
 - output file extensions are normalized to `.root` and `.tsv`
+- `build.cf_by_mt_show_markers` defaults to `false`; set it to `true` to draw
+  markers on `CFByMtCanvas` trend lines
 - build/fit progress accepts `true`, `false`, `"auto"`, `"enabled"`, or `"disabled"`
 
 See:
@@ -134,6 +136,7 @@ See:
 - `slices/<slice_id>/SE_raw1d`
 - `slices/<slice_id>/ME_raw1d`
 - `slices/<slice_id>/CF1D`
+- `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
 
 `fit` writes:
 

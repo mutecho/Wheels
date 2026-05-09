@@ -30,6 +30,8 @@ The project is driven by TOML:
 - optional `[[fit_selection.*]]`
 
 If `fit_selection` is omitted, fit follows the full build bin grid.
+`build.cf_by_mt_show_markers` defaults to `false`; enable it only when marker
+symbols are useful on `CFByMtCanvas` trend overlays.
 
 ## Run Helper
 
@@ -59,6 +61,7 @@ Build output:
 - `slices/<slice_id>/SE_raw1d`
 - `slices/<slice_id>/ME_raw1d`
 - `slices/<slice_id>/CF1D`
+- `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
 
 Fit output:
 

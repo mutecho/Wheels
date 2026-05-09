@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-05-08
+
+- added build-cf `cent_slices/<cent_id>/<region_name>/CFByMtCanvas` output
+  canvases that overlay all available mT-bin CF histograms for each centrality
+  and event-plane region
+- extended ROOT-backed tests to verify the new canvas schema in both reopen
+  and shared-output build modes
+- passed local build, guarded local `ctest`, and O2Physics
+  `ctest --output-on-failure`
+- changed `CFByMtCanvas` to line-only markers-off output by default and added
+  `build.cf_by_mt_show_markers` as the opt-in marker switch
+
 ## 2026-05-06
 
 - added `scripts/run_exp_femto_1d.sh` for config-driven `build-cf`/`fit` runs

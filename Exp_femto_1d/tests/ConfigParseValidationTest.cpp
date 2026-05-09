@@ -48,6 +48,7 @@ norm_high = 0.8
 kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
+cf_by_mt_show_markers = true
 progress = false
 
 [fit]
@@ -69,6 +70,7 @@ max = 0.4
   Expect(config.output.log_level == LogLevel::kDebug, "log level mismatch");
   Expect(config.output.cf_root_name == "cf.root", "root extension normalization failed");
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
+  Expect(config.build.cf_by_mt_show_markers, "CF-by-mT marker switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
   Expect(config.fit_centrality_bins.size() == 1, "fit centrality fallback failed");
@@ -102,6 +104,7 @@ max = 0.4
 
   const ApplicationConfig progress_alias =
       LoadApplicationConfig(WriteFile(temp_dir / "progress_alias.toml", progress_alias_config));
+  Expect(!progress_alias.build.cf_by_mt_show_markers, "CF-by-mT markers should be disabled by default");
   Expect(progress_alias.build.progress == ProgressMode::kEnabled, "enabled alias should parse");
   Expect(progress_alias.fit.progress == ProgressMode::kDisabled, "disabled alias should parse");
 

@@ -225,6 +225,8 @@ namespace exp_femto_1d {
     config.build.kstar_max = ReadOptionalDouble(build, "kstar_max", config.build.kstar_max);
     config.build.reopen_output_file_per_slice =
         ReadOptionalBool(build, "reopen_output_file_per_slice", config.build.reopen_output_file_per_slice);
+    config.build.cf_by_mt_show_markers =
+        ReadOptionalBool(build, "cf_by_mt_show_markers", config.build.cf_by_mt_show_markers);
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.fit_kstar_max = ReadOptionalDouble(fit, "fit_kstar_max", config.fit.fit_kstar_max);

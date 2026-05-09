@@ -11,6 +11,11 @@
 - added `scripts/run_exp_femto_1d.sh` as the config-driven run helper on `2026-05-06`
 - fixed direct run-helper execution to re-enter `O2Physics/latest-master-o2`
   automatically when the caller has not already entered a complete ROOT runtime
+- added `build-cf` `cent_slices/<cent_id>/<region_name>/CFByMtCanvas` overlays
+  on `2026-05-08` so each centrality and event-plane region shows all mT-bin
+  CF curves together
+- changed `CFByMtCanvas` to line-only output by default; use
+  `build.cf_by_mt_show_markers = true` only when marker symbols are desired
 
 ## Current Risk
 
@@ -20,8 +25,10 @@
 ## Recommended Next Action
 
 1. Execute one real-data `build-cf` regression against the legacy macro.
-2. Run one real-data `fit` on a `MinBias` slice and one EP-differential slice.
-3. Inspect `FitCanvas`, `Baseline`, and `PureFemto` outputs.
+2. Inspect the new `cent_slices/*/*/CFByMtCanvas` overlays for at least one
+   centrality bin.
+3. Run one real-data `fit` on a `MinBias` slice and one EP-differential slice.
+4. Inspect `FitCanvas`, `Baseline`, and `PureFemto` outputs.
 
 ## Recommended Commands
 

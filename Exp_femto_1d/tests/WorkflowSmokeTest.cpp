@@ -5,7 +5,9 @@
 #include <stdexcept>
 #include <string>
 
+#include "TCanvas.h"
 #include "TFile.h"
+#include "TGraph.h"
 #include "TH1.h"
 #include "THnSparse.h"
 #include "exp_femto_1d/Config.h"
@@ -43,11 +45,14 @@ namespace {
     auto same = std::make_unique<THnSparseF>("sparse", "sparse", 4, bins, min, max);
     auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 4, bins, min, max);
     for (double kstar : {0.02, 0.04, 0.08, 0.12, 0.20, 0.55, 0.70}) {
-      for (double ep : {0.10, 0.30, 1.30, 2.60}) {
-        const double same_weight = 25.0 + 10.0 * std::exp(-7.0 * kstar) + (ep < 0.8 ? 3.0 : 0.0);
-        const double mixed_weight = 22.0 + 4.0 * std::exp(-2.0 * kstar);
-        FillSparse(*same, kstar, 0.30, 5.0, ep, same_weight);
-        FillSparse(*mixed, kstar, 0.30, 5.0, ep, mixed_weight);
+      for (double mt : {0.30, 0.42}) {
+        for (double ep : {0.10, 0.30, 1.30, 2.60}) {
+          const double same_weight = 25.0 + 10.0 * std::exp(-7.0 * kstar) + (ep < 0.8 ? 3.0 : 0.0)
+                                     + 2.0 * (mt > 0.35 ? 1.0 : 0.0);
+          const double mixed_weight = 22.0 + 4.0 * std::exp(-2.0 * kstar) + (mt > 0.35 ? 1.5 : 0.0);
+          FillSparse(*same, kstar, mt, 5.0, ep, same_weight);
+          FillSparse(*mixed, kstar, mt, 5.0, ep, mixed_weight);
+        }
       }
     }
 
@@ -81,6 +86,7 @@ namespace {
     output << "kstar_min = 0.0\n";
     output << "kstar_max = 0.8\n";
     output << "reopen_output_file_per_slice = false\n";
+    output << "cf_by_mt_show_markers = true\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "fit_kstar_max = 0.20\n";
@@ -92,7 +98,9 @@ namespace {
     output << "baseline_p2_init = 0.0\n";
     output << "source_size_init = 6.0\n\n";
     output << "[[bins.centrality]]\nmin = 0\nmax = 10\n\n";
-    output << "[[bins.mt]]\nmin = 0.2\nmax = 0.4\n";
+    output << "[[bins.mt]]\nmin = 0.2\nmax = 0.35\n\n";
+    output << "[[bins.mt]]\nmin = 0.35\nmax = 0.5\n\n";
+    output << "[[fit_selection.mt]]\nmin = 0.2\nmax = 0.35\n";
     return path.string();
   }
 
@@ -109,26 +117,36 @@ int main() {
   const ApplicationConfig config = LoadApplicationConfig(config_path);
   const Logger logger(LogLevel::kError);
   const BuildCfRunStatistics build_stats = RunBuildCf(config, logger);
-  Expect(build_stats.requested_groups == 1, "expected one toy group");
-  Expect(build_stats.stored_slices == 3, "build-cf should produce three region slices");
+  Expect(build_stats.requested_groups == 2, "expected two toy groups");
+  Expect(build_stats.stored_slices == 6, "build-cf should produce three region slices for each mT bin");
 
   TFile cf_file((temp_dir / "workflow_cf.root").string().c_str(), "READ");
   Expect(cf_file.Get("meta/SliceCatalog") != nullptr, "SliceCatalog missing");
   Expect(cf_file.Get("slices") != nullptr, "slices directory missing");
 
   const auto entries = LoadSliceCatalog((temp_dir / "workflow_cf.root").string());
-  Expect(entries.size() == 3, "catalog size mismatch");
+  Expect(entries.size() == 6, "catalog size mismatch");
   auto *se_histogram = dynamic_cast<TH1D *>(cf_file.Get(entries[0].se_object_path.c_str()));
   auto *me_histogram = dynamic_cast<TH1D *>(cf_file.Get(entries[0].me_object_path.c_str()));
   auto *cf_histogram = dynamic_cast<TH1D *>(cf_file.Get(entries[0].cf_object_path.c_str()));
+  auto *min_bias_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/MinBias/CFByMtCanvas"));
+  auto *in_plane_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/InPlane/CFByMtCanvas"));
+  auto *out_of_plane_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/OutOfPlane/CFByMtCanvas"));
   Expect(se_histogram != nullptr, "SE_raw1d missing");
   Expect(me_histogram != nullptr, "ME_raw1d missing");
   Expect(cf_histogram != nullptr, "CF1D missing");
   Expect(cf_histogram->Integral() > 0.0, "CF1D should not be empty");
+  Expect(min_bias_canvas != nullptr, "MinBias CF-by-mT canvas missing");
+  Expect(in_plane_canvas != nullptr, "InPlane CF-by-mT canvas missing");
+  Expect(out_of_plane_canvas != nullptr, "OutOfPlane CF-by-mT canvas missing");
+  auto *enabled_marker_graph =
+      dynamic_cast<TGraph *>(min_bias_canvas->GetListOfPrimitives()->FindObject("CFTrend__mt_0.200-0.350"));
+  Expect(enabled_marker_graph != nullptr, "CF-by-mT trend graph missing");
+  Expect(enabled_marker_graph->GetMarkerSize() > 0.0, "CF-by-mT marker switch should enable markers");
 
   const FitRunStatistics fit_stats = RunFit(config, logger);
-  Expect(fit_stats.catalog_slices == 3, "fit should read three catalog slices");
-  Expect(fit_stats.selected_slices == 3, "fit should select every built slice");
+  Expect(fit_stats.catalog_slices == 6, "fit should read six catalog slices");
+  Expect(fit_stats.selected_slices == 3, "fit should select the configured mT bin");
   Expect(fit_stats.fitted_slices + fit_stats.skipped_failed_fits == 3, "every selected slice should be attempted");
 
   TFile fit_file((temp_dir / "workflow_fit.root").string().c_str(), "READ");

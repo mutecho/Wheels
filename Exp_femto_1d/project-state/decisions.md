@@ -30,3 +30,17 @@
 
 - status: accepted
 - reason: locked by `PLAN.md`
+
+## DEC-007 Add centrality-level CF overlay canvases to build output
+
+- status: accepted
+- reason: users need a direct per-centrality, per-event-plane visual comparison
+  of all mT-bin `CF1D` histograms without changing the per-slice histogram
+  contract
+
+## DEC-008 Hide CF-by-mT overlay markers by default
+
+- status: accepted
+- reason: dense markers and error bars obscure the CF trend; `CFByMtCanvas`
+  should default to line-only trend overlays while preserving an explicit
+  `build.cf_by_mt_show_markers` opt-in
