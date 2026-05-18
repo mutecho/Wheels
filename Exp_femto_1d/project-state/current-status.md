@@ -32,6 +32,9 @@ Reason:
   O2Physics `ctest --output-on-failure` passed all 4 registered tests
 - `2026-05-08` `CFByMtCanvas` markers became opt-in through
   `build.cf_by_mt_show_markers`; default output is line-only for clearer trends
+- `2026-05-18` `build.split_mixed_event_by_phi` was added as an opt-in
+  event-plane-following mixed-event denominator mode; O2Physics ROOT executor
+  `ctest --output-on-failure` passed all 4 registered tests
 - real-data equivalence to the legacy macro has not yet been run
 
 ## Active Constraints
@@ -42,6 +45,9 @@ Reason:
 - direct helper execution defaults to `build-cf`; full build-and-fit execution
   requires explicit `--stage all`
 - the run helper still requires a built `bin/exp_femto_1d` executable
+- `build.split_mixed_event_by_phi = false` preserves the historical integrated
+  MinBias mixed-event denominator per centrality/mT group; `true` is the new
+  opt-in mode for ME denominators that follow the SE event-plane region
 - real-data closure is still pending for both `build-cf` and `fit`
 
 ## Ledger Convention

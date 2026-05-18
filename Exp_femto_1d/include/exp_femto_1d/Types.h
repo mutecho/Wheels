@@ -64,6 +64,7 @@ namespace exp_femto_1d {
     double kstar_max = 0.8;
     bool reopen_output_file_per_slice = true;
     bool cf_by_mt_show_markers = false;
+    bool split_mixed_event_by_phi = false;
     ProgressMode progress = ProgressMode::kAuto;
   };
 
@@ -132,6 +133,7 @@ namespace exp_femto_1d {
     double ep_low_2 = 0.0;
     double ep_high_2 = 0.0;
     bool has_second_interval = false;
+    bool split_mixed_event_by_phi = false;
     double norm_low = 0.0;
     double norm_high = 0.0;
     double kstar_min = 0.0;
@@ -176,6 +178,7 @@ namespace exp_femto_1d {
     std::size_t requested_groups = 0;
     std::size_t stored_slices = 0;
     std::size_t skipped_zero_mixed_event_groups = 0;
+    std::size_t skipped_zero_mixed_event_slices = 0;
     std::size_t skipped_zero_same_event_slices = 0;
   };
 

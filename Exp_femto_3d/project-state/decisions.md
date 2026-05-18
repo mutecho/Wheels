@@ -28,3 +28,16 @@
   - this matches the project's current local convention
   - future agent closeout should write to the explicit non-hidden ledger path
     instead of inferring the hidden default
+
+## DEC-004: Keep Integrated ME As Default And Make Phi-Following ME Opt-In
+
+- date: 2026-05-18
+- decision: `build.split_mixed_event_by_phi = false` remains the default so each
+  centrality/mT group uses one mixed-event denominator integrated over phi;
+  `true` is an explicit opt-in for denominators that follow each SE phi slice
+- rationale:
+  - preserving the default keeps existing CF production numerically backward
+    compatible
+  - the opt-in mode makes phi-differential denominator checks possible without
+    changing `map_pair_phi_to_symmetric_range`, which only controls coordinate
+    mapping for display and fit summaries

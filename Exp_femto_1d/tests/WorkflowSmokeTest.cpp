@@ -49,7 +49,8 @@ namespace {
         for (double ep : {0.10, 0.30, 1.30, 2.60}) {
           const double same_weight = 25.0 + 10.0 * std::exp(-7.0 * kstar) + (ep < 0.8 ? 3.0 : 0.0)
                                      + 2.0 * (mt > 0.35 ? 1.0 : 0.0);
-          const double mixed_weight = 22.0 + 4.0 * std::exp(-2.0 * kstar) + (mt > 0.35 ? 1.5 : 0.0);
+          const double mixed_weight =
+              22.0 + 4.0 * std::exp(-2.0 * kstar) + (mt > 0.35 ? 1.5 : 0.0) + 5.0 * ep;
           FillSparse(*same, kstar, mt, 5.0, ep, same_weight);
           FillSparse(*mixed, kstar, mt, 5.0, ep, mixed_weight);
         }
@@ -66,7 +67,11 @@ namespace {
 
   std::string WriteConfig(const std::filesystem::path &path,
                           const std::string &input_root,
-                          const std::string &output_dir) {
+                          const std::string &output_dir,
+                          const std::string &cf_root_name = "workflow_cf.root",
+                          const std::string &fit_root_name = "workflow_fit.root",
+                          const std::string &fit_summary_name = "workflow.tsv",
+                          const bool split_mixed_event_by_phi = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -76,9 +81,9 @@ namespace {
     output << "sparse_object_name = \"sparse\"\n\n";
     output << "[output]\n";
     output << "output_directory = \"" << output_dir << "\"\n";
-    output << "cf_root_name = \"workflow_cf.root\"\n";
-    output << "fit_root_name = \"workflow_fit.root\"\n";
-    output << "fit_summary_name = \"workflow.tsv\"\n";
+    output << "cf_root_name = \"" << cf_root_name << "\"\n";
+    output << "fit_root_name = \"" << fit_root_name << "\"\n";
+    output << "fit_summary_name = \"" << fit_summary_name << "\"\n";
     output << "log_level = \"error\"\n\n";
     output << "[build]\n";
     output << "norm_low = 0.5\n";
@@ -87,6 +92,7 @@ namespace {
     output << "kstar_max = 0.8\n";
     output << "reopen_output_file_per_slice = false\n";
     output << "cf_by_mt_show_markers = true\n";
+    output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "fit_kstar_max = 0.20\n";
@@ -113,6 +119,13 @@ int main() {
   std::filesystem::create_directories(temp_dir);
   const std::string input_root = WriteToyInput(temp_dir / "input.root");
   const std::string config_path = WriteConfig(temp_dir / "config.toml", input_root, temp_dir.string());
+  const std::string split_config_path = WriteConfig(temp_dir / "config_split.toml",
+                                                    input_root,
+                                                    temp_dir.string(),
+                                                    "workflow_cf_split.root",
+                                                    "workflow_fit_split.root",
+                                                    "workflow_split.tsv",
+                                                    true);
 
   const ApplicationConfig config = LoadApplicationConfig(config_path);
   const Logger logger(LogLevel::kError);
@@ -143,6 +156,21 @@ int main() {
       dynamic_cast<TGraph *>(min_bias_canvas->GetListOfPrimitives()->FindObject("CFTrend__mt_0.200-0.350"));
   Expect(enabled_marker_graph != nullptr, "CF-by-mT trend graph missing");
   Expect(enabled_marker_graph->GetMarkerSize() > 0.0, "CF-by-mT marker switch should enable markers");
+
+  const ApplicationConfig split_config = LoadApplicationConfig(split_config_path);
+  const BuildCfRunStatistics split_build_stats = RunBuildCf(split_config, logger);
+  Expect(split_build_stats.stored_slices == 6, "split-ME build-cf should keep every toy slice");
+  Expect(split_build_stats.skipped_zero_mixed_event_slices == 0, "toy split-ME build should not skip ME slices");
+  const auto split_entries = LoadSliceCatalog((temp_dir / "workflow_cf_split.root").string());
+  Expect(split_entries.size() == 6, "split-ME catalog size mismatch");
+  Expect(split_entries[1].split_mixed_event_by_phi, "catalog should record split-ME mode");
+
+  TFile split_cf_file((temp_dir / "workflow_cf_split.root").string().c_str(), "READ");
+  auto *split_in_plane_me = dynamic_cast<TH1D *>(split_cf_file.Get(split_entries[1].me_object_path.c_str()));
+  auto *integrated_in_plane_me = dynamic_cast<TH1D *>(cf_file.Get(entries[1].me_object_path.c_str()));
+  Expect(split_in_plane_me != nullptr && integrated_in_plane_me != nullptr, "ME comparison histograms missing");
+  Expect(split_in_plane_me->Integral() < integrated_in_plane_me->Integral(),
+         "split-ME InPlane denominator should use a narrower EP range than integrated ME");
 
   const FitRunStatistics fit_stats = RunFit(config, logger);
   Expect(fit_stats.catalog_slices == 6, "fit should read six catalog slices");

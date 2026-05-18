@@ -16,19 +16,28 @@
   CF curves together
 - changed `CFByMtCanvas` to line-only output by default; use
   `build.cf_by_mt_show_markers = true` only when marker symbols are desired
+- added `build.split_mixed_event_by_phi` on `2026-05-18`; default `false`
+  preserves the integrated MinBias mixed-event denominator, while `true`
+  projects mixed events in the same event-plane region as each SE slice
+- persisted the ME-splitting choice in `meta/SliceCatalog` and passed local
+  build plus O2Physics ROOT executor `ctest --output-on-failure`
 
 ## Current Risk
 
 - real-data equivalence to the legacy macro is still open
+- real-data comparison of integrated-ME and split-ME modes is still open
 - fit stability on real slices still needs inspection
 
 ## Recommended Next Action
 
-1. Execute one real-data `build-cf` regression against the legacy macro.
+1. Execute one real-data `build-cf` regression against the legacy macro with
+   `build.split_mixed_event_by_phi = false`.
 2. Inspect the new `cent_slices/*/*/CFByMtCanvas` overlays for at least one
    centrality bin.
-3. Run one real-data `fit` on a `MinBias` slice and one EP-differential slice.
-4. Inspect `FitCanvas`, `Baseline`, and `PureFemto` outputs.
+3. Repeat the same dataset with `build.split_mixed_event_by_phi = true` and
+   compare the EP-differential denominators.
+4. Run one real-data `fit` on a `MinBias` slice and one EP-differential slice.
+5. Inspect `FitCanvas`, `Baseline`, and `PureFemto` outputs.
 
 ## Recommended Commands
 

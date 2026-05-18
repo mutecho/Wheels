@@ -47,6 +47,7 @@ log_level = "debug"
 map_pair_phi_to_symmetric_range = true
 write_normalized_se_me_1d_projections = false
 reopen_output_file_per_slice = true
+split_mixed_event_by_phi = true
 progress = false
 
 [fit]
@@ -75,6 +76,7 @@ max = 0.4
   Expect(config.fit_centrality_bins.size() == 1, "fit centrality fallback failed");
   Expect(config.output.cf_root_name == "cf.root", "root extension normalization failed");
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
+  Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
   Expect(config.fit.map_pair_phi_to_symmetric_range.has_value(), "fit phi mapping override should parse");
@@ -139,6 +141,7 @@ max = 0.6
   Expect(overlapping_config.mt_bins.size() == 3, "overlapping mt bins should be accepted");
   Expect(overlapping_config.fit_centrality_bins.size() == 1, "fit selection centrality should parse");
   Expect(overlapping_config.fit_mt_bins.size() == 2, "fit selection mt should parse");
+  Expect(!overlapping_config.build.split_mixed_event_by_phi, "ME phi split should default to false");
   Expect(overlapping_config.build.progress == ProgressMode::kAuto, "build progress should default to auto");
   Expect(overlapping_config.fit.progress == ProgressMode::kAuto, "fit progress should default to auto");
   Expect(!overlapping_config.fit.map_pair_phi_to_symmetric_range.has_value(),
@@ -180,6 +183,40 @@ max = 0.4
          "fit phi mapping true override should parse");
   Expect(*fit_phi_mapping_true.fit.map_pair_phi_to_symmetric_range,
          "fit phi mapping true override should be true");
+
+  const std::string explicit_integrated_me_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+split_mixed_event_by_phi = false
+
+[fit]
+model = "diag"
+fit_q_max = 0.15
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+
+  const ApplicationConfig explicit_integrated_me =
+      LoadApplicationConfig(WriteFile(temp_dir / "explicit_integrated_me.toml", explicit_integrated_me_config));
+  Expect(!explicit_integrated_me.build.split_mixed_event_by_phi, "explicit integrated ME mode should parse false");
 
   const std::filesystem::path project_root = std::filesystem::path(__FILE__).parent_path().parent_path();
   const ApplicationConfig pbpb_example = LoadApplicationConfig((project_root / "config/pbpb_build_and_fit.toml").string());

@@ -60,6 +60,7 @@ namespace exp_femto_3d {
     bool map_pair_phi_to_symmetric_range = false;
     bool write_normalized_se_me_1d_projections = false;
     bool reopen_output_file_per_slice = true;
+    bool split_mixed_event_by_phi = false;
     ProgressMode progress = ProgressMode::kAuto;
   };
 
@@ -114,6 +115,7 @@ namespace exp_femto_3d {
     double display_phi_high = 0.0;
     double display_phi_center = 0.0;
     bool build_uses_symmetric_phi_range = false;
+    bool split_mixed_event_by_phi = false;
     bool is_phi_integrated = false;
   };
 
@@ -168,6 +170,7 @@ namespace exp_femto_3d {
     std::size_t requested_groups = 0;
     std::size_t stored_slices = 0;
     std::size_t skipped_zero_mixed_event_groups = 0;
+    std::size_t skipped_zero_mixed_event_slices = 0;
     std::size_t skipped_zero_same_event_slices = 0;
   };
 

@@ -82,6 +82,7 @@ int main(int argc, char **argv) {
       const BuildCfRunStatistics statistics = RunBuildCf(config, logger);
       std::cout << "build-cf stored_slices=" << statistics.stored_slices
                 << " skipped_zero_me_groups=" << statistics.skipped_zero_mixed_event_groups
+                << " skipped_zero_mixed_event_slices=" << statistics.skipped_zero_mixed_event_slices
                 << " skipped_zero_se_slices=" << statistics.skipped_zero_same_event_slices << "\n";
       return 0;
     }

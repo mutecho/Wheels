@@ -204,6 +204,8 @@ namespace exp_femto_3d {
         build, "write_normalized_se_me_1d_projections", config.build.write_normalized_se_me_1d_projections);
     config.build.reopen_output_file_per_slice =
         ReadOptionalBool(build, "reopen_output_file_per_slice", config.build.reopen_output_file_per_slice);
+    config.build.split_mixed_event_by_phi =
+        ReadOptionalBool(build, "split_mixed_event_by_phi", config.build.split_mixed_event_by_phi);
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));

@@ -1,17 +1,21 @@
 [input]
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_morebin.root"
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_fulltof.root"
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_small.root"
-task_name = "femto-dream-pair-task-track-track"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_1d_25ae_pass2_cprtest.root"
+task_name = "femto-dream-pair-task-track-track_nocpr"
+# task_name = "femto-dream-pair-task-track-track_full_range_tof"
 same_event_subtask = "SameEvent_EP"
 mixed_event_subtask = "MixedEvent_EP"
 sparse_object_name = "relPairkstarmTMultMultPercentileQn"
 
 [output]
-output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
+output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_morebin.root"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_fulltof.root"
-cf_root_name = "EP_dependence_CF_23zzh_pass5_small.root"
+# cf_root_name = "EP_dependence_CF_25ae_pass2_small_normalcpr.root"
+# cf_root_name = "EP_dependence_CF_25ae_pass2_small_morecpr.root"
+cf_root_name = "EP_dependence_CF_25ae_pass2_nocpr.root"
+# cf_root_name = "EP_dependence_CF_25ae_pass2_fulltof.root"
 fit_root_name = "xxxxfit_output.root"
 fit_summary_name = "xxxxfit_summary.tsv"
 log_level = "info"
@@ -22,8 +26,9 @@ norm_high = 0.25
 kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
-split_mixed_event_by_phi = false
 progress = "auto"
+cf_by_mt_show_markers = false
+split_mixed_event_by_phi = false
 
 [fit]
 fit_kstar_max = 0.25
@@ -51,25 +56,37 @@ max = 80
 min = 80
 max = 100
 
-[[bins.mt]]
-min = 0.244131
-max = 0.331059
+# [[bins.mt]]
+# min = 0.2
+# max = 0.3
+
+# [[bins.mt]]
+# min = 0.3
+# max = 0.4
 
 [[bins.mt]]
-min = 0.331059
-max = 0.423792
+min = 0.4
+max = 0.5
 
 [[bins.mt]]
-min = 0.423792
-max = 0.51923
+min = 0.5
+max = 0.6
 
 [[bins.mt]]
-min = 0.51923
-max = 0.713863
+min = 0.6
+max = 0.8
 
 [[bins.mt]]
-min = 0.244131
-max = 0.713863
+min = 0.8
+max = 1
+
+[[bins.mt]]
+min = 1
+max = 1.2
+
+[[bins.mt]]
+min = 1.2
+max = 1.6
 
 [[fit_selection.centrality]]
 min = 0
@@ -79,14 +96,35 @@ max = 10
 min = 10
 max = 30
 
-[[fit_selection.mt]]
-min = 0.244131
-max = 0.331059
+
+# [[fit_selection.mt]]
+# min = 0.2
+# max = 0.3
+
+# [[fit_selection.mt]]
+# min = 0.3
+# max = 0.4
 
 [[fit_selection.mt]]
-min = 0.331059
-max = 0.423792
+min = 0.4
+max = 0.5
 
 [[fit_selection.mt]]
-min = 0.423792
-max = 0.51923
+min = 0.5
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.6
+max = 0.8
+
+[[fit_selection.mt]]
+min = 0.8
+max = 1
+
+[[fit_selection.mt]]
+min = 1
+max = 1.2
+
+[[fit_selection.mt]]
+min = 1.2
+max = 1.6

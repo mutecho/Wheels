@@ -16,6 +16,7 @@ log_level = "warn"
 map_pair_phi_to_symmetric_range = false
 write_normalized_se_me_1d_projections = false
 reopen_output_file_per_slice = false
+split_mixed_event_by_phi = false
 
 [fit]
 model = "full"

@@ -1,19 +1,24 @@
 [input]
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_morebin.root"
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_fulltof.root"
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_1d_25ae_pass2.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_small.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_morept.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_small_cprtest.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_morept_ooref.root"
 # task_name = "femto-dream-pair-task-track-track"
-task_name = "femto-dream-pair-task-track-track_full_range_tof"
+# task_name = "femto-dream-pair-task-track-track_morecpr"
+task_name = "femto-dream-pair-task-track-track_nocpr"
 same_event_subtask = "SameEvent_EP"
 mixed_event_subtask = "MixedEvent_EP"
 sparse_object_name = "relPairkstarmTMultMultPercentileQn"
 
 [output]
-output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
+output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_morebin.root"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_fulltof.root"
-# cf_root_name = "EP_dependence_CF_25ae_pass2.root"
-cf_root_name = "EP_dependence_CF_25ae_pass2_fulltof.root"
+# cf_root_name = "EP_dependence_CF_23zzh_pass5_morept_nocpr.root"
+# cf_root_name = "EP_dependence_CF_23zzh_pass5_small_cprtest_default.root"
+cf_root_name = "EP_dependence_CF_23zzh_pass5_small_cprtest_nocpr.root"
 fit_root_name = "xxxxfit_output.root"
 fit_summary_name = "xxxxfit_summary.tsv"
 log_level = "info"
@@ -24,9 +29,8 @@ norm_high = 0.25
 kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
-progress = "auto"
-cf_by_mt_show_markers = false
 split_mixed_event_by_phi = false
+progress = "auto"
 
 [fit]
 fit_kstar_max = 0.25
@@ -58,9 +62,9 @@ max = 100
 # min = 0.2
 # max = 0.3
 
-[[bins.mt]]
-min = 0.3
-max = 0.4
+# [[bins.mt]]
+# min = 0.3
+# max = 0.4
 
 [[bins.mt]]
 min = 0.4
@@ -72,19 +76,23 @@ max = 0.6
 
 [[bins.mt]]
 min = 0.6
-max = 0.8
+max = 0.7
 
 [[bins.mt]]
-min = 0.8
-max = 1
+min = 0.7
+max = 0.9
 
 [[bins.mt]]
-min = 1
-max = 1.2
+min = 0.9
+max = 1.1
 
-[[bins.mt]]
-min = 1.2
-max = 1.6
+# [[bins.mt]]
+# min = 1.1
+# max = 1.5
+
+# [[bins.mt]]
+# min = 1.5
+# max = 2.0
 
 [[fit_selection.centrality]]
 min = 0
@@ -99,9 +107,9 @@ max = 30
 # min = 0.2
 # max = 0.3
 
-[[fit_selection.mt]]
-min = 0.3
-max = 0.4
+# [[fit_selection.mt]]
+# min = 0.3
+# max = 0.4
 
 [[fit_selection.mt]]
 min = 0.4
@@ -113,16 +121,20 @@ max = 0.6
 
 [[fit_selection.mt]]
 min = 0.6
-max = 0.8
+max = 0.7
 
 [[fit_selection.mt]]
-min = 0.8
-max = 1
+min = 0.7
+max = 0.9
 
 [[fit_selection.mt]]
-min = 1
-max = 1.2
+min = 0.9
+max = 1.1
 
-[[fit_selection.mt]]
-min = 1.2
-max = 1.6
+# [[fit_selection.mt]]
+# min = 1.1
+# max = 1.5
+
+# [[fit_selection.mt]]
+# min = 1.5
+# max = 2.0

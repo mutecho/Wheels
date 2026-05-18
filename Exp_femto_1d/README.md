@@ -93,7 +93,8 @@ The helper preserves the underlying CLI contract:
 
 On success, the CLI prints compact stage summaries:
 
-- `build-cf`: `stored_slices`, `skipped_zero_mixed_event_groups`, `skipped_zero_same_event_slices`
+- `build-cf`: `stored_slices`, `skipped_zero_mixed_event_groups`,
+  `skipped_zero_mixed_event_slices`, `skipped_zero_same_event_slices`
 - `fit`: `catalog_slices`, `selected_slices`, `fitted_slices`, `skipped_missing_objects`, `skipped_failed_fits`
 
 On argument or runtime errors, the CLI prints `[error] <message>`, then usage,
@@ -118,6 +119,10 @@ Key semantics:
 - `PiPiCatsModel` converts the fit-side `k*` to `MeV/c` before calling CATS
 - missing `fit_selection` falls back to the full build bin lists
 - output file extensions are normalized to `.root` and `.tsv`
+- `build.split_mixed_event_by_phi` defaults to `false`; `false` keeps one
+  MinBias mixed-event denominator per centrality/mT group, while `true`
+  projects mixed-event denominators with the same event-plane region as each
+  same-event slice
 - `build.cf_by_mt_show_markers` defaults to `false`; set it to `true` to draw
   markers on `CFByMtCanvas` trend lines
 - build/fit progress accepts `true`, `false`, `"auto"`, `"enabled"`, or `"disabled"`
@@ -137,6 +142,9 @@ See:
 - `slices/<slice_id>/ME_raw1d`
 - `slices/<slice_id>/CF1D`
 - `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
+
+`meta/SliceCatalog` records `split_mixed_event_by_phi` for every slice. Older
+CF files without this branch are read as `false`.
 
 `fit` writes:
 

@@ -44,3 +44,11 @@
 - reason: dense markers and error bars obscure the CF trend; `CFByMtCanvas`
   should default to line-only trend overlays while preserving an explicit
   `build.cf_by_mt_show_markers` opt-in
+
+## DEC-009 Keep integrated ME as default and make EP-following ME opt-in
+
+- status: accepted
+- reason: existing CF production reused one MinBias mixed-event denominator per
+  centrality/mT group; preserving that as `build.split_mixed_event_by_phi =
+  false` keeps backward compatibility while allowing an explicit
+  event-plane-following denominator mode for differential checks

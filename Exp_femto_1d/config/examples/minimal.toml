@@ -19,6 +19,7 @@ kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
 cf_by_mt_show_markers = false
+split_mixed_event_by_phi = false
 progress = false
 
 [fit]

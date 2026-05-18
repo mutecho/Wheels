@@ -41,3 +41,22 @@ ctest --output-on-failure
 - result: passed
 - significance: confirms the local ROOT installation is usable when the O2
   environment is entered correctly
+
+## T-004: O2Physics CTest Run After ME Phi-Splitting Switch
+
+- date: 2026-05-18
+- environment: O2Physics ROOT executor
+- command:
+
+```bash
+ctest --output-on-failure
+```
+
+- result: passed
+- evidence:
+  - `config_parse_validation_test`: passed
+  - `slice_catalog_roundtrip_test`: passed
+  - `workflow_smoke_test`: passed
+- significance: verifies `build.split_mixed_event_by_phi` parsing, catalog
+  metadata persistence, legacy catalog default `false`, and phi-dependent
+  `ME_raw3d` behavior when split-ME mode is enabled

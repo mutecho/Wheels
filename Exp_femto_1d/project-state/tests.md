@@ -5,7 +5,7 @@
 - `config_parse_validation_test`
   - covers required fields, extension normalization, progress parsing, invalid
     fit limits, duplicate bins, invalid `fit_selection`, `cf_by_mt_show_markers`,
-    and example config parsing
+    `split_mixed_event_by_phi`, and example config parsing
 - `slice_catalog_roundtrip_test`
   - builds a toy 4D sparse input and verifies `SliceCatalog` metadata plus
     structured slice paths
@@ -18,6 +18,8 @@
     one mT bin to keep CATS smoke cost bounded
   - verifies explicit `cf_by_mt_show_markers = true` enables markers on
     CF-by-mT trend graphs
+  - verifies split mixed-event mode changes EP-sliced `ME_raw1d` content and
+    records `split_mixed_event_by_phi` in `SliceCatalog`
 - `cats_fit_smoke_test`
   - fits a synthetic `baseline x CATS` histogram and checks `p0` plus source-size recovery
 - `root_runtime_probe`
@@ -66,6 +68,13 @@
 - `2026-05-08` local build and guarded `ctest` passed after adding
   `build.cf_by_mt_show_markers`; O2Physics ROOT executor also passed
   `slice_catalog_roundtrip_test` and exported the line-only default canvas
+- `2026-05-18` `cmake --build
+  /Users/allenzhou/Research_software/Code_base/Exp_femto_1d/build` passed after
+  adding `build.split_mixed_event_by_phi`
+- `2026-05-18` O2Physics ROOT executor
+  `ctest --output-on-failure` passed all 4 registered tests after adding
+  split-ME config parsing, `SliceCatalog` metadata, and EP-dependent
+  denominator smoke coverage
 - real-data regression against the legacy macro is still pending
 
 ## Required Follow-up Validation
@@ -73,4 +82,6 @@
 - run direct `scripts/run_exp_femto_1d.sh --stage all --config
   config/pbpb_build_and_fit.toml` after confirming fit runtime is acceptable
 - compare new `build-cf` against `legacy/get_cf_from_exp.cpp` on a known-good dataset
+- compare both `build.split_mixed_event_by_phi = false` and `true` outputs on a
+  real-data sample when validating event-plane differential CF behavior
 - inspect at least one `MinBias` and one EP-differential real-data fit canvas

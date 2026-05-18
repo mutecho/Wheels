@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-05-18
+
+- added `[build].split_mixed_event_by_phi` with default `false` to preserve the
+  historical integrated MinBias mixed-event denominator behavior
+- added opt-in split mode where mixed-event denominators follow the same
+  event-plane region as each same-event slice
+- persisted `split_mixed_event_by_phi` in `meta/SliceCatalog` with legacy
+  catalogs defaulting to `false`
+- added `skipped_zero_mixed_event_slices` accounting for split-mode denominator
+  failures and printed it in the build-cf CLI summary
+- extended config and workflow smoke tests; local build and O2Physics ROOT
+  executor `ctest --output-on-failure` passed all 4 registered tests
+
 ## 2026-05-08
 
 - added build-cf `cent_slices/<cent_id>/<region_name>/CFByMtCanvas` output

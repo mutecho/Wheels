@@ -49,6 +49,7 @@ kstar_min = 0.0
 kstar_max = 0.8
 reopen_output_file_per_slice = true
 cf_by_mt_show_markers = true
+split_mixed_event_by_phi = true
 progress = false
 
 [fit]
@@ -71,6 +72,7 @@ max = 0.4
   Expect(config.output.cf_root_name == "cf.root", "root extension normalization failed");
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
   Expect(config.build.cf_by_mt_show_markers, "CF-by-mT marker switch should parse");
+  Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
   Expect(config.fit_centrality_bins.size() == 1, "fit centrality fallback failed");
@@ -105,8 +107,38 @@ max = 0.4
   const ApplicationConfig progress_alias =
       LoadApplicationConfig(WriteFile(temp_dir / "progress_alias.toml", progress_alias_config));
   Expect(!progress_alias.build.cf_by_mt_show_markers, "CF-by-mT markers should be disabled by default");
+  Expect(!progress_alias.build.split_mixed_event_by_phi, "ME phi split should be disabled by default");
   Expect(progress_alias.build.progress == ProgressMode::kEnabled, "enabled alias should parse");
   Expect(progress_alias.fit.progress == ProgressMode::kDisabled, "disabled alias should parse");
+
+  const std::string explicit_integrated_me_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+split_mixed_event_by_phi = false
+
+[fit]
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+
+  const ApplicationConfig explicit_integrated_me =
+      LoadApplicationConfig(WriteFile(temp_dir / "explicit_integrated_me.toml", explicit_integrated_me_config));
+  Expect(!explicit_integrated_me.build.split_mixed_event_by_phi, "explicit integrated ME mode should parse false");
 
   const std::string invalid_fit_limit_config = R"toml(
 [input]

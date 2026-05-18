@@ -49,6 +49,7 @@ namespace exp_femto_3d {
     constexpr double kInvalidFullModelCFValue = 1e6;
     constexpr double kFitPenaltyValue = 1e30;
     constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
+    constexpr const char *kSliceCatalogSplitMixedEventBranch = "split_mixed_event_by_phi";
 
     struct Levy3DPMLContext {
       TH3D *h_se_raw = nullptr;
@@ -64,6 +65,11 @@ namespace exp_femto_3d {
       double low = 0.0;
       double high = 0.0;
       double center = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    struct MixedEventProjection {
+      std::unique_ptr<TH3D> raw;
+      std::unique_ptr<TH3D> norm;
     };
 
     std::string FormatDouble(const double value, const int precision = 2) {
@@ -360,6 +366,7 @@ namespace exp_femto_3d {
                                             const double display_phi_high,
                                             const double display_phi_center,
                                             const bool build_uses_symmetric_phi_range,
+                                            const bool split_mixed_event_by_phi,
                                             const bool is_phi_integrated) {
       SliceCatalogEntry entry;
       entry.group_id = BuildGroupId(centrality_bin, mt_bin);
@@ -385,6 +392,7 @@ namespace exp_femto_3d {
       entry.display_phi_high = display_phi_high;
       entry.display_phi_center = display_phi_center;
       entry.build_uses_symmetric_phi_range = build_uses_symmetric_phi_range;
+      entry.split_mixed_event_by_phi = split_mixed_event_by_phi;
       entry.is_phi_integrated = is_phi_integrated;
       return entry;
     }
@@ -417,6 +425,7 @@ namespace exp_femto_3d {
       double display_phi_high = 0.0;
       double display_phi_center = 0.0;
       int build_uses_symmetric_phi_range = 0;
+      int split_mixed_event_by_phi = 0;
       int is_phi_integrated = 0;
 
       tree->Branch("slice_id", &slice_id);
@@ -442,6 +451,7 @@ namespace exp_femto_3d {
       tree->Branch("display_phi_high", &display_phi_high);
       tree->Branch("display_phi_center", &display_phi_center);
       tree->Branch(kSliceCatalogBuildPhiMappingBranch, &build_uses_symmetric_phi_range);
+      tree->Branch(kSliceCatalogSplitMixedEventBranch, &split_mixed_event_by_phi);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
       for (const SliceCatalogEntry &entry : entries) {
@@ -468,6 +478,7 @@ namespace exp_femto_3d {
         display_phi_high = entry.display_phi_high;
         display_phi_center = entry.display_phi_center;
         build_uses_symmetric_phi_range = entry.build_uses_symmetric_phi_range ? 1 : 0;
+        split_mixed_event_by_phi = entry.split_mixed_event_by_phi ? 1 : 0;
         is_phi_integrated = entry.is_phi_integrated ? 1 : 0;
         tree->Fill();
       }
@@ -510,6 +521,11 @@ namespace exp_femto_3d {
         build_uses_symmetric_phi_range =
             std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogBuildPhiMappingBranch);
       }
+      std::unique_ptr<TTreeReaderValue<int>> split_mixed_event_by_phi;
+      if (tree->GetBranch(kSliceCatalogSplitMixedEventBranch) != nullptr) {
+        split_mixed_event_by_phi =
+            std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogSplitMixedEventBranch);
+      }
       TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
 
       std::vector<SliceCatalogEntry> entries;
@@ -539,6 +555,8 @@ namespace exp_femto_3d {
         entry.display_phi_center = *display_phi_center;
         entry.build_uses_symmetric_phi_range =
             build_uses_symmetric_phi_range ? (**build_uses_symmetric_phi_range != 0) : false;
+        entry.split_mixed_event_by_phi =
+            split_mixed_event_by_phi ? (**split_mixed_event_by_phi != 0) : false;
         entry.is_phi_integrated = (*is_phi_integrated != 0);
         entries.push_back(entry);
       }
@@ -1990,31 +2008,50 @@ namespace exp_femto_3d {
         h_me_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
         h_me_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
 
-        auto *h_me_raw = static_cast<TH3D *>(h_me_origin->Projection(0, 1, 2));
-        h_me_raw->SetDirectory(nullptr);
-        auto *h_me_norm = static_cast<TH3D *>(h_me_raw->Clone((group_id + "_ME_norm").c_str()));
-        h_me_norm->SetDirectory(nullptr);
-        const double int_me = IntegralVisibleRange(h_me_norm, true);
-        if (int_me == 0.0) {
-          logger.Warn("Zero mixed-event integral for " + group_id + "; skipping group.");
-          ++statistics.skipped_zero_mixed_event_groups;
-          processed_slices += slices_per_group;
-          progress.Update(processed_slices);
-          delete h_me_raw;
-          delete h_me_norm;
-          continue;
-        }
-        h_me_norm->Scale(1.0 / int_me);
+        // Build either one group-integrated ME denominator or a denominator that follows the current SE phi range.
+        auto build_me_projection = [&](const int first_phi_bin,
+                                       const int last_phi_bin,
+                                       const std::string &norm_name) -> std::unique_ptr<MixedEventProjection> {
+          h_me_origin->GetAxis(6)->SetRange(first_phi_bin, last_phi_bin);
+          auto raw = std::unique_ptr<TH3D>(static_cast<TH3D *>(h_me_origin->Projection(0, 1, 2)));
+          raw->SetDirectory(nullptr);
+          auto norm = std::unique_ptr<TH3D>(static_cast<TH3D *>(raw->Clone(norm_name.c_str())));
+          norm->SetDirectory(nullptr);
+          const double integral = IntegralVisibleRange(norm.get(), true);
+          if (integral == 0.0) {
+            return nullptr;
+          }
+          norm->Scale(1.0 / integral);
+          auto projection = std::make_unique<MixedEventProjection>();
+          projection->raw = std::move(raw);
+          projection->norm = std::move(norm);
+          return projection;
+        };
 
-        auto write_slice = [&](TH3D *h_se_raw, TH3D *h_se_norm, const SliceCatalogEntry &entry) {
+        std::unique_ptr<MixedEventProjection> integrated_me_projection;
+        if (!config.build.split_mixed_event_by_phi) {
+          integrated_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_norm");
+          if (integrated_me_projection == nullptr) {
+            logger.Warn("Zero mixed-event integral for " + group_id + "; skipping group.");
+            ++statistics.skipped_zero_mixed_event_groups;
+            processed_slices += slices_per_group;
+            progress.Update(processed_slices);
+            continue;
+          }
+        }
+
+        auto write_slice = [&](TH3D *h_se_raw,
+                               TH3D *h_se_norm,
+                               const MixedEventProjection &me_projection,
+                               const SliceCatalogEntry &entry) {
           auto *h_cf = static_cast<TH3D *>(h_se_norm->Clone("CF3D"));
           h_cf->SetDirectory(nullptr);
-          h_cf->Divide(h_me_norm);
+          h_cf->Divide(me_projection.norm.get());
           h_cf->GetXaxis()->SetTitle("q_{out} (GeV/c)");
           h_cf->GetYaxis()->SetTitle("q_{side} (GeV/c)");
           h_cf->GetZaxis()->SetTitle("q_{long} (GeV/c)");
 
-          auto *h_me_write = static_cast<TH3D *>(h_me_raw->Clone("ME_raw3d"));
+          auto *h_me_write = static_cast<TH3D *>(me_projection.raw->Clone("ME_raw3d"));
           h_me_write->SetDirectory(nullptr);
           h_se_raw->SetName("SE_raw3d");
           h_cf->SetName("CF3D");
@@ -2034,7 +2071,7 @@ namespace exp_femto_3d {
           Write1DProjections(h_cf, *directory, "CF3D", "C(q)", true);
           if (config.build.write_normalized_se_me_1d_projections) {
             Write1DProjections(h_se_norm, *directory, "SE_norm3d", "Normalized density", true);
-            Write1DProjections(h_me_norm, *directory, "ME_norm3d", "Normalized density", true);
+            Write1DProjections(me_projection.norm.get(), *directory, "ME_norm3d", "Normalized density", true);
           }
           output_file->cd();
           catalog_entries.push_back(entry);
@@ -2059,22 +2096,39 @@ namespace exp_femto_3d {
           progress.Update(processed_slices);
         } else {
           h_se_all_norm->Scale(1.0 / int_se_all);
-          const double raw_phi_low = phi_axis->GetBinLowEdge(1);
-          const double raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
-          const auto entry = MakeSliceCatalogEntry(centrality_bin,
-                                                   mt_bin,
-                                                   static_cast<int>(centrality_index),
-                                                   static_cast<int>(mt_index),
-                                                   -1,
-                                                   raw_phi_low,
-                                                   raw_phi_high,
-                                                   0.5 * (raw_phi_low + raw_phi_high),
-                                                   raw_phi_low,
-                                                   raw_phi_high,
-                                                   std::numeric_limits<double>::quiet_NaN(),
-                                                   config.build.map_pair_phi_to_symmetric_range,
-                                                   true);
-          write_slice(h_se_all_raw, h_se_all_norm, entry);
+          std::unique_ptr<MixedEventProjection> split_me_projection;
+          const MixedEventProjection *me_projection = integrated_me_projection.get();
+          if (config.build.split_mixed_event_by_phi) {
+            split_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_all_norm");
+            if (split_me_projection == nullptr) {
+              logger.Warn("Zero mixed-event integral for " + group_id + " phi=all.");
+              ++statistics.skipped_zero_mixed_event_slices;
+              ++processed_slices;
+              progress.Update(processed_slices);
+              me_projection = nullptr;
+            } else {
+              me_projection = split_me_projection.get();
+            }
+          }
+          if (me_projection != nullptr) {
+            const double raw_phi_low = phi_axis->GetBinLowEdge(1);
+            const double raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
+            const auto entry = MakeSliceCatalogEntry(centrality_bin,
+                                                     mt_bin,
+                                                     static_cast<int>(centrality_index),
+                                                     static_cast<int>(mt_index),
+                                                     -1,
+                                                     raw_phi_low,
+                                                     raw_phi_high,
+                                                     0.5 * (raw_phi_low + raw_phi_high),
+                                                     raw_phi_low,
+                                                     raw_phi_high,
+                                                     std::numeric_limits<double>::quiet_NaN(),
+                                                     config.build.map_pair_phi_to_symmetric_range,
+                                                     config.build.split_mixed_event_by_phi,
+                                                     true);
+            write_slice(h_se_all_raw, h_se_all_norm, *me_projection, entry);
+          }
         }
         delete h_se_all_raw;
         delete h_se_all_norm;
@@ -2098,6 +2152,24 @@ namespace exp_femto_3d {
           }
           h_se_norm->Scale(1.0 / int_se);
 
+          std::unique_ptr<MixedEventProjection> split_me_projection;
+          const MixedEventProjection *me_projection = integrated_me_projection.get();
+          if (config.build.split_mixed_event_by_phi) {
+            split_me_projection =
+                build_me_projection(phi_index, phi_index, group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
+            if (split_me_projection == nullptr) {
+              logger.Warn("Zero mixed-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
+                          + "; skipping slice.");
+              ++statistics.skipped_zero_mixed_event_slices;
+              ++processed_slices;
+              progress.Update(processed_slices);
+              delete h_se_raw;
+              delete h_se_norm;
+              continue;
+            }
+            me_projection = split_me_projection.get();
+          }
+
           const double raw_phi_low = phi_axis->GetBinLowEdge(phi_index);
           const double raw_phi_high = phi_axis->GetBinUpEdge(phi_index);
           const double raw_phi_center = phi_axis->GetBinCenter(phi_index);
@@ -2118,16 +2190,15 @@ namespace exp_femto_3d {
                                                    display_phi_coordinates.high,
                                                    display_phi_coordinates.center,
                                                    config.build.map_pair_phi_to_symmetric_range,
+                                                   config.build.split_mixed_event_by_phi,
                                                    false);
-          write_slice(h_se_raw, h_se_norm, entry);
+          write_slice(h_se_raw, h_se_norm, *me_projection, entry);
           delete h_se_raw;
           delete h_se_norm;
         }
 
         h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-
-        delete h_me_raw;
-        delete h_me_norm;
+        h_me_origin->GetAxis(6)->SetRange(1, n_phi_bins);
       }
     }
 

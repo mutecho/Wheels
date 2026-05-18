@@ -533,6 +533,7 @@ namespace exp_femto_1d {
       double ep_low_2 = 0.0;
       double ep_high_2 = 0.0;
       int has_second_interval = 0;
+      int split_mixed_event_by_phi = 0;
       double norm_low = 0.0;
       double norm_high = 0.0;
       double kstar_min = 0.0;
@@ -558,6 +559,7 @@ namespace exp_femto_1d {
       tree->Branch("ep_low_2", &ep_low_2);
       tree->Branch("ep_high_2", &ep_high_2);
       tree->Branch("has_second_interval", &has_second_interval);
+      tree->Branch("split_mixed_event_by_phi", &split_mixed_event_by_phi);
       tree->Branch("norm_low", &norm_low);
       tree->Branch("norm_high", &norm_high);
       tree->Branch("kstar_min", &kstar_min);
@@ -584,6 +586,7 @@ namespace exp_femto_1d {
         ep_low_2 = entry.ep_low_2;
         ep_high_2 = entry.ep_high_2;
         has_second_interval = entry.has_second_interval ? 1 : 0;
+        split_mixed_event_by_phi = entry.split_mixed_event_by_phi ? 1 : 0;
         norm_low = entry.norm_low;
         norm_high = entry.norm_high;
         kstar_min = entry.kstar_min;
@@ -617,6 +620,10 @@ namespace exp_femto_1d {
       TTreeReaderValue<double> ep_low_2(reader, "ep_low_2");
       TTreeReaderValue<double> ep_high_2(reader, "ep_high_2");
       TTreeReaderValue<int> has_second_interval(reader, "has_second_interval");
+      std::unique_ptr<TTreeReaderValue<int>> split_mixed_event_by_phi;
+      if (tree.GetBranch("split_mixed_event_by_phi") != nullptr) {
+        split_mixed_event_by_phi = std::make_unique<TTreeReaderValue<int>>(reader, "split_mixed_event_by_phi");
+      }
       TTreeReaderValue<double> norm_low(reader, "norm_low");
       TTreeReaderValue<double> norm_high(reader, "norm_high");
       TTreeReaderValue<double> kstar_min(reader, "kstar_min");
@@ -644,6 +651,8 @@ namespace exp_femto_1d {
         entry.ep_low_2 = *ep_low_2;
         entry.ep_high_2 = *ep_high_2;
         entry.has_second_interval = (*has_second_interval != 0);
+        entry.split_mixed_event_by_phi =
+            split_mixed_event_by_phi ? (**split_mixed_event_by_phi != 0) : false;
         entry.norm_low = *norm_low;
         entry.norm_high = *norm_high;
         entry.kstar_min = *kstar_min;
@@ -1018,15 +1027,32 @@ namespace exp_femto_1d {
         const RangeBin &mt_bin = config.mt_bins[mt_index];
         const std::string group_id = BuildGroupId(cent_bin, mt_bin);
 
-        std::unique_ptr<TH1D> me_projection = BuildProjection(*mixed_sparse, cent_bin, mt_bin, regions[0]);
-        const double me_norm = IntegralInRange(*me_projection, config.build.norm_low, config.build.norm_high);
-        if (me_norm <= 0.0 || !std::isfinite(me_norm)) {
-          ++statistics.skipped_zero_mixed_event_groups;
-          progress.Update(++completed_groups);
-          continue;
+        // Default mode preserves the legacy MinBias ME denominator for the whole cent/mT group.
+        std::unique_ptr<TH1D> integrated_me_projection;
+        if (!config.build.split_mixed_event_by_phi) {
+          integrated_me_projection = BuildProjection(*mixed_sparse, cent_bin, mt_bin, regions[0]);
+          const double me_norm = IntegralInRange(*integrated_me_projection, config.build.norm_low, config.build.norm_high);
+          if (me_norm <= 0.0 || !std::isfinite(me_norm)) {
+            ++statistics.skipped_zero_mixed_event_groups;
+            progress.Update(++completed_groups);
+            continue;
+          }
         }
 
         for (const RegionDefinition &region : regions) {
+          // Split mode projects ME with the same event-plane region used by the current SE slice.
+          std::unique_ptr<TH1D> split_me_projection;
+          const TH1D *me_projection = integrated_me_projection.get();
+          if (config.build.split_mixed_event_by_phi) {
+            split_me_projection = BuildProjection(*mixed_sparse, cent_bin, mt_bin, region);
+            const double me_norm = IntegralInRange(*split_me_projection, config.build.norm_low, config.build.norm_high);
+            if (me_norm <= 0.0 || !std::isfinite(me_norm)) {
+              ++statistics.skipped_zero_mixed_event_slices;
+              continue;
+            }
+            me_projection = split_me_projection.get();
+          }
+
           std::unique_ptr<TH1D> se_projection = BuildProjection(*same_sparse, cent_bin, mt_bin, region);
           const double se_norm = IntegralInRange(*se_projection, config.build.norm_low, config.build.norm_high);
           if (se_norm <= 0.0 || !std::isfinite(se_norm)) {
@@ -1062,6 +1088,7 @@ namespace exp_femto_1d {
           entry.ep_low_2 = region.low_2;
           entry.ep_high_2 = region.high_2;
           entry.has_second_interval = region.has_second_interval;
+          entry.split_mixed_event_by_phi = config.build.split_mixed_event_by_phi;
           entry.norm_low = config.build.norm_low;
           entry.norm_high = config.build.norm_high;
           entry.kstar_min = config.build.kstar_min;

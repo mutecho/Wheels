@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "TFile.h"
+#include "TH3.h"
 #include "THnSparse.h"
 #include "TTree.h"
 #include "exp_femto_3d/Config.h"
@@ -33,6 +34,15 @@ namespace {
     sparse.Fill(values, weight);
   }
 
+  double HistogramIntegral(const TH3D &histogram) {
+    return histogram.Integral(1,
+                              histogram.GetNbinsX(),
+                              1,
+                              histogram.GetNbinsY(),
+                              1,
+                              histogram.GetNbinsZ());
+  }
+
   std::string WriteToyInput(const std::filesystem::path &path) {
     TFile output(path.string().c_str(), "RECREATE");
     auto *task = output.mkdir("task");
@@ -48,8 +58,8 @@ namespace {
     for (double phi : {0.3, 1.3, 2.5}) {
       FillSparse(*same, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 10.0);
       FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 8.0);
-      FillSparse(*mixed, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 12.0);
-      FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 11.0);
+      FillSparse(*mixed, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 12.0 + 6.0 * phi);
+      FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 11.0 + 4.0 * phi);
     }
 
     same_dir->cd();
@@ -62,7 +72,9 @@ namespace {
 
   std::string WriteConfig(const std::filesystem::path &path,
                           const std::string &input_root,
-                          const std::string &output_dir) {
+                          const std::string &output_dir,
+                          const std::string &cf_root_name = "catalog_test.root",
+                          const bool split_mixed_event_by_phi = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -72,7 +84,7 @@ namespace {
     output << "sparse_object_name = \"sparse\"\n\n";
     output << "[output]\n";
     output << "output_directory = \"" << output_dir << "\"\n";
-    output << "cf_root_name = \"catalog_test.root\"\n";
+    output << "cf_root_name = \"" << cf_root_name << "\"\n";
     output << "fit_root_name = \"catalog_fit.root\"\n";
     output << "fit_summary_name = \"catalog.tsv\"\n";
     output << "log_level = \"error\"\n\n";
@@ -80,6 +92,7 @@ namespace {
     output << "map_pair_phi_to_symmetric_range = true\n";
     output << "write_normalized_se_me_1d_projections = false\n";
     output << "reopen_output_file_per_slice = true\n";
+    output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "model = \"diag\"\n";
@@ -210,7 +223,25 @@ int main() {
   Expect(legacy_entries.size() == entries.size(), "legacy catalog size mismatch");
   Expect(legacy_entries[1].build_uses_symmetric_phi_range,
          "legacy catalog reader should infer mapped build phi metadata");
+  Expect(!legacy_entries[1].split_mixed_event_by_phi, "legacy catalog should default to integrated ME metadata");
   Expect(legacy_entries[3].display_phi_center < 0.0, "legacy catalog should preserve stored display phi values");
+
+  const std::string split_config_path =
+      WriteConfig(temp_dir / "config_split.toml", input_root, temp_dir.string(), "catalog_split.root", true);
+  const ApplicationConfig split_config = LoadApplicationConfig(split_config_path);
+  const BuildCfRunStatistics split_build_stats = RunBuildCf(split_config, logger);
+  Expect(split_build_stats.stored_slices == 4, "split-ME build-cf should keep phi-all + 3 phi slices");
+  Expect(split_build_stats.skipped_zero_mixed_event_slices == 0, "toy split-ME build should not skip ME slices");
+  const auto split_entries = LoadSliceCatalog((temp_dir / "catalog_split.root").string());
+  Expect(split_entries[1].split_mixed_event_by_phi, "catalog should persist split-ME metadata");
+
+  TFile integrated_file((temp_dir / "catalog_test.root").string().c_str(), "READ");
+  TFile split_file((temp_dir / "catalog_split.root").string().c_str(), "READ");
+  auto *integrated_phi_me = dynamic_cast<TH3D *>(integrated_file.Get(entries[1].me_object_path.c_str()));
+  auto *split_phi_me = dynamic_cast<TH3D *>(split_file.Get(split_entries[1].me_object_path.c_str()));
+  Expect(integrated_phi_me != nullptr && split_phi_me != nullptr, "ME comparison histograms missing");
+  Expect(HistogramIntegral(*split_phi_me) < HistogramIntegral(*integrated_phi_me),
+         "split-ME phi denominator should use a narrower phi range than integrated ME");
 
   std::cout << "slice_catalog_roundtrip_test passed\n";
   return 0;

@@ -129,6 +129,17 @@
   - 显式写为 `true` 或 `false` 时：`fit` 会基于 `raw_phi_*` 重新解释切片坐标，
     从而在不重建 CF 文件的情况下切换 `R2_vs_phi` 等 summary 的横轴语义
 
+- `[build].split_mixed_event_by_phi`
+
+  这是 build-cf 阶段的 ME 分母切分开关，默认值为 `false`。
+
+  - `false`：保留原有行为，每个中心度/`mT` 组只投影一个覆盖全部 phi bin
+    的 mixed-event 分母，供 phi 积分切片和逐 phi SE 切片共同使用
+  - `true`：逐 phi SE 切片使用相同 phi bin 的 mixed-event 分母；phi 积分切片
+    仍然使用完整 phi 范围
+  - 该开关不改变 `raw_phi_*` / `display_phi_*` 的坐标映射语义；
+    `map_pair_phi_to_symmetric_range` 只控制展示和 fit summary 的 phi 坐标解释
+
 ## 输出约定
 
 ### build-cf 输出
@@ -143,7 +154,9 @@ CF ROOT 文件中使用显式目录结构，而不是依赖 histogram 名称反�
 
 此外，`SliceCatalog` 现在不仅保存 `raw_phi_*` 与 `display_phi_*`，还会保存
 本次 build 是否使用对称区间映射的文件级 metadata
-`build_uses_symmetric_phi_range`。
+`build_uses_symmetric_phi_range`，以及本次 build 是否让 ME 分母跟随 SE phi
+切片的 `split_mixed_event_by_phi`。旧 catalog 缺少
+`split_mixed_event_by_phi` 时按 `false` 读取。
 
 ### fit 输出
 
@@ -201,8 +214,11 @@ alienv setenv O2Physics/latest-master-o2 -c sh -lc '
 - SliceCatalog / FitCatalog 显式 metadata 设计
 - build-side phi 映射状态持久化到 `SliceCatalog`
 - fit 侧可跟随输入 CF metadata，也可显式覆盖 phi 映射语义
+- build 侧可通过 `build.split_mixed_event_by_phi` 选择保留积分 ME 分母或让
+  ME 分母跟随 SE phi 切片
 - progress mode 配置支持 `true` / `false` / `"auto"`
-- 本地 unit / integration smoke tests
+- 本地 unit / integration smoke tests；`2026-05-18` O2Physics ROOT executor
+  `ctest --output-on-failure` 三项全通过
 - ROOT 调用失败模式诊断文档化
 - `2026-04-19` 非沙箱 O2Physics `ctest` 三项全通过
 
@@ -210,4 +226,6 @@ alienv setenv O2Physics/latest-master-o2 -c sh -lc '
 
 - 用真实实验数据重新做一次与 legacy macro 的数值等价验证
 - 在真实数据回归里同时覆盖“跟随输入映射”和“fit 显式覆盖映射”两种语义
+- 在真实数据回归里同时覆盖
+  `build.split_mixed_event_by_phi = false` 和 `true` 两种 ME 分母语义
 - 继续把沙箱里的 `alienv` 失败视为环境进入问题，除非非沙箱复现出相同症状

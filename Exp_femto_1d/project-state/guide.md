@@ -30,6 +30,10 @@ The project is driven by TOML:
 - optional `[[fit_selection.*]]`
 
 If `fit_selection` is omitted, fit follows the full build bin grid.
+`build.split_mixed_event_by_phi` defaults to `false`, preserving the historical
+one-MinBias-ME-denominator-per-centrality/mT behavior. Set it to `true` when
+mixed-event denominators should be projected with the same event-plane region
+as the same-event slice.
 `build.cf_by_mt_show_markers` defaults to `false`; enable it only when marker
 symbols are useful on `CFByMtCanvas` trend overlays.
 
@@ -62,6 +66,9 @@ Build output:
 - `slices/<slice_id>/ME_raw1d`
 - `slices/<slice_id>/CF1D`
 - `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
+
+`meta/SliceCatalog` includes `split_mixed_event_by_phi`. Legacy catalogs
+without the branch are read as `false`.
 
 Fit output:
 

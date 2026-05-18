@@ -57,9 +57,23 @@ Phi mapping control:
 - if the current config's `[build]` mapping flag disagrees with the input CF metadata,
   fit warns and trusts the input CF file
 
+Mixed-event denominator control:
+
+- `[build].split_mixed_event_by_phi` defaults to `false`
+- `false` preserves the historical behavior: one mixed-event denominator is
+  projected over all phi bins for each centrality/mT group, then reused by the
+  phi-integrated and per-phi SE slices
+- `true` projects the mixed-event denominator with the same phi range as the SE
+  slice; the phi-integrated slice still uses the full phi range
+- this switch is independent of `map_pair_phi_to_symmetric_range`, which only
+  controls stored/displayed phi coordinates for downstream summaries
+
 ## Output Contract
 
-- `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`
+- `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`; the
+  catalog records both `build_uses_symmetric_phi_range` and
+  `split_mixed_event_by_phi`, with older catalogs defaulting the latter to
+  `false`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
   `fits/<slice_id>/...`, `summary/R2_vs_phi/...`, and `fit_summary.tsv`
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-05-18
+
+- Added `[build].split_mixed_event_by_phi` with default `false` to preserve the
+  historical integrated mixed-event denominator per centrality/mT group.
+- Added opt-in per-phi ME projection so each SE phi slice can use a matching
+  mixed-event denominator while the phi-integrated slice still uses the full
+  phi range.
+- Persisted `split_mixed_event_by_phi` in `meta/SliceCatalog`; legacy catalogs
+  without the branch read it as `false`.
+- Added split-mode `skipped_zero_mixed_event_slices` accounting and printed it
+  in the build-cf CLI summary.
+- Extended config and catalog roundtrip tests; O2Physics ROOT executor
+  `ctest --output-on-failure` passed all three registered tests.
+
 ## 2026-04-19
 
 - Synced `project-state/` to the current `3d_cf_from_exp` refactor work rather
