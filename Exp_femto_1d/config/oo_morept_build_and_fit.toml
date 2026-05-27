@@ -23,6 +23,7 @@ norm_low = 0.15
 norm_high = 0.25
 kstar_min = 0.0
 kstar_max = 0.8
+cf_rebin_factor = 1
 reopen_output_file_per_slice = true
 progress = "auto"
 cf_by_mt_show_markers = false

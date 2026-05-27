@@ -34,6 +34,10 @@ If `fit_selection` is omitted, fit follows the full build bin grid.
 one-MinBias-ME-denominator-per-centrality/mT behavior. Set it to `true` when
 mixed-event denominators should be projected with the same event-plane region
 as the same-event slice.
+`build.cf_rebin_factor` defaults to `1`. Values above one merge adjacent k*
+bins in the SE/ME operands used to build `CF1D`; the stored `SE_raw1d` and
+`ME_raw1d` objects remain in the original selected k* binning. The factor must
+evenly divide the selected k* bin count.
 `build.cf_by_mt_show_markers` defaults to `false`; enable it only when marker
 symbols are useful on `CFByMtCanvas` trend overlays.
 
@@ -67,8 +71,8 @@ Build output:
 - `slices/<slice_id>/CF1D`
 - `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
 
-`meta/SliceCatalog` includes `split_mixed_event_by_phi`. Legacy catalogs
-without the branch are read as `false`.
+`meta/SliceCatalog` includes `split_mixed_event_by_phi` and `cf_rebin_factor`.
+Legacy catalogs without these branches are read as `false` and `1`.
 
 Fit output:
 

@@ -223,6 +223,7 @@ namespace exp_femto_1d {
     config.build.norm_high = ReadOptionalDouble(build, "norm_high", config.build.norm_high);
     config.build.kstar_min = ReadOptionalDouble(build, "kstar_min", config.build.kstar_min);
     config.build.kstar_max = ReadOptionalDouble(build, "kstar_max", config.build.kstar_max);
+    config.build.cf_rebin_factor = ReadOptionalUnsigned(build, "cf_rebin_factor", config.build.cf_rebin_factor);
     config.build.reopen_output_file_per_slice =
         ReadOptionalBool(build, "reopen_output_file_per_slice", config.build.reopen_output_file_per_slice);
     config.build.cf_by_mt_show_markers =
@@ -294,6 +295,9 @@ namespace exp_femto_1d {
 
     ValidateFiniteIncreasing(config.build.norm_low, config.build.norm_high, "build normalization range");
     ValidateFiniteIncreasing(config.build.kstar_min, config.build.kstar_max, "build k* range");
+    if (config.build.cf_rebin_factor == 0U) {
+      throw ConfigError("build.cf_rebin_factor must be a positive integer.");
+    }
     ValidateFinitePositive(config.fit.fit_kstar_max, "fit.fit_kstar_max");
     ValidateFiniteIncreasing(config.fit.baseline_p0_min, config.fit.baseline_p0_max, "fit baseline_p0 range");
     ValidateFiniteIncreasing(config.fit.baseline_p1_min, config.fit.baseline_p1_max, "fit baseline_p1 range");

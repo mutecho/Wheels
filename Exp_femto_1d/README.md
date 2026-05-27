@@ -123,6 +123,9 @@ Key semantics:
   MinBias mixed-event denominator per centrality/mT group, while `true`
   projects mixed-event denominators with the same event-plane region as each
   same-event slice
+- `build.cf_rebin_factor` defaults to `1`; values above one merge that many
+  adjacent k* bins in the SE/ME operands used to build `CF1D`, while
+  `SE_raw1d` and `ME_raw1d` keep the original selected k* binning
 - `build.cf_by_mt_show_markers` defaults to `false`; set it to `true` to draw
   markers on `CFByMtCanvas` trend lines
 - build/fit progress accepts `true`, `false`, `"auto"`, `"enabled"`, or `"disabled"`
@@ -143,8 +146,9 @@ See:
 - `slices/<slice_id>/CF1D`
 - `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
 
-`meta/SliceCatalog` records `split_mixed_event_by_phi` for every slice. Older
-CF files without this branch are read as `false`.
+`meta/SliceCatalog` records `split_mixed_event_by_phi` and `cf_rebin_factor`
+for every slice. Older CF files without these branches are read as `false` and
+`1`, respectively.
 
 `fit` writes:
 

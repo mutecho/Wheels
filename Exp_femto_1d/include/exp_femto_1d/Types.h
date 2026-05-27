@@ -62,6 +62,7 @@ namespace exp_femto_1d {
     double norm_high = 0.8;
     double kstar_min = 0.0;
     double kstar_max = 0.8;
+    unsigned cf_rebin_factor = 1;
     bool reopen_output_file_per_slice = true;
     bool cf_by_mt_show_markers = false;
     bool split_mixed_event_by_phi = false;
@@ -138,6 +139,7 @@ namespace exp_femto_1d {
     double norm_high = 0.0;
     double kstar_min = 0.0;
     double kstar_max = 0.0;
+    int cf_rebin_factor = 1;
   };
 
   struct PiPiFitResult {

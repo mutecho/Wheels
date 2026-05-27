@@ -21,6 +21,9 @@
   projects mixed events in the same event-plane region as each SE slice
 - persisted the ME-splitting choice in `meta/SliceCatalog` and passed local
   build plus O2Physics ROOT executor `ctest --output-on-failure`
+- added `build.cf_rebin_factor` on `2026-05-27`; default `1` preserves
+  no-rebin behavior, while larger values build `CF1D` from rebinned SE/ME
+  operands and leave `SE_raw1d`/`ME_raw1d` raw
 
 ## Current Risk
 

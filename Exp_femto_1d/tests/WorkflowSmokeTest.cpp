@@ -71,7 +71,8 @@ namespace {
                           const std::string &cf_root_name = "workflow_cf.root",
                           const std::string &fit_root_name = "workflow_fit.root",
                           const std::string &fit_summary_name = "workflow.tsv",
-                          const bool split_mixed_event_by_phi = false) {
+                          const bool split_mixed_event_by_phi = false,
+                          const unsigned cf_rebin_factor = 2U) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -90,6 +91,7 @@ namespace {
     output << "norm_high = 0.8\n";
     output << "kstar_min = 0.0\n";
     output << "kstar_max = 0.8\n";
+    output << "cf_rebin_factor = " << cf_rebin_factor << "\n";
     output << "reopen_output_file_per_slice = false\n";
     output << "cf_by_mt_show_markers = true\n";
     output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
@@ -125,7 +127,8 @@ int main() {
                                                     "workflow_cf_split.root",
                                                     "workflow_fit_split.root",
                                                     "workflow_split.tsv",
-                                                    true);
+                                                    true,
+                                                    2U);
 
   const ApplicationConfig config = LoadApplicationConfig(config_path);
   const Logger logger(LogLevel::kError);
@@ -148,6 +151,9 @@ int main() {
   Expect(se_histogram != nullptr, "SE_raw1d missing");
   Expect(me_histogram != nullptr, "ME_raw1d missing");
   Expect(cf_histogram != nullptr, "CF1D missing");
+  Expect(entries[0].cf_rebin_factor == 2, "catalog should record CF rebin factor");
+  Expect(cf_histogram->GetNbinsX() * 2 == se_histogram->GetNbinsX(), "CF1D should use rebinned SE/ME binning");
+  Expect(cf_histogram->GetNbinsX() * 2 == me_histogram->GetNbinsX(), "CF1D should be rebinned relative to raw ME");
   Expect(cf_histogram->Integral() > 0.0, "CF1D should not be empty");
   Expect(min_bias_canvas != nullptr, "MinBias CF-by-mT canvas missing");
   Expect(in_plane_canvas != nullptr, "InPlane CF-by-mT canvas missing");

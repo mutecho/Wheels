@@ -244,6 +244,40 @@ namespace exp_femto_1d {
       return histogram;
     }
 
+    // Create the SE/ME operands used in the CF ratio. The stored raw histograms
+    // keep the configured k* window, while CF1D can intentionally use a coarser
+    // binning to stabilize the same-bin SE/ME division.
+    std::unique_ptr<TH1D> BuildCfInputHistogram(const TH1D &source,
+                                                const std::string &name,
+                                                const unsigned rebin_factor) {
+      auto histogram = std::unique_ptr<TH1D>(static_cast<TH1D *>(source.Clone((name + "_working").c_str())));
+      histogram->SetDirectory(nullptr);
+      histogram->Sumw2();
+      histogram->SetName(name.c_str());
+
+      if (rebin_factor <= 1U) {
+        return histogram;
+      }
+
+      const int factor = static_cast<int>(rebin_factor);
+      if (histogram->GetNbinsX() % factor != 0) {
+        std::ostringstream message;
+        message << "build.cf_rebin_factor=" << rebin_factor << " does not evenly divide the selected k* bin count "
+                << histogram->GetNbinsX() << ".";
+        throw std::runtime_error(message.str());
+      }
+
+      auto rebinned = std::unique_ptr<TH1D>(static_cast<TH1D *>(histogram->Rebin(factor, name.c_str())));
+      if (rebinned == nullptr) {
+        throw std::runtime_error("Failed to rebin histogram for CF construction: " + name);
+      }
+      rebinned->SetDirectory(nullptr);
+      rebinned->Sumw2();
+      rebinned->GetXaxis()->SetTitle(source.GetXaxis()->GetTitle());
+      rebinned->GetYaxis()->SetTitle(source.GetYaxis()->GetTitle());
+      return rebinned;
+    }
+
     // ROOT auto-registers THnSparse projections in the current directory; detach
     // immediately so repeated internal projections do not replace same-named TH1s.
     std::unique_ptr<TH1D> ProjectKStarDetached(THnSparseF &sparse) {
@@ -307,12 +341,15 @@ namespace exp_femto_1d {
       auto me_window = BuildWindowedHistogram(
           me_projection, "ME_raw1d", "ME_raw1d; k* (GeV/c); Counts", build_config.kstar_min, build_config.kstar_max);
 
+      auto se_for_cf = BuildCfInputHistogram(*se_window, "SE_for_cf", build_config.cf_rebin_factor);
+      auto me_for_cf = BuildCfInputHistogram(*me_window, "ME_for_cf", build_config.cf_rebin_factor);
+
       const double normalization_factor = me_norm / se_norm;
-      auto me_normalized = std::unique_ptr<TH1D>(static_cast<TH1D *>(me_window->Clone("ME_normalized")));
+      auto me_normalized = std::unique_ptr<TH1D>(static_cast<TH1D *>(me_for_cf->Clone("ME_normalized")));
       me_normalized->SetDirectory(nullptr);
       me_normalized->Scale(1.0 / normalization_factor);
 
-      auto cf_histogram = std::unique_ptr<TH1D>(static_cast<TH1D *>(se_window->Clone("CF1D")));
+      auto cf_histogram = std::unique_ptr<TH1D>(static_cast<TH1D *>(se_for_cf->Clone("CF1D")));
       cf_histogram->SetDirectory(nullptr);
       cf_histogram->SetTitle("CF1D; k* (GeV/c); C(k*)");
       cf_histogram->Divide(me_normalized.get());
@@ -538,6 +575,7 @@ namespace exp_femto_1d {
       double norm_high = 0.0;
       double kstar_min = 0.0;
       double kstar_max = 0.0;
+      int cf_rebin_factor = 1;
 
       tree->Branch("slice_id", &slice_id);
       tree->Branch("group_id", &group_id);
@@ -564,6 +602,7 @@ namespace exp_femto_1d {
       tree->Branch("norm_high", &norm_high);
       tree->Branch("kstar_min", &kstar_min);
       tree->Branch("kstar_max", &kstar_max);
+      tree->Branch("cf_rebin_factor", &cf_rebin_factor);
 
       for (const SliceCatalogEntry &entry : entries) {
         slice_id = entry.slice_id;
@@ -591,6 +630,7 @@ namespace exp_femto_1d {
         norm_high = entry.norm_high;
         kstar_min = entry.kstar_min;
         kstar_max = entry.kstar_max;
+        cf_rebin_factor = entry.cf_rebin_factor;
         tree->Fill();
       }
 
@@ -628,6 +668,10 @@ namespace exp_femto_1d {
       TTreeReaderValue<double> norm_high(reader, "norm_high");
       TTreeReaderValue<double> kstar_min(reader, "kstar_min");
       TTreeReaderValue<double> kstar_max(reader, "kstar_max");
+      std::unique_ptr<TTreeReaderValue<int>> cf_rebin_factor;
+      if (tree.GetBranch("cf_rebin_factor") != nullptr) {
+        cf_rebin_factor = std::make_unique<TTreeReaderValue<int>>(reader, "cf_rebin_factor");
+      }
 
       while (reader.Next()) {
         SliceCatalogEntry entry;
@@ -657,6 +701,7 @@ namespace exp_femto_1d {
         entry.norm_high = *norm_high;
         entry.kstar_min = *kstar_min;
         entry.kstar_max = *kstar_max;
+        entry.cf_rebin_factor = cf_rebin_factor ? **cf_rebin_factor : 1;
         entries.push_back(std::move(entry));
       }
       return entries;
@@ -1093,6 +1138,7 @@ namespace exp_femto_1d {
           entry.norm_high = config.build.norm_high;
           entry.kstar_min = config.build.kstar_min;
           entry.kstar_max = config.build.kstar_max;
+          entry.cf_rebin_factor = static_cast<int>(config.build.cf_rebin_factor);
 
           if (config.build.reopen_output_file_per_slice) {
             auto output_file = OpenRootFile(output_root_path, "UPDATE");

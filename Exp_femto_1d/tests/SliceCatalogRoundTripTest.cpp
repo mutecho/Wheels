@@ -120,6 +120,7 @@ int main() {
   Expect(entries.front().slice_directory.rfind("slices/", 0) == 0, "slice directory should live under slices/");
   Expect(entries.front().norm_low == 0.5, "catalog should persist norm_low");
   Expect(entries.front().kstar_max == 0.8, "catalog should persist kstar_max");
+  Expect(entries.front().cf_rebin_factor == 1, "catalog should default the CF rebin factor to one");
   Expect(entries[0].region_name == "MinBias", "first region should be MinBias");
   Expect(entries[1].has_second_interval, "InPlane should keep the split EP interval metadata");
   Expect(entries[2].region_name == "OutOfPlane", "third region should be OutOfPlane");

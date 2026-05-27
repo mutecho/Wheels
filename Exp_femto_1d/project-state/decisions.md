@@ -52,3 +52,10 @@
   centrality/mT group; preserving that as `build.split_mixed_event_by_phi =
   false` keeps backward compatibility while allowing an explicit
   event-plane-following denominator mode for differential checks
+
+## DEC-010 Rebin CF operands without changing raw SE/ME outputs
+
+- status: accepted
+- reason: `build.cf_rebin_factor` lets `CF1D` be built from coarser same-event
+  and mixed-event operands for statistical stability, while `SE_raw1d` and
+  `ME_raw1d` remain raw-window histograms for legacy comparisons and diagnosis

@@ -47,6 +47,7 @@ norm_low = 0.5
 norm_high = 0.8
 kstar_min = 0.0
 kstar_max = 0.8
+cf_rebin_factor = 4
 reopen_output_file_per_slice = true
 cf_by_mt_show_markers = true
 split_mixed_event_by_phi = true
@@ -71,6 +72,7 @@ max = 0.4
   Expect(config.output.log_level == LogLevel::kDebug, "log level mismatch");
   Expect(config.output.cf_root_name == "cf.root", "root extension normalization failed");
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
+  Expect(config.build.cf_rebin_factor == 4U, "CF rebin factor should parse");
   Expect(config.build.cf_by_mt_show_markers, "CF-by-mT marker switch should parse");
   Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
@@ -108,6 +110,7 @@ max = 0.4
       LoadApplicationConfig(WriteFile(temp_dir / "progress_alias.toml", progress_alias_config));
   Expect(!progress_alias.build.cf_by_mt_show_markers, "CF-by-mT markers should be disabled by default");
   Expect(!progress_alias.build.split_mixed_event_by_phi, "ME phi split should be disabled by default");
+  Expect(progress_alias.build.cf_rebin_factor == 1U, "CF rebin factor should default to one");
   Expect(progress_alias.build.progress == ProgressMode::kEnabled, "enabled alias should parse");
   Expect(progress_alias.fit.progress == ProgressMode::kDisabled, "disabled alias should parse");
 
@@ -172,6 +175,39 @@ max = 0.4
     saw_invalid_fit_limit = true;
   }
   Expect(saw_invalid_fit_limit, "negative fit_kstar_max should fail");
+
+  const std::string invalid_cf_rebin_factor_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+cf_rebin_factor = 0
+
+[fit]
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+
+  bool saw_invalid_cf_rebin_factor = false;
+  try {
+    (void)LoadApplicationConfig(WriteFile(temp_dir / "invalid_cf_rebin_factor.toml", invalid_cf_rebin_factor_config));
+  } catch (const ConfigError &) {
+    saw_invalid_cf_rebin_factor = true;
+  }
+  Expect(saw_invalid_cf_rebin_factor, "zero cf_rebin_factor should fail");
 
   const std::string invalid_parameter_limits = R"toml(
 [input]

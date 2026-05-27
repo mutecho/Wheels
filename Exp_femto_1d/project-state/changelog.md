@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-05-27
+
+- added `[build].cf_rebin_factor` with default `1`; values above one merge
+  adjacent k* bins in the SE/ME operands used for `CF1D`
+- kept `SE_raw1d` and `ME_raw1d` in the original selected k* binning and
+  persisted `cf_rebin_factor` in `meta/SliceCatalog` with legacy catalogs
+  defaulting to `1`
+- extended config/catalog/workflow smoke tests; local build, guarded `ctest`,
+  and O2Physics ROOT executor `ctest --output-on-failure` passed all 4
+  registered tests
+
 ## 2026-05-18
 
 - added `[build].split_mixed_event_by_phi` with default `false` to preserve the
