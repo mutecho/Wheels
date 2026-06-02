@@ -10,6 +10,12 @@
 - extended config/catalog/workflow smoke tests; local build, guarded `ctest`,
   and O2Physics ROOT executor `ctest --output-on-failure` passed all 4
   registered tests
+- guarded ROOT histogram error-buffer initialization so projections, clones,
+  and rebinned CF operands no longer emit duplicate `TH1D::Sumw2` warnings
+  during build-cf
+- re-ran local build, O2Physics ROOT executor `ctest --output-on-failure`, and
+  direct `workflow_smoke_test`; all passed and the direct smoke output had no
+  `TH1D::Sumw2` warnings
 
 ## 2026-05-18
 

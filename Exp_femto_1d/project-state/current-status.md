@@ -39,6 +39,10 @@ Reason:
   rebin factor; `CF1D` is built from rebinned SE/ME operands while `SE_raw1d`
   and `ME_raw1d` remain raw-window outputs; O2Physics ROOT executor
   `ctest --output-on-failure` passed all 4 registered tests
+- `2026-05-27` duplicate ROOT `TH1D::Sumw2` warnings were removed from the
+  build-cf histogram construction path by guarding error-buffer initialization
+  after projections, clones, and rebinning; local build, O2Physics executor
+  `ctest --output-on-failure`, and direct `workflow_smoke_test` passed
 - real-data equivalence to the legacy macro has not yet been run
 
 ## Active Constraints

@@ -3,15 +3,15 @@
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_t4_fulltof.root"
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_23zzh_pass5_small.root"
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_morept.root"
-# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_small_cprtest.root"
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_MC_24g3_medium.root"
-# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_small_fulltof.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_MC_1d_24g3_medium_fulltof.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass4_fulltof.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_MCgen_24g3_medium.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass4_fulltof_morept.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_MC_1d_24g3_mediumfix_fulltof.root"
 # input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb/AnalysisResults_1d_23zzh_pass5_morept_ooref.root"
-# task_name = "femto-dream-pair-task-track-track"
+task_name = "femto-dream-pair-task-track-track"
 # task_name = "femto-dream-pair-task-track-track_morecpr"
 # task_name = "femto-dream-pair-task-track-track_nocpr"
-# task_name = "femto-dream-pair-task-track-track_normaltof"
-task_name = "femto-dream-pair-task-track-track"
 same_event_subtask = "SameEvent_EP"
 mixed_event_subtask = "MixedEvent_EP"
 sparse_object_name = "relPairkstarmTMultMultPercentileQn"
@@ -22,9 +22,10 @@ output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_t4_fulltof.root"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_morept_nocpr.root"
 # cf_root_name = "EP_dependence_CF_23zzh_pass5_small_cprtest_default.root"
-# cf_root_name = "EP_dependence_CF_23zzh_pass5_small_fulltof.root"
-cf_root_name = "EP_dependence_CF_MC_24g3_fulltof.root"
-# cf_root_name = "EP_dependence_CF_MC_24g3_normaltof.root"
+# cf_root_name = "EP_dependence_CF_MC_1d_23zzh_pass4_fulltof_morept.root"
+# cf_root_name = "EP_dependence_CF_1d_23zzh_pass4_fulltof.root"
+# cf_root_name = "EP_dependence_CF_1d_23zzh_pass4_small_fulltof_morept.root"
+cf_root_name = "EP_dependence_CF_1d_MCgen_24g3_medium_fulltof.root"
 fit_root_name = "xxxxfit_output.root"
 fit_summary_name = "xxxxfit_summary.tsv"
 log_level = "info"
@@ -54,6 +55,10 @@ min = 10
 max = 30
 
 [[bins.centrality]]
+min = 0
+max = 30
+
+[[bins.centrality]]
 min = 30
 max = 50
 
@@ -73,46 +78,41 @@ max = 100
 # min = 0.3
 # max = 0.4
 
-# [[bins.mt]]
-# min = 0.4
-# max = 0.5
+[[bins.mt]]
+min = 0.4
+max = 0.5
 
-# [[bins.mt]]
-# min = 0.5
-# max = 0.6
+[[bins.mt]]
+min = 0.5
+max = 0.6
 
-# [[bins.mt]]
-# min = 0.6
-# max = 0.7
+[[bins.mt]]
+min = 0.6
+max = 0.7
 
-# [[bins.mt]]
-# min = 0.7
-# max = 0.9
+[[bins.mt]]
+min = 0.7
+max = 0.9
 
-# [[bins.mt]]
-# min = 0.9
-# max = 1.1
+[[bins.mt]]
+min = 0.9
+max = 1.1
 
-# [[bins.mt]]
-# min = 0.4
-# max = 0.6
-
-# [[bins.mt]]
-# min = 0.6
-# max = 0.9
-
-# [[bins.mt]]
-# min = 0.6
-# max = 1.5
+[[bins.mt]]
+min = 1.1
+max = 1.5
 
 [[bins.mt]]
 min = 0.4
+max = 0.6
+
+[[bins.mt]]
+min = 0.6
 max = 0.9
 
-
-# [[bins.mt]]
-# min = 1.1
-# max = 1.5
+[[bins.mt]]
+min = 0.6
+max = 1.5
 
 # [[bins.mt]]
 # min = 1.5
@@ -135,25 +135,25 @@ max = 30
 # min = 0.3
 # max = 0.4
 
-# [[fit_selection.mt]]
-# min = 0.4
-# max = 0.5
+[[fit_selection.mt]]
+min = 0.4
+max = 0.5
 
-# [[fit_selection.mt]]
-# min = 0.5
-# max = 0.6
+[[fit_selection.mt]]
+min = 0.5
+max = 0.6
 
-# [[fit_selection.mt]]
-# min = 0.6
-# max = 0.7
+[[fit_selection.mt]]
+min = 0.6
+max = 0.7
 
-# [[fit_selection.mt]]
-# min = 0.7
-# max = 0.9
+[[fit_selection.mt]]
+min = 0.7
+max = 0.9
 
-# [[fit_selection.mt]]
-# min = 0.9
-# max = 1.1
+[[fit_selection.mt]]
+min = 0.9
+max = 1.1
 
 # [[fit_selection.mt]]
 # min = 1.1

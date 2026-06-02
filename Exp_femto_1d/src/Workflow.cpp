@@ -84,6 +84,13 @@ namespace exp_femto_1d {
       return FormatDouble(stable_value, precision);
     }
 
+    // Initialize ROOT error storage only when a histogram does not already carry it.
+    void EnsureSumw2(TH1 &histogram) {
+      if (histogram.GetSumw2N() == 0) {
+        histogram.Sumw2();
+      }
+    }
+
     std::string BuildSparseObjectPath(const InputConfig &input, const std::string &subtask) {
       return input.task_name + "/" + subtask + "/" + input.sparse_object_name;
     }
@@ -233,7 +240,7 @@ namespace exp_femto_1d {
 
       auto histogram = std::make_unique<TH1D>(name.c_str(), title.c_str(), last_bin - first_bin + 1, edges.data());
       histogram->SetDirectory(nullptr);
-      histogram->Sumw2();
+      EnsureSumw2(*histogram);
       histogram->GetXaxis()->SetTitle(source.GetXaxis()->GetTitle());
       histogram->GetYaxis()->SetTitle(source.GetYaxis()->GetTitle());
       for (int source_bin = first_bin; source_bin <= last_bin; ++source_bin) {
@@ -252,7 +259,7 @@ namespace exp_femto_1d {
                                                 const unsigned rebin_factor) {
       auto histogram = std::unique_ptr<TH1D>(static_cast<TH1D *>(source.Clone((name + "_working").c_str())));
       histogram->SetDirectory(nullptr);
-      histogram->Sumw2();
+      EnsureSumw2(*histogram);
       histogram->SetName(name.c_str());
 
       if (rebin_factor <= 1U) {
@@ -272,7 +279,7 @@ namespace exp_femto_1d {
         throw std::runtime_error("Failed to rebin histogram for CF construction: " + name);
       }
       rebinned->SetDirectory(nullptr);
-      rebinned->Sumw2();
+      EnsureSumw2(*rebinned);
       rebinned->GetXaxis()->SetTitle(source.GetXaxis()->GetTitle());
       rebinned->GetYaxis()->SetTitle(source.GetYaxis()->GetTitle());
       return rebinned;
@@ -320,7 +327,7 @@ namespace exp_femto_1d {
       ResetAxisSelection(*axis_mt);
       ResetAxisSelection(*axis_cent);
 
-      merged_projection->Sumw2();
+      EnsureSumw2(*merged_projection);
       merged_projection->GetXaxis()->SetTitle("k* (GeV/c)");
       merged_projection->GetYaxis()->SetTitle("Counts");
       return merged_projection;

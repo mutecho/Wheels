@@ -86,6 +86,13 @@
   `ctest --output-on-failure` returned `PRIMARY_OK` and passed all 4 registered
   tests after adding CF rebin config parsing, `SliceCatalog` metadata, and
   `CF1D` binning smoke coverage
+- `2026-05-27` `cmake --build Exp_femto_1d/build` passed after replacing
+  unconditional `Sumw2()` calls with guarded error-buffer initialization
+- `2026-05-27` O2Physics ROOT executor
+  `ctest --output-on-failure` returned `PRIMARY_OK` and passed all 4 registered
+  tests after the duplicate-`Sumw2` warning fix
+- `2026-05-27` O2Physics ROOT executor direct `./bin/workflow_smoke_test`
+  returned `PRIMARY_OK`; command output contained no `TH1D::Sumw2` warnings
 - real-data regression against the legacy macro is still pending
 
 ## Required Follow-up Validation

@@ -24,6 +24,9 @@
 - added `build.cf_rebin_factor` on `2026-05-27`; default `1` preserves
   no-rebin behavior, while larger values build `CF1D` from rebinned SE/ME
   operands and leave `SE_raw1d`/`ME_raw1d` raw
+- removed duplicate ROOT `TH1D::Sumw2` warnings in build-cf histogram
+  preparation by guarding error-buffer initialization after projection, clone,
+  and rebin operations
 
 ## Current Risk
 
