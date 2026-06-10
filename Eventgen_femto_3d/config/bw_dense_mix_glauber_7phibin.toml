@@ -1,12 +1,15 @@
 [input]
-schema = "legacy_vector_tree"
-input_root = "/path/to/legacy_input.root"
+schema = "blastwave_flat_trees"
+# input_root = "/Users/allenzhou/Research_software/Blast_wave/res/PbPb_b1_dense_mix_glauber.root"
+input_root = "/Users/allenzhou/Research_software/Blast_wave/res/PbPb_b3_dense_mix_glauber.root"
 
-[input.legacy]
-tree_name = "events"
+[input.blastwave]
+events_tree = "events"
+particles_tree = "particles"
+event_id_branch = "event_id"
 centrality_branch = "centrality"
-event_plane_branch = "event_plane_psi"
-pdg_branch = "pdg"
+event_plane_branch = "psi2"
+pid_branch = "pid"
 px_branch = "px"
 py_branch = "py"
 pz_branch = "pz"
@@ -17,19 +20,20 @@ z_branch = "z"
 t_branch = "t"
 
 [output]
-output_root = "/path/to/legacy_output.root"
+# output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/PbPb_b1_dense_mix_glauber_7phibin.root"
+output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/PbPb_b3_dense_mix_glauber_7phibin.root"
 top_directory_name = "Femto3D"
 r2_summary_directory_name = "R2Summary"
 
 [event_plane]
 enabled = true
 harmonic_order = 2
-use_internal_reconstruction = true
-fallback_to_input_branch = false
+use_internal_reconstruction = false
+fallback_to_input_branch = true
 eta_min = -2.5
 eta_max = -0.5
 weight_mode = "pt"
-allowed_abs_pdg = [211, 321, 2212]
+allowed_abs_pdg = [211]
 min_candidates = 2
 min_q_magnitude = 1.0e-6
 
@@ -38,12 +42,12 @@ target_pdg = 211
 femto_eta_min = -0.5
 femto_eta_max = 0.5
 femto_pt_min = 0.2
-femto_pt_max = 1.0
+femto_pt_max = 1.5
 femto_mt_reference_mass = 0.13957039
 femto_mt_mass_tolerance = 1.0e-3
 
 [histograms]
-warn_on_overflow = true
+warn_on_overflow = false
 
 [histograms.rho_out_axis]
 title = "#rho_{out}"
@@ -81,13 +85,8 @@ accept_hbt_central_value_only_for_summary = true
 
 [[bins.centrality]]
 min = 0.0
-max = 10.0
-label = "cent_0.00-10.00"
-
-[[bins.centrality]]
-min = 10.0
-max = 30.0
-label = "cent_10.00-30.00"
+max = 100.0
+label = "cent_0.00-100.00"
 
 [[bins.mt]]
 min = 0.2
@@ -100,21 +99,36 @@ max = 0.6
 label = "femto_mt_0.40-0.60"
 
 [[bins.phi]]
-min = -1.57079632679
-max = -0.78539816339
-label = "phi_-1.57--0.79"
+min = -1.570796
+max = -1.121997
+label = "phi_-1.57--1.12"
 
 [[bins.phi]]
-min = -0.78539816339
-max = 0.0
-label = "phi_-0.79-0.00"
+min = -1.121997
+max = -0.673198
+label = "phi_-1.12--0.67"
 
 [[bins.phi]]
-min = 0.0
-max = 0.78539816339
-label = "phi_0.00-0.79"
+min = -0.673198
+max = -0.224399
+label = "phi_-0.67--0.22"
 
 [[bins.phi]]
-min = 0.78539816339
-max = 1.57079632679
-label = "phi_0.79-1.57"
+min = -0.224399
+max = 0.224399
+label = "phi_-0.22-0.22"
+
+[[bins.phi]]
+min = 0.224399
+max = 0.673198
+label = "phi_0.22-0.67"
+
+[[bins.phi]]
+min = 0.673198
+max = 1.121997
+label = "phi_0.67-1.12"
+
+[[bins.phi]]
+min = 1.121997
+max = 1.570796
+label = "phi_1.12-1.57"

@@ -72,6 +72,8 @@ max = 20.0
 bin_width = 0.5
 
 [projection_fit]
+alpha_min = 0.2
+alpha_max = 2.0
 use_adaptive_integration = false
 accept_forced_posdef_covariance_as_valid = false
 fail_alpha_result_when_error_invalid = false

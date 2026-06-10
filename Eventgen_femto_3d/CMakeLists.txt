@@ -12,6 +12,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 set(APP_BIN_DIR  ${PROJECT_SOURCE_DIR}/bin)
 set(TEST_BIN_DIR ${PROJECT_SOURCE_DIR}/bin/tests)
 
+find_package(Threads REQUIRED)
 find_package(ROOT REQUIRED COMPONENTS Graf Hist MathCore Tree TreePlayer RIO Minuit2)
 find_package(tomlplusplus CONFIG REQUIRED
   HINTS
@@ -25,6 +26,7 @@ add_library(eventgen_femto_3d_core
   src/Histogramming.cpp
   src/InputReader.cpp
   src/ProjectionFit.cpp
+  src/ProgressReporter.cpp
   src/Source_extraction.cpp
   src/Workflow.cpp
 )
@@ -44,6 +46,7 @@ target_link_libraries(eventgen_femto_3d_core
     ROOT::Tree
     ROOT::TreePlayer
     ROOT::RIO
+    Threads::Threads
     tomlplusplus::tomlplusplus
 )
 

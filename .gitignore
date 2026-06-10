@@ -11,6 +11,7 @@ build/
 .cache/
 cmake-build-*/
 bin/
+res/
 
 # CMake / CTest generated files
 CMakeCache.txt

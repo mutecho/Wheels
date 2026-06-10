@@ -2,6 +2,7 @@
 #include <iostream>
 
 #include "femto3d/Config.h"
+#include "femto3d/ProgressReporter.h"
 #include "femto3d/Workflow.h"
 
 int main(int argc, char **argv) {
@@ -12,7 +13,9 @@ int main(int argc, char **argv) {
     ApplicationConfig config = LoadApplicationConfig(cli_options.config_path);
     ApplyCliOverrides(cli_options, config);
 
-    const AnalysisStatistics statistics = RunAnalysis(config);
+    ProgressReporter progress_reporter(cli_options.progress_mode);
+    const AnalysisStatistics statistics = RunAnalysis(config, &progress_reporter);
+    progress_reporter.Finish();
     std::cout << "Analysis completed.\n"
               << "  Config file: " << cli_options.config_path << "\n"
               << "  Input file: " << config.input_root_path << "\n"

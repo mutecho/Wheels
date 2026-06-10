@@ -314,6 +314,14 @@ namespace femto3d {
         options.input_schema_override = ParseInputSchema(argv[++index]);
         continue;
       }
+      if (token == "--progress") {
+        options.progress_mode = ProgressMode::kEnabled;
+        continue;
+      }
+      if (token == "--no-progress") {
+        options.progress_mode = ProgressMode::kDisabled;
+        continue;
+      }
       throw std::runtime_error("Unknown argument: " + token);
     }
 
@@ -328,7 +336,8 @@ namespace femto3d {
     stream << "Usage:\n"
            << "  eventgen_femto_3d --config <file.toml> "
               "[--input-root <path>] [--output-root <path>] "
-              "[--input-schema legacy_vector_tree|blastwave_flat_trees]\n";
+              "[--input-schema legacy_vector_tree|blastwave_flat_trees] "
+              "[--progress|--no-progress]\n";
   }
 
   ApplicationConfig LoadApplicationConfig(const std::string &path) {
@@ -418,6 +427,10 @@ namespace femto3d {
     }
 
     if (const toml::table *projection_fit = root["projection_fit"].as_table(); projection_fit != nullptr) {
+      config.analysis.projection_fit.alpha_min =
+          ReadOptionalDouble(*projection_fit, "alpha_min", config.analysis.projection_fit.alpha_min);
+      config.analysis.projection_fit.alpha_max =
+          ReadOptionalDouble(*projection_fit, "alpha_max", config.analysis.projection_fit.alpha_max);
       config.analysis.projection_fit.use_adaptive_integration = ReadOptionalBool(
           *projection_fit, "use_adaptive_integration", config.analysis.projection_fit.use_adaptive_integration);
       config.analysis.projection_fit.accept_forced_posdef_covariance_as_valid =
@@ -498,6 +511,12 @@ namespace femto3d {
     ValidateAxis("histograms.rho_side_axis", config.analysis.histograms.rho_side_axis);
     ValidateAxis("histograms.rho_long_axis", config.analysis.histograms.rho_long_axis);
     ValidateAxis("histograms.projection_axis", config.analysis.histograms.projection_axis);
+    if (!std::isfinite(config.analysis.projection_fit.alpha_min)
+        || !std::isfinite(config.analysis.projection_fit.alpha_max)
+        || config.analysis.projection_fit.alpha_min <= 0.0
+        || config.analysis.projection_fit.alpha_max <= config.analysis.projection_fit.alpha_min) {
+      throw ConfigError("projection_fit alpha bounds must satisfy 0 < alpha_min < alpha_max.");
+    }
     ValidateRangeCollection("bins.centrality", config.analysis.centrality_bins);
     ValidateRangeCollection("bins.mt", config.analysis.mt_bins);
     ValidateRangeCollection("bins.phi", config.analysis.phi_bins);

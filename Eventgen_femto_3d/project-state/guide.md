@@ -51,7 +51,7 @@
     - pair building
     - 源分布填充
     - projection fit
-    - 输出 ROOT 目录与统计树
+    - 输出 ROOT 目录、统计树、`R2Summary` 与 `epsf_vs_mt` 汇总图
 
 - 物理与数值子模块
   - [EventPlane.cpp](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/src/EventPlane.cpp)
@@ -61,10 +61,14 @@
 
 - 入口层
   - [main.cpp](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/src/main.cpp)
-  - [run_eventgen_femto_3d.sh](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/run_eventgen_femto_3d.sh)
+  - [run_eventgen_femto_3d.sh](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_eventgen_femto_3d.sh)
+  - [run_dense_mix_glauber_7phibin.sh](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_7phibin.sh)
+  - [run_dense_mix_glauber_15phibin.sh](/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_15phibin.sh)
   - `main` 只做 CLI glue。
+  - `ProgressReporter` 负责 CLI 进度条，分析流程只通过 `AnalysisProgressSink` 上报完成事件数。
   - CMake 当前把主程序输出到 `bin/eventgen_femto_3d`。
   - shell wrapper 负责在 O2/ROOT 环境下透传参数运行 `bin/eventgen_femto_3d`。
+  - dense-mix Glauber 一键脚本负责固定 config/input/output 路径并连续运行 b1、b3 与 b8 分析。
 
 - 测试层
   - 纯逻辑/语义测试：
@@ -109,17 +113,34 @@ cmake --build /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/bui
 eventgen_femto_3d --config <file.toml> \
   [--input-root <path>] \
   [--output-root <path>] \
-  [--input-schema legacy_vector_tree|blastwave_flat_trees]
+  [--input-schema legacy_vector_tree|blastwave_flat_trees] \
+  [--progress|--no-progress]
 ```
+
+进度条默认是 `auto` 模式：stderr 是 TTY 时显示。批处理日志中可用 `--no-progress` 关闭；需要强制显示时可用 `--progress`。
 
 如果需要在本机 O2/ROOT 环境下直接运行，可使用 wrapper：
 
 ```bash
-/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/run_eventgen_femto_3d.sh \
+/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_eventgen_femto_3d.sh \
   --config /path/to/config.toml
 ```
 
 该 wrapper 当前会进入 `alienv setenv O2Physics/latest-master-o2`，然后调用 `bin/eventgen_femto_3d`。
+
+dense-mix Glauber 分析可用一键脚本运行；config、b1/b3/b8 输入 ROOT 与输出 ROOT 路径均在脚本内部固定：
+
+```bash
+/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_7phibin.sh
+
+/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_15phibin.sh
+```
+
+15-phi-bin 脚本使用的配置文件名当前包含空格：
+
+```bash
+/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/config/bw_dense_mix_glauber_15phibin copy.toml
+```
 
 ### 3. 示例配置
 
@@ -137,6 +158,7 @@ ctest --output-on-failure --test-dir /Users/allenzhou/Research_software/Code_bas
 当前自动化重点覆盖：
 
 - 拟合语义与 `R2Summary` 策略
+- 进度条格式与 `epsf` 提取
 - CLI/TOML 解析
 - blast-wave 输入聚合与 fail-fast
 - legacy workflow smoke
@@ -146,6 +168,44 @@ ctest --output-on-failure --test-dir /Users/allenzhou/Research_software/Code_bas
 - 当 HBT 半径中心值有效但误差不可用时，`R2Summary` 是否仍保留该点
 - 若启用，summary 图会写入中心值且误差条记为 0
 - 若关闭，summary 图会跳过该点，并在运行摘要与 `analysis_statistics` 中累计跳过计数
+
+`projection_fit.alpha_min` 与 `projection_fit.alpha_max` 控制 simultaneous Levy
+projection fit 中 alpha 参数传给 Minuit 的边界。两个字段都是可选配置；未设置时默认仍为：
+
+```toml
+[projection_fit]
+alpha_min = 0.2
+alpha_max = 2.0
+```
+
+配置校验要求 `0 < alpha_min < alpha_max`。默认 `alpha_max = 2.0` 对应
+Levy-stable alpha 的物理上界；若为了诊断显式设置 `alpha_max > 2`，输出可以运行，
+但该 alpha 不应再按物理 Levy-stable 指数直接解释。输出 ROOT 的
+`projection_fit_metadata` 会记录实际使用的 `alpha_min` 与 `alpha_max`。
+
+`epsf_vs_mt` 当前从每个 centrality 下已有的 `Rside2_vs_phi` summary 点提取：
+
+```text
+#epsilon_f = 2 R_{s,2}^{2} / R_{s,0}^{2}
+```
+
+输出对象位于 `R2Summary/<centrality>/epsf_vs_mt`，对应 canvas 为 `R2Summary/<centrality>/epsf_vs_mt_canvas`。
+
+每个有可画 summary 点的 `R2Summary/<centrality>/<femto_mt>/` 还会写出
+`source_parameters_overview_canvas`，用于按图版顺序汇总同一 centrality 与 femto
+`m_T` 区间下的 source parameters。当前 pad 顺序为：
+
+1. 区间信息与相对角说明
+2. `alpha` vs `phi_pair - Psi_2`
+3. `Rout2_vs_phi`
+4. `Ros2_vs_phi`
+5. `Rside2_vs_phi`
+6. `Rol2_vs_phi`
+7. `Rlong2_vs_phi`
+8. `Rsl2_vs_phi`
+
+`alpha` 点来自每个 `cent/femto_mt/phi` slice 的 `fit_products.alpha`，只作为
+overview canvas 内部图元使用；当前没有新增独立 `alpha_vs_phi` ROOT key。
 
 ## 维护注意事项
 

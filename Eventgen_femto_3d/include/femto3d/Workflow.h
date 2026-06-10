@@ -2,13 +2,40 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <limits>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "femto3d/AnalysisConfig.h"
 #include "femto3d/AnalysisTypes.h"
 
 namespace femto3d {
+
+  class AnalysisProgressSink {
+   public:
+    virtual ~AnalysisProgressSink() = default;
+
+    virtual void SetTotalEvents(std::size_t total_events) = 0;
+    virtual void UpdateCompletedEvents(std::size_t completed_events) = 0;
+  };
+
+  struct R2SummaryPoint {
+    double phi_center = 0.0;
+    double phi_error = 0.0;
+    double value = 0.0;
+    double error = 0.0;
+    bool valid = false;
+  };
+
+  struct EpsfSummaryPoint {
+    double mt_center = 0.0;
+    double mt_error = 0.0;
+    double value = 0.0;
+    double error = 0.0;
+    bool valid = false;
+  };
 
   struct R2SummaryPointDecision {
     bool write_point = false;
@@ -65,6 +92,11 @@ namespace femto3d {
     }
   }
 
-  [[nodiscard]] AnalysisStatistics RunAnalysis(const ApplicationConfig &config);
+  [[nodiscard]] std::optional<EpsfSummaryPoint> ComputeEpsfFromRsideSummaryPoints(
+      const std::vector<R2SummaryPoint> &rside_points,
+      const RangeBin &mt_bin);
+
+  [[nodiscard]] AnalysisStatistics RunAnalysis(const ApplicationConfig &config,
+                                               AnalysisProgressSink *progress_sink = nullptr);
 
 }  // namespace femto3d

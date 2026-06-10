@@ -14,11 +14,18 @@ namespace femto3d {
     using std::runtime_error::runtime_error;
   };
 
+  enum class ProgressMode {
+    kAuto = 0,
+    kEnabled = 1,
+    kDisabled = 2,
+  };
+
   struct CliOptions {
     std::string config_path;
     std::optional<std::string> input_root_override;
     std::optional<std::string> output_root_override;
     std::optional<InputSchema> input_schema_override;
+    ProgressMode progress_mode = ProgressMode::kAuto;
   };
 
   [[nodiscard]] CliOptions ParseCliArgs(int argc, char **argv);

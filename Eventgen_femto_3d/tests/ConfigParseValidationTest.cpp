@@ -1,5 +1,6 @@
 #include "femto3d/Config.h"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -107,6 +108,11 @@ output_root = "output.root"
     std::cerr << "Expected HBT summary central-value-only fallback to default "
                  "to enabled.\n";
     return 16;
+  }
+  if (std::abs(valid.analysis.projection_fit.alpha_min - 0.20) > 1.0e-12 ||
+      std::abs(valid.analysis.projection_fit.alpha_max - 2.00) > 1.0e-12) {
+    std::cerr << "Expected alpha fit bounds to default to [0.20, 2.00].\n";
+    return 18;
   }
 
   const std::string legacy_config = R"toml(
@@ -254,6 +260,8 @@ input_root = "input.root"
 output_root = "output.root"
 
 [projection_fit]
+alpha_min = 0.35
+alpha_max = 1.95
 accept_hbt_central_value_only_for_summary = false
 )toml";
 
@@ -266,6 +274,30 @@ accept_hbt_central_value_only_for_summary = false
     std::cerr << "Expected explicit HBT summary policy override to disable "
                  "central-value-only fallback.\n";
     return 17;
+  }
+  if (std::abs(strict_summary_config.analysis.projection_fit.alpha_min - 0.35) > 1.0e-12 ||
+      std::abs(strict_summary_config.analysis.projection_fit.alpha_max - 1.95) > 1.0e-12) {
+    std::cerr << "Expected explicit alpha fit bounds to override defaults.\n";
+    return 19;
+  }
+
+  const std::string invalid_alpha_bounds = R"toml(
+[input]
+schema = "blastwave_flat_trees"
+input_root = "input.root"
+
+[output]
+output_root = "output.root"
+
+[projection_fit]
+alpha_min = 2.0
+alpha_max = 1.0
+)toml";
+
+  if (!ExpectConfigError(
+          WriteFile(temp_dir / "invalid_alpha_bounds.toml", invalid_alpha_bounds))) {
+    std::cerr << "Expected invalid alpha fit bounds to fail config parse.\n";
+    return 20;
   }
 
   const std::filesystem::path project_root =

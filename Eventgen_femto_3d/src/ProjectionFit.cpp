@@ -20,8 +20,6 @@ namespace femto3d {
   namespace {
 
     constexpr double kMinimumPositiveR2 = 1.0e-6;
-    constexpr double kMinimumAlpha = 0.20;
-    constexpr double kMaximumAlpha = 2.00;
     constexpr double kLargePenalty = 1.0e12;
     constexpr double kLevyIntegrationUpperBound = 60.0;
     constexpr int kLevyIntegrationSteps = 1200;
@@ -292,7 +290,7 @@ namespace femto3d {
     }
 
     bool IsValidLevyParameters(const double alpha, const double scale) {
-      return alpha >= kMinimumAlpha && alpha <= kMaximumAlpha && scale > 0.0;
+      return std::isfinite(alpha) && alpha > 0.0 && std::isfinite(scale) && scale > 0.0;
     }
 
     std::array<double, kLevyIntegrationPointCount> BuildFixedWeightedAlphaKernel(const double alpha) {
@@ -639,7 +637,7 @@ namespace femto3d {
         }
 
         const double alpha = parameters[0];
-        if (alpha < kMinimumAlpha || alpha > kMaximumAlpha) {
+        if (!std::isfinite(alpha) || alpha < fit_config.alpha_min || alpha > fit_config.alpha_max) {
           return kLargePenalty;
         }
 
@@ -704,6 +702,9 @@ namespace femto3d {
 
       const double cross_limit =
           5.0 * std::max({initial_hbt_radii_r2[0], initial_hbt_radii_r2[1], initial_hbt_radii_r2[2], 1.0});
+      const double alpha_range = fit_config.alpha_max - fit_config.alpha_min;
+      const double initial_alpha = std::clamp(1.8, fit_config.alpha_min, fit_config.alpha_max);
+      const double alpha_step = std::max(1.0e-6, std::min(0.05, 0.25 * alpha_range));
 
       SimultaneousLevyChi2 chi2{fit_cache, fit_config};
       ROOT::Math::Functor objective(chi2, 7);
@@ -715,7 +716,7 @@ namespace femto3d {
         minimizer->SetTolerance(1.0e-3);
         minimizer->SetFunction(objective);
 
-        minimizer->SetLimitedVariable(0, "alpha", 1.8, 0.05, kMinimumAlpha, kMaximumAlpha);
+        minimizer->SetLimitedVariable(0, "alpha", initial_alpha, alpha_step, fit_config.alpha_min, fit_config.alpha_max);
         minimizer->SetLimitedVariable(1, "Rout2", initial_hbt_radii_r2[0], 0.05, kMinimumPositiveR2, 1.0e3);
         minimizer->SetLimitedVariable(2, "Rside2", initial_hbt_radii_r2[1], 0.05, kMinimumPositiveR2, 1.0e3);
         minimizer->SetLimitedVariable(3, "Rlong2", initial_hbt_radii_r2[2], 0.05, kMinimumPositiveR2, 1.0e3);

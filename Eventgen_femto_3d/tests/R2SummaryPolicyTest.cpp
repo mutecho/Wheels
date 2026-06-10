@@ -1,8 +1,13 @@
+#include "femto3d/ProgressReporter.h"
 #include "femto3d/Workflow.h"
 
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -19,6 +24,10 @@ ProjectionFitResult MakeResult(const double r2,
   result.r2_error = r2_error;
   result.success = success;
   return result;
+}
+
+bool Contains(const std::string& text, const std::string& expected) {
+  return text.find(expected) != std::string::npos;
 }
 
 }  // namespace
@@ -74,6 +83,51 @@ int main() {
     std::cerr << "Expected non-finite HBT central values to stay out of "
                  "summary graphs.\n";
     return 5;
+  }
+
+  const femto3d::ProgressRenderSnapshot progress_snapshot{
+      10U, 5U, 1, std::chrono::seconds(20)};
+  const std::string progress_line =
+      femto3d::FormatProgressLine(progress_snapshot);
+  if (!Contains(progress_line, "50%") ||
+      !Contains(progress_line, "ETA 00:00:20")) {
+    std::cerr << "Expected progress line to include integer percent and ETA.\n";
+    return 6;
+  }
+
+  const femto3d::RangeBin mt_bin{0.2, 0.4, "mt_test"};
+  std::vector<femto3d::R2SummaryPoint> rside_points;
+  for (const double phi :
+       {-3.0 * femto3d::kPi / 8.0,
+        -1.0 * femto3d::kPi / 8.0,
+        1.0 * femto3d::kPi / 8.0,
+        3.0 * femto3d::kPi / 8.0}) {
+    femto3d::R2SummaryPoint point;
+    point.phi_center = phi;
+    point.phi_error = femto3d::kPi / 8.0;
+    point.value = 10.0 + 2.0 * std::cos(2.0 * phi);
+    point.error = 0.5;
+    point.valid = true;
+    rside_points.push_back(point);
+  }
+
+  const std::optional<femto3d::EpsfSummaryPoint> epsf_point =
+      femto3d::ComputeEpsfFromRsideSummaryPoints(rside_points, mt_bin);
+  if (!epsf_point.has_value() || !epsf_point->valid ||
+      std::abs(epsf_point->value - 0.2) > 1.0e-12 ||
+      std::abs(epsf_point->mt_center - 0.3) > 1.0e-12 ||
+      epsf_point->error <= 0.0) {
+    std::cerr << "Expected epsf extraction to recover side-radius second "
+                 "harmonic over femto mT.\n";
+    return 7;
+  }
+
+  rside_points.resize(1U);
+  if (femto3d::ComputeEpsfFromRsideSummaryPoints(rside_points, mt_bin)
+          .has_value()) {
+    std::cerr << "Expected epsf extraction to require at least two usable "
+                 "phi points.\n";
+    return 8;
   }
 
   return 0;

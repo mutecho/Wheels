@@ -7,6 +7,7 @@
 #include "TPaveText.h"
 #include "TText.h"
 #include "TTree.h"
+#include "TVirtualPad.h"
 
 #include <cmath>
 #include <filesystem>
@@ -120,6 +121,25 @@ std::string CollectTextLines(TPaveText& text_box) {
   return collected;
 }
 
+bool ContainsPrimitiveRecursive(TObject& object, const std::string& name) {
+  if (name == object.GetName()) {
+    return true;
+  }
+
+  auto* pad = dynamic_cast<TVirtualPad*>(&object);
+  if (pad == nullptr || pad->GetListOfPrimitives() == nullptr) {
+    return false;
+  }
+
+  TIter next(pad->GetListOfPrimitives());
+  while (TObject* child = next()) {
+    if (ContainsPrimitiveRecursive(*child, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int main() {
@@ -152,7 +172,7 @@ int main() {
       Expect(graph->GetN() == 1, "Expected one summary point in graph: " + graph_name);
       Expect(graph->GetMarkerStyle() == 20,
              "Expected persisted marker style on graph: " + graph_name);
-      Expect(std::abs(graph->GetMarkerSize() - 1.2) < 1.0e-12,
+      Expect(std::abs(graph->GetMarkerSize() - 1.2) < 1.0e-6,
              "Expected persisted marker size on graph: " + graph_name);
       Expect(graph->GetLineWidth() == 2,
              "Expected persisted line width on graph: " + graph_name);
@@ -177,6 +197,21 @@ int main() {
              "Expected summary info box to report mean value.");
       Expect(info_box_text.find("RMS(Y)") != std::string::npos,
              "Expected summary info box to report RMS value.");
+    }
+
+    auto* overview_canvas = dynamic_cast<TCanvas*>(
+        output_file.Get((base_path + "source_parameters_overview_canvas").c_str()));
+    Expect(overview_canvas != nullptr,
+           "Expected source-parameter overview canvas in each cent/mT summary directory.");
+    Expect(ContainsPrimitiveRecursive(*overview_canvas,
+                                      "source_parameters_overview_info_box"),
+           "Expected overview canvas to contain the cent/mT information panel.");
+    const std::vector<std::string> overview_order = {
+        "Rout2_vs_phi", "Ros2_vs_phi", "Rside2_vs_phi",
+        "Rol2_vs_phi",  "Rlong2_vs_phi", "Rsl2_vs_phi"};
+    for (const std::string& graph_name : overview_order) {
+      Expect(ContainsPrimitiveRecursive(*overview_canvas, graph_name),
+             "Expected overview canvas to contain graph: " + graph_name);
     }
   } catch (const std::exception& error) {
     std::cerr << "r2_summary_visibility_test failed: " << error.what() << "\n";

@@ -19,6 +19,7 @@
 #include "TGraphErrors.h"
 #include "TPaveText.h"
 #include "TTree.h"
+#include "TVirtualPad.h"
 #include "femto3d/EventPlane.h"
 #include "femto3d/Histogramming.h"
 #include "femto3d/InputReader.h"
@@ -29,21 +30,40 @@ namespace femto3d {
 
   namespace {
 
-    struct RadiusSummaryPoint {
-      double phi_center = 0.0;
-      double phi_error = 0.0;
-      double value = 0.0;
-      double error = 0.0;
-      bool valid = false;
-    };
-
     using RadiusSummaryMap =
-        std::map<std::pair<std::size_t, std::size_t>, std::array<std::vector<RadiusSummaryPoint>, 6>>;
+        std::map<std::pair<std::size_t, std::size_t>, std::array<std::vector<R2SummaryPoint>, 6>>;
+    using AlphaSummaryMap = std::map<std::pair<std::size_t, std::size_t>, std::vector<R2SummaryPoint>>;
+    using EpsfSummaryMap = std::map<std::size_t, std::vector<EpsfSummaryPoint>>;
 
     struct SummaryGraphStats {
       int point_count = 0;
       double mean_y = 0.0;
       double rms_y = 0.0;
+    };
+
+    struct HarmonicFitResult {
+      double intercept = 0.0;
+      double harmonic_coefficient = 0.0;
+      double intercept_variance = 0.0;
+      double harmonic_variance = 0.0;
+      double covariance = 0.0;
+      bool success = false;
+    };
+
+    class ScopedEventProgress {
+     public:
+      ScopedEventProgress(AnalysisProgressSink *progress_sink, const std::size_t completed_events)
+          : progress_sink_(progress_sink), completed_events_(completed_events) {}
+
+      ~ScopedEventProgress() {
+        if (progress_sink_ != nullptr) {
+          progress_sink_->UpdateCompletedEvents(completed_events_);
+        }
+      }
+
+     private:
+      AnalysisProgressSink *progress_sink_ = nullptr;
+      std::size_t completed_events_ = 0U;
     };
 
     int FindBinIndex(const std::vector<RangeBin> &bins, const double value) {
@@ -87,12 +107,18 @@ namespace femto3d {
       return stream.str();
     }
 
-    SummaryGraphStats ComputeSummaryGraphStats(const std::vector<RadiusSummaryPoint> &points) {
+    std::string FormatRangeText(const RangeBin &bin, const int precision = 2) {
+      std::ostringstream stream;
+      stream << std::fixed << std::setprecision(precision) << bin.min << "-" << bin.max;
+      return stream.str();
+    }
+
+    SummaryGraphStats ComputeSummaryGraphStats(const std::vector<R2SummaryPoint> &points) {
       SummaryGraphStats stats;
       double sum_y = 0.0;
       double sum_y2 = 0.0;
 
-      for (const RadiusSummaryPoint &point : points) {
+      for (const R2SummaryPoint &point : points) {
         if (!point.valid || !std::isfinite(point.value)) {
           continue;
         }
@@ -113,6 +139,108 @@ namespace femto3d {
       return stats;
     }
 
+    SummaryGraphStats ComputeEpsfGraphStats(const std::vector<EpsfSummaryPoint> &points) {
+      SummaryGraphStats stats;
+      double sum_y = 0.0;
+      double sum_y2 = 0.0;
+
+      for (const EpsfSummaryPoint &point : points) {
+        if (!point.valid || !std::isfinite(point.value)) {
+          continue;
+        }
+
+        ++stats.point_count;
+        sum_y += point.value;
+        sum_y2 += point.value * point.value;
+      }
+
+      if (stats.point_count <= 0) {
+        return stats;
+      }
+
+      const double normalization = static_cast<double>(stats.point_count);
+      stats.mean_y = sum_y / normalization;
+      const double mean_y2 = sum_y2 / normalization;
+      stats.rms_y = std::sqrt(std::max(0.0, mean_y2 - stats.mean_y * stats.mean_y));
+      return stats;
+    }
+
+    HarmonicFitResult FitSideRadiusSecondHarmonic(const std::vector<R2SummaryPoint> &rside_points) {
+      constexpr double kMinimumDeterminant = 1.0e-20;
+      int used_points = 0;
+      bool use_point_errors = true;
+
+      for (const R2SummaryPoint &point : rside_points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+
+        ++used_points;
+        if (!std::isfinite(point.error) || point.error <= 0.0) {
+          use_point_errors = false;
+        }
+      }
+
+      if (used_points < 2) {
+        return {};
+      }
+
+      double sum_w = 0.0;
+      double sum_wc = 0.0;
+      double sum_wcc = 0.0;
+      double sum_wy = 0.0;
+      double sum_wcy = 0.0;
+
+      for (const R2SummaryPoint &point : rside_points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+
+        const double cos2phi = std::cos(2.0 * point.phi_center);
+        const double weight = use_point_errors ? 1.0 / (point.error * point.error) : 1.0;
+        sum_w += weight;
+        sum_wc += weight * cos2phi;
+        sum_wcc += weight * cos2phi * cos2phi;
+        sum_wy += weight * point.value;
+        sum_wcy += weight * cos2phi * point.value;
+      }
+
+      const double determinant = sum_w * sum_wcc - sum_wc * sum_wc;
+      if (!std::isfinite(determinant) || std::abs(determinant) <= kMinimumDeterminant) {
+        return {};
+      }
+
+      HarmonicFitResult fit;
+      fit.intercept = (sum_wy * sum_wcc - sum_wcy * sum_wc) / determinant;
+      fit.harmonic_coefficient = (sum_w * sum_wcy - sum_wc * sum_wy) / determinant;
+      fit.intercept_variance = sum_wcc / determinant;
+      fit.harmonic_variance = sum_w / determinant;
+      fit.covariance = -sum_wc / determinant;
+
+      if (!use_point_errors && used_points > 2) {
+        double residual_sum2 = 0.0;
+        for (const R2SummaryPoint &point : rside_points) {
+          if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+            continue;
+          }
+
+          const double cos2phi = std::cos(2.0 * point.phi_center);
+          const double residual = point.value - fit.intercept - fit.harmonic_coefficient * cos2phi;
+          residual_sum2 += residual * residual;
+        }
+
+        const double residual_variance = residual_sum2 / static_cast<double>(used_points - 2);
+        fit.intercept_variance *= residual_variance;
+        fit.harmonic_variance *= residual_variance;
+        fit.covariance *= residual_variance;
+      }
+
+      fit.success = std::isfinite(fit.intercept) && std::isfinite(fit.harmonic_coefficient)
+                    && std::isfinite(fit.intercept_variance) && std::isfinite(fit.harmonic_variance)
+                    && std::isfinite(fit.covariance);
+      return fit;
+    }
+
     void ApplySummaryGraphStyle(TGraphErrors &graph) {
       constexpr int kSummaryGraphColor = 602;
       constexpr int kSummaryMarkerStyle = 20;
@@ -124,6 +252,15 @@ namespace femto3d {
       graph.SetLineWidth(2);
       graph.SetFillStyle(0);
       graph.SetDrawOption("ALPE1");
+    }
+
+    void ApplyOverviewGraphStyle(TGraphErrors &graph) {
+      ApplySummaryGraphStyle(graph);
+      graph.GetXaxis()->SetTitleSize(0.055);
+      graph.GetXaxis()->SetLabelSize(0.045);
+      graph.GetYaxis()->SetTitleSize(0.060);
+      graph.GetYaxis()->SetLabelSize(0.045);
+      graph.GetYaxis()->SetTitleOffset(1.15);
     }
 
     TPaveText *CreateSummaryInfoBox(const std::string &graph_name, const SummaryGraphStats &stats) {
@@ -139,6 +276,224 @@ namespace femto3d {
       info_box->AddText(("Mean(Y): " + FormatSummaryStat(stats.mean_y)).c_str());
       info_box->AddText(("RMS(Y): " + FormatSummaryStat(stats.rms_y)).c_str());
       return info_box;
+    }
+
+    bool HasValidSummaryPoints(const std::vector<R2SummaryPoint> &points) {
+      return std::any_of(points.begin(), points.end(), [](const R2SummaryPoint &point) {
+        return point.valid && std::isfinite(point.phi_center) && std::isfinite(point.value);
+      });
+    }
+
+    std::unique_ptr<TGraphErrors> MakePhiSummaryGraph(const std::vector<R2SummaryPoint> &points,
+                                                      const std::string &graph_name,
+                                                      const std::string &graph_title,
+                                                      const std::string &x_axis_title,
+                                                      const std::string &y_axis_title) {
+      const auto valid_count =
+          static_cast<int>(std::count_if(points.begin(), points.end(), [](const R2SummaryPoint &point) {
+            return point.valid && std::isfinite(point.phi_center) && std::isfinite(point.value);
+          }));
+      if (valid_count == 0) {
+        return nullptr;
+      }
+
+      auto graph = std::make_unique<TGraphErrors>(valid_count);
+      graph->SetName(graph_name.c_str());
+      graph->SetTitle(graph_title.c_str());
+      graph->GetXaxis()->SetTitle(x_axis_title.c_str());
+      graph->GetYaxis()->SetTitle(y_axis_title.c_str());
+      ApplySummaryGraphStyle(*graph);
+
+      int point_index = 0;
+      for (const R2SummaryPoint &point : points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+
+        const double phi_error = std::isfinite(point.phi_error) ? point.phi_error : 0.0;
+        const double value_error = std::isfinite(point.error) ? point.error : 0.0;
+        graph->SetPoint(point_index, point.phi_center, point.value);
+        graph->SetPointError(point_index, phi_error, value_error);
+        ++point_index;
+      }
+
+      return graph;
+    }
+
+    TPaveText *CreateSourceParameterOverviewInfoBox(const AnalysisConfig &config,
+                                                    const RangeBin &centrality_bin,
+                                                    const RangeBin &mt_bin) {
+      auto *info_box = new TPaveText(0.08, 0.08, 0.92, 0.92, "NDC");
+      info_box->SetName("source_parameters_overview_info_box");
+      info_box->SetBorderSize(0);
+      info_box->SetFillColor(0);
+      info_box->SetFillStyle(0);
+      info_box->SetShadowColor(0);
+      info_box->SetTextAlign(12);
+      info_box->SetTextFont(42);
+      info_box->SetTextSize(0.060);
+      info_box->AddText("Eventgen femto 3d source parameters");
+      info_box->AddText(("centrality: " + FormatRangeText(centrality_bin)).c_str());
+      info_box->AddText(("femto m_{T}: " + FormatRangeText(mt_bin) + " GeV/c^{2}").c_str());
+      info_box->AddText(BuildRelativePhiAxisTitle(config.event_plane.harmonic_order).c_str());
+      return info_box;
+    }
+
+    void DrawOverviewGraph(TCanvas &canvas,
+                           const int pad_number,
+                           std::unique_ptr<TGraphErrors> graph,
+                           std::vector<std::unique_ptr<TGraphErrors>> &owned_graphs) {
+      if (graph == nullptr) {
+        return;
+      }
+
+      TVirtualPad *pad = canvas.cd(pad_number);
+      if (pad == nullptr) {
+        return;
+      }
+
+      pad->SetTicks(1, 1);
+      pad->SetLeftMargin(0.16);
+      pad->SetRightMargin(0.06);
+      pad->SetBottomMargin(0.14);
+      pad->SetTopMargin(0.08);
+      ApplyOverviewGraphStyle(*graph);
+      graph->SetTitle("");
+      graph->Draw("ALPE1");
+      owned_graphs.push_back(std::move(graph));
+    }
+
+    void WriteSourceParameterOverviewCanvases(TDirectory &directory,
+                                              const AnalysisConfig &config,
+                                              RadiusSummaryMap &summary_points,
+                                              AlphaSummaryMap &alpha_summary_points) {
+      const std::array<std::string, 6> graph_names = {
+          "Rout2_vs_phi", "Rside2_vs_phi", "Rlong2_vs_phi", "Ros2_vs_phi", "Rol2_vs_phi", "Rsl2_vs_phi"};
+      const std::array<std::string, 6> graph_titles = {
+          "R_{out}^{2}", "R_{side}^{2}", "R_{long}^{2}", "R_{os}^{2}", "R_{ol}^{2}", "R_{sl}^{2}"};
+      const std::string relative_phi_title = BuildRelativePhiAxisTitle(config.event_plane.harmonic_order);
+
+      for (auto &entry : summary_points) {
+        const std::size_t cent_index = entry.first.first;
+        const std::size_t mt_index = entry.first.second;
+        auto alpha_iterator = alpha_summary_points.find(entry.first);
+
+        bool has_drawable_panel = alpha_iterator != alpha_summary_points.end()
+                                  && HasValidSummaryPoints(alpha_iterator->second);
+        for (const auto &radius_points : entry.second) {
+          has_drawable_panel = has_drawable_panel || HasValidSummaryPoints(radius_points);
+        }
+        if (!has_drawable_panel) {
+          continue;
+        }
+
+        TDirectory *cent_directory = GetOrCreateDirectory(directory, config.centrality_bins[cent_index].label);
+        TDirectory *mt_directory = GetOrCreateDirectory(*cent_directory, config.mt_bins[mt_index].label);
+        mt_directory->cd();
+
+        auto canvas = std::make_unique<TCanvas>(
+            "source_parameters_overview_canvas", "Source parameter overview", 1200, 1800);
+        canvas->Divide(2, 4, 0.0, 0.0);
+        std::vector<std::unique_ptr<TGraphErrors>> owned_graphs;
+
+        TVirtualPad *info_pad = canvas->cd(1);
+        if (info_pad != nullptr) {
+          info_pad->SetLeftMargin(0.04);
+          info_pad->SetRightMargin(0.04);
+          info_pad->SetBottomMargin(0.04);
+          info_pad->SetTopMargin(0.04);
+          CreateSourceParameterOverviewInfoBox(
+              config, config.centrality_bins[cent_index], config.mt_bins[mt_index])
+              ->Draw();
+        }
+
+        if (alpha_iterator != alpha_summary_points.end()) {
+          DrawOverviewGraph(*canvas,
+                            2,
+                            MakePhiSummaryGraph(alpha_iterator->second,
+                                                "alpha_vs_phi",
+                                                "#alpha vs " + relative_phi_title,
+                                                relative_phi_title,
+                                                "#alpha"),
+                            owned_graphs);
+        }
+
+        // Match the publication-style panel order: left column contains
+        // out/side/long radii, right column contains the corresponding
+        // cross terms after the alpha panel.
+        constexpr std::array<std::size_t, 6> kOverviewRadiusOrder = {0U, 3U, 1U, 4U, 2U, 5U};
+        for (std::size_t order_index = 0; order_index < kOverviewRadiusOrder.size(); ++order_index) {
+          const std::size_t radius_index = kOverviewRadiusOrder[order_index];
+          DrawOverviewGraph(*canvas,
+                            static_cast<int>(order_index + 3U),
+                            MakePhiSummaryGraph(entry.second[radius_index],
+                                                graph_names[radius_index],
+                                                graph_titles[radius_index] + " vs " + relative_phi_title,
+                                                relative_phi_title,
+                                                graph_titles[radius_index]),
+                            owned_graphs);
+        }
+
+        canvas->Modified();
+        canvas->Update();
+        canvas->Write();
+      }
+    }
+
+    void WriteEpsfSummaryGraphs(TDirectory &directory,
+                                const AnalysisConfig &config,
+                                EpsfSummaryMap &epsf_summary_points) {
+      constexpr const char *kGraphName = "epsf_vs_mt";
+      constexpr const char *kGraphTitle = "#epsilon_{f} vs femto m_{T}";
+
+      for (auto &entry : epsf_summary_points) {
+        const std::size_t cent_index = entry.first;
+        auto &points = entry.second;
+        std::sort(points.begin(), points.end(), [](const EpsfSummaryPoint &left, const EpsfSummaryPoint &right) {
+          return left.mt_center < right.mt_center;
+        });
+
+        const auto valid_count =
+            static_cast<int>(std::count_if(points.begin(), points.end(), [](const EpsfSummaryPoint &point) {
+              return point.valid;
+            }));
+        if (valid_count == 0) {
+          continue;
+        }
+
+        TDirectory *cent_directory = GetOrCreateDirectory(directory, config.centrality_bins[cent_index].label);
+        auto graph = std::make_unique<TGraphErrors>(valid_count);
+        graph->SetName(kGraphName);
+        graph->SetTitle(kGraphTitle);
+        graph->GetXaxis()->SetTitle("femto m_{T} [GeV/c^{2}]");
+        graph->GetYaxis()->SetTitle("#epsilon_{f} = 2R_{s,2}^{2}/R_{s,0}^{2}");
+        ApplySummaryGraphStyle(*graph);
+
+        const SummaryGraphStats stats = ComputeEpsfGraphStats(points);
+
+        int point_index = 0;
+        for (const EpsfSummaryPoint &point : points) {
+          if (!point.valid) {
+            continue;
+          }
+
+          graph->SetPoint(point_index, point.mt_center, point.value);
+          graph->SetPointError(point_index, point.mt_error, point.error);
+          ++point_index;
+        }
+
+        cent_directory->cd();
+        auto canvas = std::make_unique<TCanvas>("epsf_vs_mt_canvas", kGraphTitle, 800, 600);
+        canvas->SetTicks(1, 1);
+        canvas->cd();
+        graph->Draw("ALPE1");
+        CreateSummaryInfoBox(kGraphName, stats)->Draw();
+        canvas->Modified();
+        canvas->Update();
+
+        graph->Write();
+        canvas->Write();
+      }
     }
 
     bool PassesFemtoSelection(const ParticleState &particle, const ParticleSelectionConfig &selection) {
@@ -321,6 +676,8 @@ namespace femto3d {
     }
 
     void WriteProjectionFitMetadata(TDirectory &directory, const AnalysisConfig &config) {
+      double alpha_min = config.projection_fit.alpha_min;
+      double alpha_max = config.projection_fit.alpha_max;
       int use_adaptive_integration = config.projection_fit.use_adaptive_integration ? 1 : 0;
       int accept_forced_posdef_covariance_as_valid =
           config.projection_fit.accept_forced_posdef_covariance_as_valid ? 1 : 0;
@@ -332,6 +689,8 @@ namespace femto3d {
           config.projection_fit.accept_hbt_central_value_only_for_summary ? 1 : 0;
 
       TTree metadata_tree("projection_fit_metadata", "projection_fit_metadata");
+      metadata_tree.Branch("alpha_min", &alpha_min, "alpha_min/D");
+      metadata_tree.Branch("alpha_max", &alpha_max, "alpha_max/D");
       metadata_tree.Branch("use_adaptive_integration", &use_adaptive_integration, "use_adaptive_integration/I");
       metadata_tree.Branch("accept_forced_posdef_covariance_as_valid",
                            &accept_forced_posdef_covariance_as_valid,
@@ -353,7 +712,10 @@ namespace femto3d {
       metadata_tree.Write();
     }
 
-    void WriteR2SummaryGraphs(TDirectory &directory, const AnalysisConfig &config, RadiusSummaryMap &summary_points) {
+    void WriteR2SummaryGraphs(TDirectory &directory,
+                              const AnalysisConfig &config,
+                              RadiusSummaryMap &summary_points,
+                              AlphaSummaryMap &alpha_summary_points) {
       const std::array<std::string, 6> graph_names = {
           "Rout2_vs_phi", "Rside2_vs_phi", "Rlong2_vs_phi", "Ros2_vs_phi", "Rol2_vs_phi", "Rsl2_vs_phi"};
       const std::array<std::string, 6> graph_titles = {
@@ -368,37 +730,19 @@ namespace femto3d {
 
         for (std::size_t radius_index = 0; radius_index < entry.second.size(); ++radius_index) {
           auto &points = entry.second[radius_index];
-          std::sort(points.begin(), points.end(), [](const RadiusSummaryPoint &left, const RadiusSummaryPoint &right) {
+          std::sort(points.begin(), points.end(), [](const R2SummaryPoint &left, const R2SummaryPoint &right) {
             return left.phi_center < right.phi_center;
           });
 
-          const auto valid_count =
-              static_cast<int>(std::count_if(points.begin(), points.end(), [](const RadiusSummaryPoint &point) {
-                return point.valid;
-              }));
-          if (valid_count == 0) {
+          auto graph = MakePhiSummaryGraph(points,
+                                           graph_names[radius_index],
+                                           graph_titles[radius_index] + " vs " + relative_phi_title,
+                                           relative_phi_title,
+                                           graph_titles[radius_index]);
+          if (graph == nullptr) {
             continue;
           }
-
-          auto graph = std::make_unique<TGraphErrors>(valid_count);
-          graph->SetName(graph_names[radius_index].c_str());
-          graph->SetTitle((graph_titles[radius_index] + " vs " + relative_phi_title).c_str());
-          graph->GetXaxis()->SetTitle(relative_phi_title.c_str());
-          graph->GetYaxis()->SetTitle(graph_titles[radius_index].c_str());
-          ApplySummaryGraphStyle(*graph);
-
           const SummaryGraphStats stats = ComputeSummaryGraphStats(points);
-
-          int point_index = 0;
-          for (const RadiusSummaryPoint &point : points) {
-            if (!point.valid) {
-              continue;
-            }
-
-            graph->SetPoint(point_index, point.phi_center, point.value);
-            graph->SetPointError(point_index, point.phi_error, point.error);
-            ++point_index;
-          }
 
           mt_directory->cd();
           auto canvas =
@@ -414,11 +758,70 @@ namespace femto3d {
           canvas->Write();
         }
       }
+
+      for (auto &entry : alpha_summary_points) {
+        auto &points = entry.second;
+        std::sort(points.begin(), points.end(), [](const R2SummaryPoint &left, const R2SummaryPoint &right) {
+          return left.phi_center < right.phi_center;
+        });
+      }
+      WriteSourceParameterOverviewCanvases(directory, config, summary_points, alpha_summary_points);
+
+      constexpr std::size_t kSideRadiusIndex = 1U;
+      EpsfSummaryMap epsf_summary_points;
+      for (const auto &entry : summary_points) {
+        const std::size_t cent_index = entry.first.first;
+        const std::size_t mt_index = entry.first.second;
+        const std::optional<EpsfSummaryPoint> epsf_point =
+            ComputeEpsfFromRsideSummaryPoints(entry.second[kSideRadiusIndex], config.mt_bins[mt_index]);
+        if (epsf_point.has_value() && epsf_point->valid) {
+          epsf_summary_points[cent_index].push_back(*epsf_point);
+        }
+      }
+      WriteEpsfSummaryGraphs(directory, config, epsf_summary_points);
+    }
+
+    R2SummaryPoint MakeAlphaSummaryPoint(const SliceFitProducts &fit_products, const RangeBin &phi_bin) {
+      R2SummaryPoint point;
+      point.phi_center = phi_bin.Center();
+      point.phi_error = 0.5 * (phi_bin.max - phi_bin.min);
+      point.value = fit_products.alpha;
+      // Alpha is drawn only inside the overview canvas; missing alpha errors
+      // keep the fitted central value visible with a zero-length error bar.
+      point.error =
+          (fit_products.alpha_error_valid && std::isfinite(fit_products.alpha_error)) ? fit_products.alpha_error : 0.0;
+      point.valid = fit_products.alpha_success && std::isfinite(fit_products.alpha);
+      return point;
     }
 
   }  // namespace
 
-  AnalysisStatistics RunAnalysis(const ApplicationConfig &application_config) {
+  std::optional<EpsfSummaryPoint> ComputeEpsfFromRsideSummaryPoints(
+      const std::vector<R2SummaryPoint> &rside_points,
+      const RangeBin &mt_bin) {
+    constexpr double kMinimumInterceptMagnitude = 1.0e-12;
+    const HarmonicFitResult fit = FitSideRadiusSecondHarmonic(rside_points);
+    if (!fit.success || std::abs(fit.intercept) <= kMinimumInterceptMagnitude) {
+      return std::nullopt;
+    }
+
+    EpsfSummaryPoint point;
+    point.mt_center = mt_bin.Center();
+    point.mt_error = 0.5 * (mt_bin.max - mt_bin.min);
+    point.value = fit.harmonic_coefficient / fit.intercept;
+
+    const double ratio_variance =
+        (fit.harmonic_coefficient * fit.harmonic_coefficient * fit.intercept_variance)
+            / (fit.intercept * fit.intercept * fit.intercept * fit.intercept)
+        + fit.harmonic_variance / (fit.intercept * fit.intercept)
+        - (2.0 * fit.harmonic_coefficient * fit.covariance)
+              / (fit.intercept * fit.intercept * fit.intercept);
+    point.error = std::isfinite(ratio_variance) ? std::sqrt(std::max(0.0, ratio_variance)) : 0.0;
+    point.valid = std::isfinite(point.mt_center) && std::isfinite(point.value) && std::isfinite(point.error);
+    return point.valid ? std::optional<EpsfSummaryPoint>(point) : std::nullopt;
+  }
+
+  AnalysisStatistics RunAnalysis(const ApplicationConfig &application_config, AnalysisProgressSink *progress_sink) {
     const AnalysisConfig &config = application_config.analysis;
     if (config.centrality_bins.empty() || config.mt_bins.empty() || config.phi_bins.empty()) {
       throw std::invalid_argument("Analysis bins must not be empty.");
@@ -438,11 +841,17 @@ namespace femto3d {
     const std::array<ProjectionDefinition, 6> directions = MakeProjectionDefinitions();
 
     const std::vector<EventData> events = LoadEventData(application_config);
+    if (progress_sink != nullptr) {
+      progress_sink->SetTotalEvents(events.size());
+      progress_sink->UpdateCompletedEvents(0U);
+    }
 
     AnalysisStatistics statistics;
     std::map<SliceKey, SliceHistograms> slice_histograms;
 
-    for (const EventData &event_data : events) {
+    for (std::size_t event_index = 0; event_index < events.size(); ++event_index) {
+      const EventData &event_data = events[event_index];
+      const ScopedEventProgress event_progress(progress_sink, event_index + 1U);
       ++statistics.events_read;
 
       const int cent_index = FindBinIndex(config.centrality_bins, event_data.centrality);
@@ -599,6 +1008,7 @@ namespace femto3d {
     fit_summary_tree.Branch("directional_error_valid", directional_error_valid, "directional_error_valid[6]/I");
 
     RadiusSummaryMap summary_points;
+    AlphaSummaryMap alpha_summary_points;
 
     for (auto &entry : slice_histograms) {
       const SliceKey &key = entry.first;
@@ -655,7 +1065,7 @@ namespace femto3d {
         const R2SummaryPointDecision decision = DecideHbtR2SummaryPoint(fit_products.hbt_radii_results[radius_index],
                                                                         fit_products.hbt_error_valid[radius_index],
                                                                         config.projection_fit);
-        RadiusSummaryPoint point;
+        R2SummaryPoint point;
         point.phi_center = phi_bin.Center();
         point.phi_error = 0.5 * (phi_bin.max - phi_bin.min);
         point.value = fit_products.hbt_radii_results[radius_index].r2;
@@ -666,6 +1076,8 @@ namespace femto3d {
         }
         radii_per_phi[radius_index].push_back(point);
       }
+      alpha_summary_points[std::make_pair(key.cent_index, key.mt_index)].push_back(
+          MakeAlphaSummaryPoint(fit_products, phi_bin));
     }
 
     output_file->cd();
@@ -674,7 +1086,7 @@ namespace femto3d {
     WriteEventPlaneMetadata(*output_file, config);
     WriteMtSlicingMetadata(*output_file, config);
     WriteProjectionFitMetadata(*output_file, config);
-    WriteR2SummaryGraphs(*r2_summary_directory, config, summary_points);
+    WriteR2SummaryGraphs(*r2_summary_directory, config, summary_points, alpha_summary_points);
     output_file->Write();
 
     return statistics;

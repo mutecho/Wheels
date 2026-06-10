@@ -12,7 +12,12 @@
 
 namespace femto3d {
 
+inline constexpr double kDefaultProjectionFitAlphaMin = 0.20;
+inline constexpr double kDefaultProjectionFitAlphaMax = 2.00;
+
 struct ProjectionFitConfig {
+  double alpha_min = kDefaultProjectionFitAlphaMin;
+  double alpha_max = kDefaultProjectionFitAlphaMax;
   bool use_adaptive_integration = false;
   bool accept_forced_posdef_covariance_as_valid = false;
   bool fail_alpha_result_when_error_invalid = false;

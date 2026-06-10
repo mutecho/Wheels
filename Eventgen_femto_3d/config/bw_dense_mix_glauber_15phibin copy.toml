@@ -1,6 +1,7 @@
 [input]
 schema = "blastwave_flat_trees"
-input_root = "/Users/allenzhou/Research_software/Blast_wave/res/bw_b8_500000e_cfgfile.root"
+# input_root = "/Users/allenzhou/Research_software/Blast_wave/res/PbPb_b1_dense_mix_glauber.root"
+input_root = "/Users/allenzhou/Research_software/Blast_wave/res/PbPb_b3_dense_mix_glauber.root"
 
 [input.blastwave]
 events_tree = "events"
@@ -19,7 +20,8 @@ z_branch = "z"
 t_branch = "t"
 
 [output]
-output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/test_5e5events_b8_7phibin.root"
+# output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/PbPb_b1_dense_mix_glauber_15phibin.root"
+output_root = "/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/res/PbPb_b3_dense_mix_glauber_15phibin.root"
 top_directory_name = "Femto3D"
 r2_summary_directory_name = "R2Summary"
 
@@ -74,6 +76,7 @@ bin_width = 0.5
 [projection_fit]
 alpha_min = 0.2
 alpha_max = 2.0
+# alpha_max = 2.5
 use_adaptive_integration = false
 accept_forced_posdef_covariance_as_valid = false
 fail_alpha_result_when_error_invalid = false
@@ -86,52 +89,97 @@ min = 0.0
 max = 100.0
 label = "cent_0.00-100.00"
 
-# [[bins.centrality]]
-# min = 10.0
-# max = 30.0
-# label = "cent_10.00-30.00"
+[[bins.mt]]
+min = 0.3
+max = 0.35
+label = "femto_mt_0.30-0.35"
 
 [[bins.mt]]
-min = 0.2
+min = 0.35
 max = 0.4
-label = "femto_mt_0.20-0.40"
+label = "femto_mt_0.35-0.40"
 
 [[bins.mt]]
 min = 0.4
-max = 0.6
-label = "femto_mt_0.40-0.60"
+max = 0.45
+label = "femto_mt_0.40-0.45"
+
+[[bins.mt]]
+min = 0.45
+max = 0.5
+label = "femto_mt_0.45-0.50"
 
 [[bins.phi]]
 min = -1.570796
-max = -1.121997
-label = "phi_-1.57--1.12"
+max = -1.361357
+label = "phi_-1.57--1.36"
 
 [[bins.phi]]
-min = -1.121997
-max = -0.673198
-label = "phi_-1.12--0.67"
+min = -1.361357
+max = -1.151917
+label = "phi_-1.36--1.15"
 
 [[bins.phi]]
-min = -0.673198
-max = -0.224399
-label = "phi_-0.67--0.22"
+min = -1.151917
+max = -0.942478
+label = "phi_-1.15--0.94"
 
 [[bins.phi]]
-min = -0.224399
-max = 0.224399
-label = "phi_-0.22-0.22"
+min = -0.942478
+max = -0.733038
+label = "phi_-0.94--0.73"
 
 [[bins.phi]]
-min = 0.224399
-max = 0.673198
-label = "phi_0.22-0.67"
+min = -0.733038
+max = -0.523599
+label = "phi_-0.73--0.52"
 
 [[bins.phi]]
-min = 0.673198
-max = 1.121997
-label = "phi_0.67-1.12"
+min = -0.523599
+max = -0.314159
+label = "phi_-0.52--0.31"
 
 [[bins.phi]]
-min = 1.121997
+min = -0.314159
+max = -0.104720
+label = "phi_-0.31--0.10"
+
+[[bins.phi]]
+min = -0.104720
+max = 0.104720
+label = "phi_-0.10-0.10"
+
+[[bins.phi]]
+min = 0.104720
+max = 0.314159
+label = "phi_0.10-0.31"
+
+[[bins.phi]]
+min = 0.314159
+max = 0.523599
+label = "phi_0.31-0.52"
+
+[[bins.phi]]
+min = 0.523599
+max = 0.733038
+label = "phi_0.52-0.73"
+
+[[bins.phi]]
+min = 0.733038
+max = 0.942478
+label = "phi_0.73-0.94"
+
+[[bins.phi]]
+min = 0.942478
+max = 1.151917
+label = "phi_0.94-1.15"
+
+[[bins.phi]]
+min = 1.151917
+max = 1.361357
+label = "phi_1.15-1.36"
+
+[[bins.phi]]
+min = 1.361357
 max = 1.570796
-label = "phi_1.12-1.57"
+label = "phi_1.36-1.57"
