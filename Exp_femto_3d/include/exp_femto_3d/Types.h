@@ -53,6 +53,8 @@ namespace exp_femto_3d {
     std::string cf_root_name = "cf_output.root";
     std::string fit_root_name = "fit_output.root";
     std::string fit_summary_name = "fit_summary.tsv";
+    std::string fit_report_directory;
+    std::string fit_report_root_name = "fit_report.root";
     LogLevel log_level = LogLevel::kInfo;
   };
 

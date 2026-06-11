@@ -10,6 +10,8 @@ output_directory = "/path/to/output"
 cf_root_name = "EP_dependence_CF_dataset.root"
 fit_root_name = "EP_dependence_CF_fit_dataset.root"
 fit_summary_name = "fit_summary.tsv"
+fit_report_directory = "/path/to/report-output"
+fit_report_root_name = "EP_dependence_CF_fit_report_dataset.root"
 log_level = "info"
 
 [build]

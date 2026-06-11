@@ -41,3 +41,17 @@
   - the opt-in mode makes phi-differential denominator checks possible without
     changing `map_pair_phi_to_symmetric_range`, which only controls coordinate
     mapping for display and fit summaries
+
+## DEC-005: Keep Fit Detail Output And Fit Report Output Separate
+
+- date: 2026-06-10
+- decision: keep per-slice fit objects in `output.fit_root_name`, and write the
+  summary/report presentation to a separate ROOT file controlled by
+  `output.fit_report_directory` and `output.fit_report_root_name`
+- rationale:
+  - the detailed fit file remains compatible with the existing
+    `fits/<slice_id>/...` object layout
+  - report consumers can open a smaller summary file organized by centrality and
+    mT without depending on the full per-slice fit object tree
+  - the report path can be redirected independently from the CF/fit output
+    directory while older configs keep working through defaults

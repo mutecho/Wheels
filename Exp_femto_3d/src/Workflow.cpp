@@ -1,6 +1,7 @@
 #include "exp_femto_3d/Workflow.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -35,6 +36,7 @@
 #include "TTree.h"
 #include "TTreeReader.h"
 #include "TTreeReaderValue.h"
+#include "TVirtualPad.h"
 #include "exp_femto_3d/Config.h"
 
 namespace exp_femto_3d {
@@ -72,6 +74,41 @@ namespace exp_femto_3d {
       std::unique_ptr<TH3D> norm;
     };
 
+    struct SummaryGraphStats {
+      int point_count = 0;
+      double mean_y = 0.0;
+      double rms_y = 0.0;
+    };
+
+    struct ReportSummaryPoint {
+      double phi_center = 0.0;
+      double phi_error = 0.0;
+      double value = 0.0;
+      double error = 0.0;
+      bool valid = false;
+    };
+
+    struct EpsSummaryPoint {
+      double mt_center = 0.0;
+      double mt_error = 0.0;
+      double value = 0.0;
+      double error = 0.0;
+      bool valid = false;
+    };
+
+    struct HarmonicFitResult {
+      double intercept = 0.0;
+      double harmonic_coefficient = 0.0;
+      double intercept_variance = 0.0;
+      double harmonic_variance = 0.0;
+      double covariance = 0.0;
+      bool success = false;
+    };
+
+    using FitResultGroupKey = std::pair<int, int>;
+    using GroupedFitResults = std::map<FitResultGroupKey, std::vector<LevyFitResult>>;
+    using EpsSummaryMap = std::map<int, std::vector<EpsSummaryPoint>>;
+
     std::string FormatDouble(const double value, const int precision = 2) {
       std::ostringstream stream;
       stream << std::fixed << std::setprecision(precision) << value;
@@ -82,6 +119,23 @@ namespace exp_femto_3d {
     std::string FormatDirectoryValue(const double value, const int precision = 2) {
       const double stable_value = std::abs(value) < 5.0e-7 ? 0.0 : value;
       return FormatDouble(stable_value, precision);
+    }
+
+    // Report paths use stable cent/mT labels independent of ROOT's current directory.
+    std::string FormatRangeText(const double low, const double high, const int precision = 2) {
+      return FormatDouble(low, precision) + "-" + FormatDouble(high, precision);
+    }
+
+    std::string BuildReportRangeDirectory(const std::string &prefix, const double low, const double high) {
+      return prefix + "_" + FormatDirectoryValue(low, 2) + "-" + FormatDirectoryValue(high, 2);
+    }
+
+    std::string BuildReportCentralityDirectory(const LevyFitResult &result) {
+      return BuildReportRangeDirectory("cent", result.cent_low, result.cent_high);
+    }
+
+    std::string BuildReportMtDirectory(const LevyFitResult &result) {
+      return BuildReportRangeDirectory("mt", result.mt_low, result.mt_high);
     }
 
     std::string BuildGroupId(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
@@ -236,6 +290,16 @@ namespace exp_femto_3d {
       file->Close();
     }
 
+    // Resolve configured file paths before comparing them so report output cannot overwrite source artifacts.
+    bool PathsReferToSameLocation(const std::string &left, const std::string &right) {
+      try {
+        return std::filesystem::weakly_canonical(left) == std::filesystem::weakly_canonical(right);
+      } catch (const std::filesystem::filesystem_error &) {
+        return std::filesystem::absolute(left).lexically_normal()
+               == std::filesystem::absolute(right).lexically_normal();
+      }
+    }
+
     TDirectory *GetOrCreateDirectory(TDirectory &parent, const std::string &name) {
       if (auto *existing = parent.GetDirectory(name.c_str())) {
         return existing;
@@ -264,6 +328,383 @@ namespace exp_femto_3d {
         begin = separator + 1U;
       }
       return current;
+    }
+
+    // Report canvases keep the existing second-order event-plane convention visible.
+    std::string BuildRelativePhiAxisTitle() {
+      return "#phi_{pair} - #Psi_{2} [rad]";
+    }
+
+    std::string FormatSummaryStat(const double value) {
+      std::ostringstream stream;
+      stream << std::fixed << std::setprecision(3) << value;
+      return stream.str();
+    }
+
+    // Radius-index mapping keeps overview and epsilon code aligned with the fit summary schema.
+    double FitResultRadiusValue(const LevyFitResult &result, const std::size_t radius_index) {
+      switch (radius_index) {
+        case 0:
+          return result.rout2;
+        case 1:
+          return result.rside2;
+        case 2:
+          return result.rlong2;
+        case 3:
+          return result.routside2;
+        case 4:
+          return result.routlong2;
+        case 5:
+          return result.rsidelong2;
+        default:
+          return std::numeric_limits<double>::quiet_NaN();
+      }
+    }
+
+    double FitResultRadiusError(const LevyFitResult &result, const std::size_t radius_index) {
+      switch (radius_index) {
+        case 0:
+          return result.rout2_err;
+        case 1:
+          return result.rside2_err;
+        case 2:
+          return result.rlong2_err;
+        case 3:
+          return result.routside2_err;
+        case 4:
+          return result.routlong2_err;
+        case 5:
+          return result.rsidelong2_err;
+        default:
+          return std::numeric_limits<double>::quiet_NaN();
+      }
+    }
+
+    ReportSummaryPoint MakeFitResultSummaryPoint(const LevyFitResult &result,
+                                                 const double value,
+                                                 const double error) {
+      ReportSummaryPoint point;
+      point.phi_center = result.phi;
+      point.phi_error = 0.0;
+      point.value = value;
+      point.error = std::isfinite(error) && error > 0.0 ? error : 0.0;
+      point.valid = std::isfinite(point.phi_center) && std::isfinite(point.value);
+      return point;
+    }
+
+    // Overview and epsilon summaries are built only from phi-differential slices.
+    GroupedFitResults GroupPhiDifferentialResultsByCentMt(const std::vector<LevyFitResult> &results) {
+      GroupedFitResults grouped_results;
+      for (const LevyFitResult &result : results) {
+        if (result.is_phi_integrated) {
+          continue;
+        }
+        grouped_results[{result.centrality_index, result.mt_index}].push_back(result);
+      }
+      for (auto &[key, group_results] : grouped_results) {
+        (void)key;
+        std::sort(group_results.begin(), group_results.end(), [](const LevyFitResult &left,
+                                                                 const LevyFitResult &right) {
+          return left.phi < right.phi;
+        });
+      }
+      return grouped_results;
+    }
+
+    std::vector<ReportSummaryPoint> BuildRadiusSummaryPoints(const std::vector<LevyFitResult> &results,
+                                                             const std::size_t radius_index) {
+      std::vector<ReportSummaryPoint> points;
+      points.reserve(results.size());
+      for (const LevyFitResult &result : results) {
+        points.push_back(MakeFitResultSummaryPoint(
+            result, FitResultRadiusValue(result, radius_index), FitResultRadiusError(result, radius_index)));
+      }
+      return points;
+    }
+
+    std::vector<ReportSummaryPoint> BuildAlphaSummaryPoints(const std::vector<LevyFitResult> &results) {
+      std::vector<ReportSummaryPoint> points;
+      points.reserve(results.size());
+      for (const LevyFitResult &result : results) {
+        points.push_back(MakeFitResultSummaryPoint(result, result.alpha, result.alpha_err));
+      }
+      return points;
+    }
+
+    // The eps canvas keeps a compact statistics box for quick visual QA.
+    SummaryGraphStats ComputeEpsGraphStats(const std::vector<EpsSummaryPoint> &points) {
+      SummaryGraphStats stats;
+      double sum_y = 0.0;
+      double sum_y2 = 0.0;
+      for (const EpsSummaryPoint &point : points) {
+        if (!point.valid || !std::isfinite(point.value)) {
+          continue;
+        }
+        ++stats.point_count;
+        sum_y += point.value;
+        sum_y2 += point.value * point.value;
+      }
+      if (stats.point_count == 0) {
+        return stats;
+      }
+      const double normalization = static_cast<double>(stats.point_count);
+      stats.mean_y = sum_y / normalization;
+      stats.rms_y = std::sqrt(std::max(0.0, sum_y2 / normalization - stats.mean_y * stats.mean_y));
+      return stats;
+    }
+
+    void ApplyReportGraphStyle(TGraphErrors &graph) {
+      constexpr int kReportGraphColor = 602;
+      constexpr int kReportMarkerStyle = 20;
+      graph.SetMarkerStyle(kReportMarkerStyle);
+      graph.SetMarkerSize(1.1);
+      graph.SetMarkerColor(kReportGraphColor);
+      graph.SetLineColor(kReportGraphColor);
+      graph.SetLineWidth(2);
+      graph.SetFillStyle(0);
+      graph.SetDrawOption("ALPE1");
+    }
+
+    void ApplyOverviewGraphStyle(TGraphErrors &graph) {
+      ApplyReportGraphStyle(graph);
+      graph.GetXaxis()->SetTitleSize(0.055);
+      graph.GetXaxis()->SetLabelSize(0.045);
+      graph.GetYaxis()->SetTitleSize(0.060);
+      graph.GetYaxis()->SetLabelSize(0.045);
+      graph.GetYaxis()->SetTitleOffset(1.15);
+    }
+
+    TPaveText *CreateSummaryInfoBox(const std::string &graph_name, const SummaryGraphStats &stats) {
+      auto *info_box = new TPaveText(0.63, 0.72, 0.89, 0.89, "NDC");
+      info_box->SetName((graph_name + "_summary_box").c_str());
+      info_box->SetBorderSize(1);
+      info_box->SetFillColor(0);
+      info_box->SetFillStyle(1001);
+      info_box->SetShadowColor(0);
+      info_box->SetTextAlign(12);
+      info_box->SetTextFont(42);
+      info_box->AddText(("Points: " + std::to_string(stats.point_count)).c_str());
+      info_box->AddText(("Mean(Y): " + FormatSummaryStat(stats.mean_y)).c_str());
+      info_box->AddText(("RMS(Y): " + FormatSummaryStat(stats.rms_y)).c_str());
+      return info_box;
+    }
+
+    TPaveText *CreateSourceParameterOverviewInfoBox(const LevyFitResult &representative_result) {
+      auto *info_box = new TPaveText(0.08, 0.08, 0.92, 0.92, "NDC");
+      info_box->SetName("source_parameters_overview_info_box");
+      info_box->SetBorderSize(0);
+      info_box->SetFillColor(0);
+      info_box->SetFillStyle(0);
+      info_box->SetShadowColor(0);
+      info_box->SetTextAlign(12);
+      info_box->SetTextFont(42);
+      info_box->SetTextSize(0.055);
+      info_box->AddText("Exp femto 3D fit source parameters");
+      info_box->AddText(("centrality: "
+                         + FormatRangeText(representative_result.cent_low, representative_result.cent_high))
+                            .c_str());
+      info_box->AddText(("m_{T}: " + FormatRangeText(representative_result.mt_low, representative_result.mt_high)
+                         + " GeV/c^{2}")
+                            .c_str());
+      info_box->AddText(BuildRelativePhiAxisTitle().c_str());
+      return info_box;
+    }
+
+    bool HasValidSummaryPoints(const std::vector<ReportSummaryPoint> &points) {
+      return std::any_of(points.begin(), points.end(), [](const ReportSummaryPoint &point) {
+        return point.valid && std::isfinite(point.phi_center) && std::isfinite(point.value);
+      });
+    }
+
+    std::unique_ptr<TGraphErrors> MakePhiSummaryGraph(const std::vector<ReportSummaryPoint> &points,
+                                                      const std::string &graph_name,
+                                                      const std::string &graph_title,
+                                                      const std::string &x_axis_title,
+                                                      const std::string &y_axis_title) {
+      const auto valid_count =
+          static_cast<int>(std::count_if(points.begin(), points.end(), [](const ReportSummaryPoint &point) {
+            return point.valid && std::isfinite(point.phi_center) && std::isfinite(point.value);
+          }));
+      if (valid_count == 0) {
+        return nullptr;
+      }
+
+      auto graph = std::make_unique<TGraphErrors>(valid_count);
+      graph->SetName(graph_name.c_str());
+      graph->SetTitle(graph_title.c_str());
+      graph->GetXaxis()->SetTitle(x_axis_title.c_str());
+      graph->GetYaxis()->SetTitle(y_axis_title.c_str());
+      ApplyReportGraphStyle(*graph);
+
+      int point_index = 0;
+      for (const ReportSummaryPoint &point : points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+        graph->SetPoint(point_index, point.phi_center, point.value);
+        graph->SetPointError(point_index,
+                             std::isfinite(point.phi_error) ? point.phi_error : 0.0,
+                             std::isfinite(point.error) ? point.error : 0.0);
+        ++point_index;
+      }
+      return graph;
+    }
+
+    // Match the Eventgen epsilon extraction: fit Rside2(phi) to a second-harmonic form.
+    HarmonicFitResult FitSideRadiusSecondHarmonic(const std::vector<ReportSummaryPoint> &rside_points) {
+      constexpr double kMinimumDeterminant = 1.0e-20;
+      int used_points = 0;
+      bool use_point_errors = true;
+      for (const ReportSummaryPoint &point : rside_points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+        ++used_points;
+        if (!std::isfinite(point.error) || point.error <= 0.0) {
+          use_point_errors = false;
+        }
+      }
+      if (used_points < 2) {
+        return {};
+      }
+
+      double sum_w = 0.0;
+      double sum_wc = 0.0;
+      double sum_wcc = 0.0;
+      double sum_wy = 0.0;
+      double sum_wcy = 0.0;
+      for (const ReportSummaryPoint &point : rside_points) {
+        if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+          continue;
+        }
+        const double cos2phi = std::cos(2.0 * point.phi_center);
+        const double weight = use_point_errors ? 1.0 / (point.error * point.error) : 1.0;
+        sum_w += weight;
+        sum_wc += weight * cos2phi;
+        sum_wcc += weight * cos2phi * cos2phi;
+        sum_wy += weight * point.value;
+        sum_wcy += weight * cos2phi * point.value;
+      }
+
+      const double determinant = sum_w * sum_wcc - sum_wc * sum_wc;
+      if (!std::isfinite(determinant) || std::abs(determinant) <= kMinimumDeterminant) {
+        return {};
+      }
+
+      HarmonicFitResult fit;
+      fit.intercept = (sum_wy * sum_wcc - sum_wcy * sum_wc) / determinant;
+      fit.harmonic_coefficient = (sum_w * sum_wcy - sum_wc * sum_wy) / determinant;
+      fit.intercept_variance = sum_wcc / determinant;
+      fit.harmonic_variance = sum_w / determinant;
+      fit.covariance = -sum_wc / determinant;
+
+      if (!use_point_errors && used_points > 2) {
+        double residual_sum2 = 0.0;
+        for (const ReportSummaryPoint &point : rside_points) {
+          if (!point.valid || !std::isfinite(point.phi_center) || !std::isfinite(point.value)) {
+            continue;
+          }
+          const double residual =
+              point.value - fit.intercept - fit.harmonic_coefficient * std::cos(2.0 * point.phi_center);
+          residual_sum2 += residual * residual;
+        }
+        const double residual_variance = residual_sum2 / static_cast<double>(used_points - 2);
+        fit.intercept_variance *= residual_variance;
+        fit.harmonic_variance *= residual_variance;
+        fit.covariance *= residual_variance;
+      }
+
+      fit.success = std::isfinite(fit.intercept) && std::isfinite(fit.harmonic_coefficient)
+                    && std::isfinite(fit.intercept_variance) && std::isfinite(fit.harmonic_variance)
+                    && std::isfinite(fit.covariance);
+      return fit;
+    }
+
+    // Convert the Rside2 harmonic fit into the plotted epsilon_f(mT) point.
+    std::optional<EpsSummaryPoint> ComputeEpsFromRsideSummaryPoints(
+        const std::vector<ReportSummaryPoint> &rside_points,
+        const LevyFitResult &representative_result) {
+      constexpr double kMinimumInterceptMagnitude = 1.0e-12;
+      const HarmonicFitResult fit = FitSideRadiusSecondHarmonic(rside_points);
+      if (!fit.success || std::abs(fit.intercept) <= kMinimumInterceptMagnitude) {
+        return std::nullopt;
+      }
+
+      EpsSummaryPoint point;
+      point.mt_center = 0.5 * (representative_result.mt_low + representative_result.mt_high);
+      point.mt_error = 0.5 * (representative_result.mt_high - representative_result.mt_low);
+      point.value = fit.harmonic_coefficient / fit.intercept;
+      const double ratio_variance =
+          (fit.harmonic_coefficient * fit.harmonic_coefficient * fit.intercept_variance)
+              / (fit.intercept * fit.intercept * fit.intercept * fit.intercept)
+          + fit.harmonic_variance / (fit.intercept * fit.intercept)
+          - (2.0 * fit.harmonic_coefficient * fit.covariance) / (fit.intercept * fit.intercept * fit.intercept);
+      point.error = std::isfinite(ratio_variance) ? std::sqrt(std::max(0.0, ratio_variance)) : 0.0;
+      point.valid = std::isfinite(point.mt_center) && std::isfinite(point.value) && std::isfinite(point.error);
+      return point.valid ? std::optional<EpsSummaryPoint>(point) : std::nullopt;
+    }
+
+    // Overview trend lines reuse the same constant/cosine/sine forms as R2 summary fits.
+    std::unique_ptr<TF1> BuildOverviewFitFunction(const std::string &name,
+                                                  const int parameter_index,
+                                                  const double phi_fit_min,
+                                                  const double phi_fit_max,
+                                                  const double initial_value) {
+      const bool alpha_panel = parameter_index < 0;
+      const bool sine_panel = parameter_index == 3 || parameter_index == 5;
+      const char *formula = alpha_panel ? "[0]" : (sine_panel ? "[0]+2.0*[1]*sin(2.0*x)"
+                                                              : "[0]+2.0*[1]*cos(2.0*x)");
+      auto fit_function = std::make_unique<TF1>(name.c_str(), formula, phi_fit_min, phi_fit_max);
+      fit_function->SetParameter(0, std::isfinite(initial_value) ? initial_value : 0.0);
+      if (!alpha_panel) {
+        fit_function->SetParameter(1, 0.0);
+      }
+      fit_function->SetLineColor(kRed + 1);
+      fit_function->SetLineWidth(3);
+      return fit_function;
+    }
+
+    void DrawOverviewGraph(TCanvas &canvas,
+                           const int pad_number,
+                           std::unique_ptr<TGraphErrors> graph,
+                           const int parameter_index,
+                           const bool uses_mapped_phi_range,
+                           std::vector<std::unique_ptr<TGraphErrors>> &owned_graphs,
+                           std::vector<std::unique_ptr<TF1>> &owned_fits) {
+      if (graph == nullptr) {
+        return;
+      }
+
+      TVirtualPad *pad = canvas.cd(pad_number);
+      if (pad == nullptr) {
+        return;
+      }
+
+      pad->SetTicks(1, 1);
+      pad->SetLeftMargin(0.16);
+      pad->SetRightMargin(0.06);
+      pad->SetBottomMargin(0.14);
+      pad->SetTopMargin(0.08);
+      ApplyOverviewGraphStyle(*graph);
+      graph->SetTitle("");
+      graph->Draw("ALPE1");
+
+      // Overview canvases carry the same harmonic trend line convention as the stored R2 summary fits.
+      double x = 0.0;
+      double y = 0.0;
+      graph->GetPoint(0, x, y);
+      const double phi_fit_min = uses_mapped_phi_range ? -TMath::Pi() / 2.0 : 0.0;
+      const double phi_fit_max = uses_mapped_phi_range ? TMath::Pi() / 2.0 : TMath::Pi();
+      const bool constant_panel = parameter_index < 0;
+      const int minimum_points = constant_panel ? 1 : 2;
+      if (graph->GetN() >= minimum_points) {
+        auto fit_function = BuildOverviewFitFunction(
+            std::string(graph->GetName()) + "_overview_fit", parameter_index, phi_fit_min, phi_fit_max, y);
+        graph->Fit(fit_function.get(), "QN");
+        fit_function->Draw("L SAME");
+        owned_fits.push_back(std::move(fit_function));
+      }
+      owned_graphs.push_back(std::move(graph));
     }
 
     double IntegralVisibleRange(TH3D *hist, const bool use_width = false) {
@@ -1951,6 +2392,177 @@ namespace exp_femto_3d {
       }
     }
 
+    // Write one publication-style source-parameter canvas for each fitted cent/mT group.
+    void WriteSourceParameterOverviewCanvases(TDirectory &directory, const std::vector<LevyFitResult> &results) {
+      const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
+      const std::array<std::string, 6> graph_names = {
+          "Rout2_vs_phi", "Rside2_vs_phi", "Rlong2_vs_phi", "Routside2_vs_phi", "Routlong2_vs_phi",
+          "Rsidelong2_vs_phi"};
+      const std::array<std::string, 6> graph_titles = {"R_{out}^{2}",
+                                                       "R_{side}^{2}",
+                                                       "R_{long}^{2}",
+                                                       "R_{outside}^{2}",
+                                                       "R_{outlong}^{2}",
+                                                       "R_{sidelong}^{2}"};
+      const std::string relative_phi_title = BuildRelativePhiAxisTitle();
+
+      for (const auto &entry : grouped_results) {
+        const std::vector<LevyFitResult> &group_results = entry.second;
+        if (group_results.empty()) {
+          continue;
+        }
+
+        bool has_drawable_panel = HasValidSummaryPoints(BuildAlphaSummaryPoints(group_results));
+        for (std::size_t radius_index = 0; radius_index < graph_names.size(); ++radius_index) {
+          has_drawable_panel =
+              has_drawable_panel || HasValidSummaryPoints(BuildRadiusSummaryPoints(group_results, radius_index));
+        }
+        if (!has_drawable_panel) {
+          continue;
+        }
+
+        TDirectory *cent_directory =
+            GetOrCreateDirectory(directory, BuildReportCentralityDirectory(group_results.front()));
+        TDirectory *mt_directory = GetOrCreateDirectory(*cent_directory, BuildReportMtDirectory(group_results.front()));
+        mt_directory->cd();
+
+        auto canvas =
+            std::make_unique<TCanvas>("source_parameters_overview_canvas", "Source parameter overview", 1200, 1800);
+        canvas->Divide(2, 4, 0.0, 0.0);
+        std::vector<std::unique_ptr<TGraphErrors>> owned_graphs;
+        std::vector<std::unique_ptr<TF1>> owned_fits;
+
+        TVirtualPad *info_pad = canvas->cd(1);
+        if (info_pad != nullptr) {
+          info_pad->SetLeftMargin(0.04);
+          info_pad->SetRightMargin(0.04);
+          info_pad->SetBottomMargin(0.04);
+          info_pad->SetTopMargin(0.04);
+          CreateSourceParameterOverviewInfoBox(group_results.front())->Draw();
+        }
+
+        DrawOverviewGraph(*canvas,
+                          2,
+                          MakePhiSummaryGraph(BuildAlphaSummaryPoints(group_results),
+                                              "alpha_vs_phi",
+                                              "#alpha vs " + relative_phi_title,
+                                              relative_phi_title,
+                                              "#alpha"),
+                          -1,
+                          group_results.front().fit_uses_symmetric_phi_range,
+                          owned_graphs,
+                          owned_fits);
+
+        // Keep the same visual panel order as the Eventgen overview: alpha first,
+        // then out/cross, side/cross, and long/cross rows.
+        constexpr std::array<std::size_t, 6> kOverviewRadiusOrder = {0U, 3U, 1U, 4U, 2U, 5U};
+        for (std::size_t order_index = 0; order_index < kOverviewRadiusOrder.size(); ++order_index) {
+          const std::size_t radius_index = kOverviewRadiusOrder[order_index];
+          DrawOverviewGraph(*canvas,
+                            static_cast<int>(order_index + 3U),
+                            MakePhiSummaryGraph(BuildRadiusSummaryPoints(group_results, radius_index),
+                                                graph_names[radius_index],
+                                                graph_titles[radius_index] + " vs " + relative_phi_title,
+                                                relative_phi_title,
+                                                graph_titles[radius_index] + " [fm^{2}]"),
+                            static_cast<int>(radius_index),
+                            group_results.front().fit_uses_symmetric_phi_range,
+                            owned_graphs,
+                            owned_fits);
+        }
+
+        canvas->Modified();
+        canvas->Update();
+        canvas->Write("", TObject::kOverwrite);
+        directory.cd();
+      }
+    }
+
+    // Write one epsilon_f(mT) summary graph per centrality from the side-radius harmonic fits.
+    void WriteEpsVsMtGraphs(TDirectory &directory, const std::vector<LevyFitResult> &results) {
+      EpsSummaryMap eps_summary_points;
+      std::map<int, std::string> centrality_directory_names;
+      const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
+      for (const auto &entry : grouped_results) {
+        const std::vector<LevyFitResult> &group_results = entry.second;
+        if (group_results.empty()) {
+          continue;
+        }
+        constexpr std::size_t kSideRadiusIndex = 1U;
+        const std::optional<EpsSummaryPoint> eps_point =
+            ComputeEpsFromRsideSummaryPoints(BuildRadiusSummaryPoints(group_results, kSideRadiusIndex),
+                                             group_results.front());
+        if (eps_point.has_value() && eps_point->valid) {
+          eps_summary_points[group_results.front().centrality_index].push_back(*eps_point);
+          centrality_directory_names[group_results.front().centrality_index] =
+              BuildReportCentralityDirectory(group_results.front());
+        }
+      }
+
+      for (auto &entry : eps_summary_points) {
+        auto &points = entry.second;
+        std::sort(points.begin(), points.end(), [](const EpsSummaryPoint &left, const EpsSummaryPoint &right) {
+          return left.mt_center < right.mt_center;
+        });
+        const auto valid_count =
+            static_cast<int>(std::count_if(points.begin(), points.end(), [](const EpsSummaryPoint &point) {
+              return point.valid && std::isfinite(point.mt_center) && std::isfinite(point.value);
+            }));
+        if (valid_count == 0) {
+          continue;
+        }
+
+        TDirectory *cent_directory = GetOrCreateDirectory(directory, centrality_directory_names[entry.first]);
+        auto graph = std::make_unique<TGraphErrors>(valid_count);
+        graph->SetName("epsf_vs_mt");
+        graph->SetTitle("#epsilon_{f} vs m_{T}");
+        graph->GetXaxis()->SetTitle("m_{T} [GeV/c^{2}]");
+        graph->GetYaxis()->SetTitle("#epsilon_{f} = 2R_{s,2}^{2}/R_{s,0}^{2}");
+        ApplyReportGraphStyle(*graph);
+
+        int point_index = 0;
+        for (const EpsSummaryPoint &point : points) {
+          if (!point.valid || !std::isfinite(point.mt_center) || !std::isfinite(point.value)) {
+            continue;
+          }
+          graph->SetPoint(point_index, point.mt_center, point.value);
+          graph->SetPointError(point_index,
+                               std::isfinite(point.mt_error) ? point.mt_error : 0.0,
+                               std::isfinite(point.error) ? point.error : 0.0);
+          ++point_index;
+        }
+
+        cent_directory->cd();
+        auto canvas = std::make_unique<TCanvas>("epsf_vs_mt_canvas", "#epsilon_{f} vs m_{T}", 800, 600);
+        canvas->SetTicks(1, 1);
+        graph->Draw("ALPE1");
+        CreateSummaryInfoBox("epsf_vs_mt", ComputeEpsGraphStats(points))->Draw();
+        canvas->Modified();
+        canvas->Update();
+        graph->Write("", TObject::kOverwrite);
+        canvas->Write("", TObject::kOverwrite);
+        directory.cd();
+      }
+    }
+
+    // The standalone report file is independent of the detailed per-slice fit ROOT file.
+    void WriteFitReportRootFile(const std::string &fit_report_root_path,
+                                const std::vector<LevyFitResult> &fit_results) {
+      CreateOrResetRootFile(fit_report_root_path);
+      auto output_file = OpenRootFile(fit_report_root_path, "UPDATE");
+
+      // The report file is summary-only: it mirrors the legacy summary products
+      // and adds canvases grouped by centrality and mT.
+      WriteFitCatalogTree(*output_file, fit_results);
+      WriteR2Graphs(*output_file, fit_results);
+      auto *source_parameters_directory = GetOrCreateDirectoryPath(*output_file, "source_parameters");
+      WriteSourceParameterOverviewCanvases(*source_parameters_directory, fit_results);
+      auto *eps_directory = GetOrCreateDirectoryPath(*output_file, "eps_vs_mt");
+      WriteEpsVsMtGraphs(*eps_directory, fit_results);
+      output_file->Write();
+      output_file->Close();
+    }
+
   }  // namespace
 
   BuildCfRunStatistics RunBuildCf(const ApplicationConfig &config, const Logger &logger) {
@@ -2223,11 +2835,19 @@ namespace exp_femto_3d {
                           const std::optional<FitModel> override_model,
                           const std::optional<std::string> input_cf_root_path) {
     EnsureDirectoryExists(config.output.output_directory);
+    EnsureDirectoryExists(config.output.fit_report_directory);
     const std::string cf_root_path = input_cf_root_path.has_value()
                                          ? ResolvePath(config.output.output_directory, *input_cf_root_path)
                                          : ResolvePath(config.output.output_directory, config.output.cf_root_name);
     const std::string fit_root_path = ResolvePath(config.output.output_directory, config.output.fit_root_name);
     const std::string fit_summary_path = ResolvePath(config.output.output_directory, config.output.fit_summary_name);
+    const std::string fit_report_root_path =
+        ResolvePath(config.output.fit_report_directory, config.output.fit_report_root_name);
+    if (PathsReferToSameLocation(fit_report_root_path, fit_root_path)
+        || PathsReferToSameLocation(fit_report_root_path, cf_root_path)) {
+      throw std::runtime_error(
+          "output.fit_report_root_name must resolve to a file distinct from the CF and detailed fit ROOT files.");
+    }
 
     CreateOrResetRootFile(fit_root_path);
     const bool old_add_directory = TH1::AddDirectoryStatus();
@@ -2325,6 +2945,7 @@ namespace exp_femto_3d {
       output_file->Close();
     }
     WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
+    WriteFitReportRootFile(fit_report_root_path, fit_results);
 
     progress.Finish();
     TH1::AddDirectory(old_add_directory);

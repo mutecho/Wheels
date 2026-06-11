@@ -196,6 +196,10 @@ namespace exp_femto_3d {
     config.output.cf_root_name = ReadOptionalString(output, "cf_root_name", config.output.cf_root_name);
     config.output.fit_root_name = ReadOptionalString(output, "fit_root_name", config.output.fit_root_name);
     config.output.fit_summary_name = ReadOptionalString(output, "fit_summary_name", config.output.fit_summary_name);
+    config.output.fit_report_directory =
+        ReadOptionalString(output, "fit_report_directory", config.output.fit_report_directory);
+    config.output.fit_report_root_name =
+        ReadOptionalString(output, "fit_report_root_name", config.output.fit_report_root_name);
     config.output.log_level = ParseLogLevel(ReadOptionalString(output, "log_level", ToString(config.output.log_level)));
 
     config.build.map_pair_phi_to_symmetric_range =
@@ -254,6 +258,13 @@ namespace exp_femto_3d {
     if (config.output.output_directory.empty()) {
       throw ConfigError("output.output_directory is required.");
     }
+    // Keep older configs valid while exposing an independently configurable report path.
+    if (config.output.fit_report_directory.empty()) {
+      config.output.fit_report_directory = config.output.output_directory;
+    }
+    if (config.output.fit_report_root_name.empty()) {
+      throw ConfigError("output.fit_report_root_name is required.");
+    }
     if (config.fit.options.fit_q_max <= 0.0 || !std::isfinite(config.fit.options.fit_q_max)) {
       throw ConfigError("fit.fit_q_max must be finite and positive.");
     }
@@ -285,6 +296,7 @@ namespace exp_femto_3d {
     EnsureExtension(config.output.cf_root_name, ".root");
     EnsureExtension(config.output.fit_root_name, ".root");
     EnsureExtension(config.output.fit_summary_name, ".tsv");
+    EnsureExtension(config.output.fit_report_root_name, ".root");
   }
 
   std::string ToString(const LogLevel level) {

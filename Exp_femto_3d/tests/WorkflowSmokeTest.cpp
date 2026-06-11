@@ -75,6 +75,7 @@ namespace {
                           const std::string &cf_root_name,
                           const std::string &fit_root_name,
                           const std::string &fit_summary_name,
+                          const std::string &fit_report_root_name,
                           const bool build_map_pair_phi_to_symmetric_range,
                           const std::optional<bool> fit_map_pair_phi_to_symmetric_range) {
     std::ofstream output(path);
@@ -89,6 +90,8 @@ namespace {
     output << "cf_root_name = \"" << cf_root_name << "\"\n";
     output << "fit_root_name = \"" << fit_root_name << "\"\n";
     output << "fit_summary_name = \"" << fit_summary_name << "\"\n";
+    output << "fit_report_directory = \"" << output_dir << "\"\n";
+    output << "fit_report_root_name = \"" << fit_report_root_name << "\"\n";
     output << "log_level = \"error\"\n\n";
     output << "[build]\n";
     output << "map_pair_phi_to_symmetric_range = " << (build_map_pair_phi_to_symmetric_range ? "true" : "false") << "\n";
@@ -160,6 +163,21 @@ namespace {
     return {fit_function->GetXmin(), fit_function->GetXmax()};
   }
 
+  void ExpectReportOutputs(const std::filesystem::path &fit_report_root_path) {
+    TFile report_file(fit_report_root_path.string().c_str(), "READ");
+    Expect(!report_file.IsZombie(), "fit report ROOT file should be readable");
+    Expect(report_file.Get("meta/FitCatalog") != nullptr, "fit report should include FitCatalog summary fields");
+    Expect(report_file.Get("summary/R2_vs_phi/cent_0.00-10.00__mt_0.20-0.40/Rside2_vs_phi") != nullptr,
+           "fit report should include legacy R2 summary graphs");
+    Expect(report_file.Get("source_parameters/cent_0.00-10.00/mt_0.20-0.40/source_parameters_overview_canvas")
+               != nullptr,
+           "fit report should include source parameter overview canvas");
+    Expect(report_file.Get("eps_vs_mt/cent_0.00-10.00/epsf_vs_mt") != nullptr,
+           "fit report should include eps vs mt graph");
+    Expect(report_file.Get("eps_vs_mt/cent_0.00-10.00/epsf_vs_mt_canvas") != nullptr,
+           "fit report should include eps vs mt canvas");
+  }
+
 }  // namespace
 
 int main() {
@@ -176,6 +194,7 @@ int main() {
                                                             "mapped_cf.root",
                                                             "mapped_follow_fit.root",
                                                             "mapped_follow.tsv",
+                                                            "mapped_follow_report.root",
                                                             true,
                                                             std::nullopt);
   const ApplicationConfig mapped_follow_config = LoadApplicationConfig(mapped_follow_config_path);
@@ -188,6 +207,25 @@ int main() {
   Expect(mapped_cf_file.Get("meta/SliceCatalog") != nullptr, "mapped SliceCatalog missing");
   Expect(mapped_cf_file.Get("slices") != nullptr, "mapped slices directory missing");
 
+  const std::string report_collision_config_path = WriteConfig(temp_dir / "report_collision.toml",
+                                                               input_root,
+                                                               temp_dir.string(),
+                                                               "mapped_cf.root",
+                                                               "report_collision_fit.root",
+                                                               "report_collision.tsv",
+                                                               "report_collision_fit.root",
+                                                               true,
+                                                               std::nullopt);
+  const ApplicationConfig report_collision_config = LoadApplicationConfig(report_collision_config_path);
+  bool saw_report_collision = false;
+  try {
+    (void)RunFit(report_collision_config, logger);
+  } catch (const std::runtime_error &error) {
+    saw_report_collision = std::string(error.what()).find("distinct from the CF and detailed fit ROOT files")
+                           != std::string::npos;
+  }
+  Expect(saw_report_collision, "fit report path must not overwrite the detailed fit ROOT file");
+
   const FitCatalogInspection mapped_follow_inspection = InspectFitCatalog(temp_dir / "mapped_follow_fit.root");
   Expect(mapped_follow_inspection.fit_uses_symmetric_phi_range,
          "fit should follow the mapped CF metadata when no fit override is given");
@@ -197,6 +235,7 @@ int main() {
          "mapped follow phi fit minimum should be -pi/2");
   Expect(std::abs(mapped_follow_phi_range.second - TMath::Pi() / 2.0) < 1.0e-6,
          "mapped follow phi fit maximum should be pi/2");
+  ExpectReportOutputs(temp_dir / "mapped_follow_report.root");
 
   const std::string mapped_override_raw_config_path = WriteConfig(temp_dir / "mapped_override_raw.toml",
                                                                   input_root,
@@ -204,6 +243,7 @@ int main() {
                                                                   "mapped_cf.root",
                                                                   "mapped_override_raw_fit.root",
                                                                   "mapped_override_raw.tsv",
+                                                                  "mapped_override_raw_report.root",
                                                                   false,
                                                                   false);
   const ApplicationConfig mapped_override_raw_config = LoadApplicationConfig(mapped_override_raw_config_path);
@@ -229,6 +269,7 @@ int main() {
                                                                   "raw_cf.root",
                                                                   "raw_override_mapped_fit.root",
                                                                   "raw_override_mapped.tsv",
+                                                                  "raw_override_mapped_report.root",
                                                                   false,
                                                                   true);
   const ApplicationConfig raw_override_mapped_config = LoadApplicationConfig(raw_override_mapped_config_path);

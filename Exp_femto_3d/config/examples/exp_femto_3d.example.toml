@@ -10,6 +10,8 @@ output_directory = "/absolute/path/to/output"
 cf_root_name = "cf_output.root"
 fit_root_name = "fit_output.root"
 fit_summary_name = "fit_summary.tsv"
+fit_report_directory = "/absolute/path/to/report-output"
+fit_report_root_name = "fit_report.root"
 log_level = "info"
 
 [build]

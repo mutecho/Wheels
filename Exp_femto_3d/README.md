@@ -29,8 +29,8 @@ directory as `build/compile_commands.json`.
 ## Run
 
 ```bash
-./bin/exp_femto_3d build-cf --config config/examples/pbpb_build_and_fit.toml
-./bin/exp_femto_3d fit --config config/examples/pbpb_build_and_fit.toml
+./bin/exp_femto_3d build-cf --config config/pbpb_build_and_fit.toml
+./bin/exp_femto_3d fit --config config/pbpb_build_and_fit.toml
 ```
 
 Optional fit overrides:
@@ -38,12 +38,22 @@ Optional fit overrides:
 - `--model full|diag`
 - `--input-cf-root /absolute/or/relative/path.root`
 
+Independent fit-report output:
+
+- `[output].fit_report_directory`
+- `[output].fit_report_root_name`
+- these fields control the standalone ROOT report file produced by `fit`; when
+  `fit_report_directory` is omitted, it defaults to `output_directory`
+
 TOML progress control:
 
 - `[build].progress`
 - `[fit].progress`
 - accepted values: `true`, `false`, or `"auto"` (also `"enabled"` / `"disabled"`)
 - default when omitted: `"auto"`; the bar only appears when `stderr` is attached to a TTY
+- enabled progress lines include the stage label, percentage, an activity frame,
+  and an ETA computed from completed slices; a heartbeat refreshes the line once
+  per second during long ROOT operations
 
 Phi mapping control:
 
@@ -76,6 +86,11 @@ Mixed-event denominator control:
   `false`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
   `fits/<slice_id>/...`, `summary/R2_vs_phi/...`, and `fit_summary.tsv`
+- `fit` also writes the standalone report ROOT file configured by
+  `fit_report_directory` and `fit_report_root_name`; this report mirrors
+  `meta/FitCatalog` and `summary/R2_vs_phi/...`, adds
+  `source_parameters/<cent>/<mt>/source_parameters_overview_canvas`, and adds
+  `eps_vs_mt/<cent>/epsf_vs_mt(_canvas)` summaries
 
 ## Test Notes
 

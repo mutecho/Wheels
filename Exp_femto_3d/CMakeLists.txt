@@ -18,6 +18,7 @@ if(CMAKE_CONFIGURATION_TYPES)
   endforeach()
 endif()
 
+find_package(Threads REQUIRED)
 find_package(ROOT REQUIRED COMPONENTS Core RIO Hist Graf Gpad Tree TreePlayer MathCore Minuit)
 find_package(tomlplusplus CONFIG REQUIRED
   HINTS
@@ -48,6 +49,7 @@ target_link_libraries(exp_femto_3d_core
     ROOT::TreePlayer
     ROOT::MathCore
     ROOT::Minuit
+    Threads::Threads
     tomlplusplus::tomlplusplus
 )
 
@@ -79,6 +81,20 @@ target_link_libraries(config_parse_validation_test
 add_test(
   NAME config_parse_validation_test
   COMMAND config_parse_validation_test
+)
+
+add_executable(progress_render_test
+  tests/ProgressRenderTest.cpp
+)
+
+target_link_libraries(progress_render_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME progress_render_test
+  COMMAND progress_render_test
 )
 
 add_executable(root_runtime_probe

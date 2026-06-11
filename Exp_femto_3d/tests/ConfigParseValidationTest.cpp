@@ -41,6 +41,8 @@ output_directory = "/tmp/out"
 cf_root_name = "cf"
 fit_root_name = "fit"
 fit_summary_name = "summary"
+fit_report_directory = "/tmp/report"
+fit_report_root_name = "report"
 log_level = "debug"
 
 [build]
@@ -76,6 +78,8 @@ max = 0.4
   Expect(config.fit_centrality_bins.size() == 1, "fit centrality fallback failed");
   Expect(config.output.cf_root_name == "cf.root", "root extension normalization failed");
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
+  Expect(config.output.fit_report_directory == "/tmp/report", "fit report directory should parse");
+  Expect(config.output.fit_report_root_name == "report.root", "fit report root extension normalization failed");
   Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
@@ -141,6 +145,10 @@ max = 0.6
   Expect(overlapping_config.mt_bins.size() == 3, "overlapping mt bins should be accepted");
   Expect(overlapping_config.fit_centrality_bins.size() == 1, "fit selection centrality should parse");
   Expect(overlapping_config.fit_mt_bins.size() == 2, "fit selection mt should parse");
+  Expect(overlapping_config.output.fit_report_directory == "/tmp/out",
+         "fit report directory should default to output directory");
+  Expect(overlapping_config.output.fit_report_root_name == "fit_report.root",
+         "fit report root name should default");
   Expect(!overlapping_config.build.split_mixed_event_by_phi, "ME phi split should default to false");
   Expect(overlapping_config.build.progress == ProgressMode::kAuto, "build progress should default to auto");
   Expect(overlapping_config.fit.progress == ProgressMode::kAuto, "fit progress should default to auto");

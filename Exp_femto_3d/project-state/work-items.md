@@ -13,4 +13,5 @@
   - both phi conventions are checked: follow-input mapping and explicit
     fit-side override
   - key fit parameters and `R2_vs_phi` trends remain acceptable
-
+  - standalone fit report ROOT file contains the expected source-parameter
+    overview canvases and `eps_vs_mt` graphs for the real selected cent/mT bins

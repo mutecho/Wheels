@@ -10,6 +10,8 @@ output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
 cf_root_name = "EP_dependence_CF_23zzh_pass5_medium.root"
 fit_root_name = "EP_dependence_CF_full_fit_v2_23zzh_pass5_medium.root"
 fit_summary_name = "fit_summary.tsv"
+fit_report_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb"
+fit_report_root_name = "EP_dependence_CF_full_fit_report_23zzh_pass5_medium.root"
 log_level = "info"
 
 [build]

@@ -120,6 +120,9 @@
 
   其中 `"auto"` 表示只有在 `stderr` 连接到 TTY 时才显示进度条。
 
+  当前进度条会显示 stage label、百分比、活动帧和 ETA；启用时还有 1 秒心跳，
+  长时间 ROOT 操作没有完成新 slice 时也会继续刷新运行提示。
+
 - `[fit].map_pair_phi_to_symmetric_range`
 
   这是一个可选覆盖项。
@@ -216,9 +219,9 @@ alienv setenv O2Physics/latest-master-o2 -c sh -lc '
 - fit 侧可跟随输入 CF metadata，也可显式覆盖 phi 映射语义
 - build 侧可通过 `build.split_mixed_event_by_phi` 选择保留积分 ME 分母或让
   ME 分母跟随 SE phi 切片
-- progress mode 配置支持 `true` / `false` / `"auto"`
-- 本地 unit / integration smoke tests；`2026-05-18` O2Physics ROOT executor
-  `ctest --output-on-failure` 三项全通过
+- progress mode 配置支持 `true` / `false` / `"auto"`，进度条显示活动帧和 ETA
+- 本地 unit / integration smoke tests；`2026-06-10` O2Physics ROOT executor
+  `ctest --output-on-failure` 四项全通过
 - ROOT 调用失败模式诊断文档化
 - `2026-04-19` 非沙箱 O2Physics `ctest` 三项全通过
 
