@@ -58,46 +58,45 @@ max = 80
 min = 80
 max = 100
 
+[[bins.mt]]
+min = 0.0
+max = 0.519
 
 [[bins.mt]]
-min = 0.2
-max = 0.4
+min = 0.519
+max = 0.812
 
 [[bins.mt]]
-min = 0.4
-max = 0.6
+min = 0.812
+max = 1.208
 
 [[bins.mt]]
-min = 0.6
-max = 0.8
+min = 1.208
+max = 1.606
 
 [[bins.mt]]
-min = 0.8
-max = 1.1
+min = 1.606
+max = 2.005
 
 [[bins.mt]]
-min = 1.1
-max = 1.6
+min = 2.005
+max = 2.504
 
-# [[bins.mt]]
-# min = 2.005
-# max = 2.504
+[[bins.mt]]
+min = 2.504
+max = 3.003
 
-# [[bins.mt]]
-# min = 2.504
-# max = 3.003
+[[bins.mt]]
+min = 3.003
+max = 4.002
 
-# [[bins.mt]]
-# min = 3.003
-# max = 4.002
+[[bins.mt]]
+min = 4.002
+max = 5.002
 
-# [[bins.mt]]
-# min = 4.002
-# max = 5.002
-
-# [[bins.mt]]
-# min = 5.002
-# max = 8.001
+[[bins.mt]]
+min = 5.002
+max = 8.001
 
 [[fit_selection.centrality]]
 min = 0
@@ -113,21 +112,17 @@ max = 50
 
 
 [[fit_selection.mt]]
-min = 0.2
-max = 0.4
+min = 0.0
+max = 0.519
 
 [[fit_selection.mt]]
-min = 0.4
-max = 0.6
+min = 0.519
+max = 0.812
 
 [[fit_selection.mt]]
-min = 0.6
-max = 0.8
+min = 0.812
+max = 1.208
 
 [[fit_selection.mt]]
-min = 0.8
-max = 1.1
-
-[[fit_selection.mt]]
-min = 1.1
-max = 1.6
+min = 1.208
+max = 1.606
