@@ -23,7 +23,8 @@ progress = "auto"   # 也可写 true / false
 
 [fit]
 model = "full"
-use_coulomb = true
+coulomb_mode = "gamow"
+# legacy equivalent still accepted: use_coulomb = true
 use_core_halo_lambda = true
 use_q2_baseline = true
 use_pml = true

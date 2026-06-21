@@ -30,6 +30,33 @@ namespace exp_femto_3d {
     kDisabled,
   };
 
+  enum class CoulombMode {
+    kNone,
+    kGamow,
+    kFiniteSource,
+  };
+
+  enum class FiniteSourceMode {
+    kFixed1D,
+    kIterative1D,
+  };
+
+  inline bool UsesCoulomb(const CoulombMode mode) {
+    return mode != CoulombMode::kNone;
+  }
+
+  inline int CoulombModeCode(const CoulombMode mode) {
+    switch (mode) {
+      case CoulombMode::kNone:
+        return 0;
+      case CoulombMode::kGamow:
+        return 1;
+      case CoulombMode::kFiniteSource:
+        return 2;
+    }
+    return 0;
+  }
+
   struct RangeBin {
     double min = 0.0;
     double max = 0.0;
@@ -67,7 +94,8 @@ namespace exp_femto_3d {
   };
 
   struct LevyFitOptions {
-    bool use_coulomb = false;
+    CoulombMode coulomb_mode = CoulombMode::kNone;
+    FiniteSourceMode finite_source_mode = FiniteSourceMode::kFixed1D;
     bool use_core_halo_lambda = true;
     bool use_q2_baseline = false;
     bool use_pml = false;
@@ -163,9 +191,29 @@ namespace exp_femto_3d {
     int minuit_istat = -1;
     bool has_off_diagonal = false;
     bool uses_coulomb = false;
+    std::string coulomb_mode = "none";
+    std::string finite_source_mode;
+    double finite_source_radius_fm = std::numeric_limits<double>::quiet_NaN();
     bool uses_core_halo_lambda = true;
     bool uses_q2_baseline = false;
     bool uses_pml = false;
+  };
+
+  struct CoulombKernelCatalogEntry {
+    std::string group_id;
+    int centrality_index = -1;
+    int mt_index = -1;
+    double cent_low = 0.0;
+    double cent_high = 0.0;
+    double mt_low = 0.0;
+    double mt_high = 0.0;
+    std::string finite_source_mode;
+    double seed_radius_fm = std::numeric_limits<double>::quiet_NaN();
+    double final_radius_fm = std::numeric_limits<double>::quiet_NaN();
+    bool cats_enabled = false;
+    double kstar_min_mev = std::numeric_limits<double>::quiet_NaN();
+    double kstar_max_mev = std::numeric_limits<double>::quiet_NaN();
+    int kstar_bin_count = 0;
   };
 
   struct BuildCfRunStatistics {

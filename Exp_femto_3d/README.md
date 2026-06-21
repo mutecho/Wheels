@@ -38,6 +38,17 @@ Optional fit overrides:
 - `--model full|diag`
 - `--input-cf-root /absolute/or/relative/path.root`
 
+Coulomb fit modes:
+
+- `[fit].coulomb_mode = "none" | "gamow" | "finite_source"`
+- `[fit].finite_source_mode = "fixed_1d" | "iterative_1d"` is only valid with
+  `coulomb_mode = "finite_source"`
+- older `[fit].use_coulomb = false|true` configs remain accepted and map to
+  `none` and `gamow`; when both fields are present they must agree
+- finite-source mode uses local CATS support when CMake finds
+  `/Users/allenzhou/Research_software/CATS/install` and Homebrew GSL; builds
+  without CATS still support `none` and `gamow`
+
 Independent fit-report output:
 
 - `[output].fit_report_directory`
@@ -85,7 +96,8 @@ Mixed-event denominator control:
   `split_mixed_event_by_phi`, with older catalogs defaulting the latter to
   `false`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
-  `fits/<slice_id>/...`, `summary/R2_vs_phi/...`, and `fit_summary.tsv`
+  `meta/CoulombKernelCatalog`, `fits/<slice_id>/...`, `summary/R2_vs_phi/...`,
+  and `fit_summary.tsv`
 - `fit` also writes the standalone report ROOT file configured by
   `fit_report_directory` and `fit_report_root_name`; this report mirrors
   `meta/FitCatalog` and `summary/R2_vs_phi/...`, adds

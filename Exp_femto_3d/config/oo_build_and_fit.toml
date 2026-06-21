@@ -1,6 +1,6 @@
 [input]
-# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_merged.root"
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2.root"
+# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root"
 task_name = "femto-dream-pair-task-track-track"
 same_event_subtask = "SameEvent_3Dqn"
 mixed_event_subtask = "MixedEvent_3Dqn"
@@ -8,16 +8,22 @@ sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
 
 [output]
 output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
-# cf_root_name = "EP_dependence_CF_3d_25ae_pass2.root"
-cf_root_name = "EP_dependence_CF_3d_25ae_pass2_small.root"
+cf_root_name = "EP_dependence_CF_3d_25ae_pass2.root"
+# cf_root_name = "EP_dependence_CF_3d_25ae_pass2_small.root"
 # fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root"
 # fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root"
-fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root"
-fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold.tsv"
+# fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_nocol.root"
+fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul.root"
+# fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root"
+# fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold.tsv"
+# fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_nocol.tsv"
+fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_fcoul.tsv"
 fit_report_directory = "/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/res"
 # fit_report_root_name = "fit_report_3d_25ae_pass2.root"
 # fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold.root"
-fit_report_root_name = "fit_report_3d_25ae_pass2_small_nonfold.root"
+# fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_nocol.root"
+fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul.root"
+# fit_report_root_name = "fit_report_3d_25ae_pass2_small_nonfold.root"
 log_level = "warn"
 
 [build]
@@ -29,7 +35,10 @@ split_mixed_event_by_phi = true
 
 [fit]
 model = "full"
-use_coulomb = true
+coulomb_mode = "finite_source"
+# coulomb_mode = "none"|"gamow"|"finite_source"
+finite_source_mode = "iterative_1d"
+# finite_source_mode = "fixed_1d"|"iterative_1d"
 use_core_halo_lambda = true
 use_q2_baseline = true
 use_pml = true

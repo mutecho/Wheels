@@ -26,6 +26,32 @@ find_package(tomlplusplus CONFIG REQUIRED
     /opt/homebrew/opt/tomlplusplus
 )
 
+option(EXP_FEMTO_3D_ENABLE_CATS "Enable optional CATS finite-source Coulomb support" ON)
+set(EXP_FEMTO_3D_CATS_ROOT "/Users/allenzhou/Research_software/CATS" CACHE PATH "Local CATS installation root")
+set(EXP_FEMTO_3D_GSL_ROOT "/opt/homebrew/opt/gsl" CACHE PATH "Local GSL installation root")
+set(EXP_FEMTO_3D_HAS_CATS OFF)
+if(EXP_FEMTO_3D_ENABLE_CATS)
+  set(EXP_FEMTO_3D_CATS_INCLUDE_DIR "${EXP_FEMTO_3D_CATS_ROOT}/install/include")
+  set(EXP_FEMTO_3D_CATS_LIBRARY "${EXP_FEMTO_3D_CATS_ROOT}/install/lib/libCATS.dylib")
+  find_package(GSL QUIET HINTS "${EXP_FEMTO_3D_GSL_ROOT}")
+  set(EXP_FEMTO_3D_GSL_INCLUDE_DIR "${EXP_FEMTO_3D_GSL_ROOT}/include")
+  set(EXP_FEMTO_3D_GSL_LIBRARY "${EXP_FEMTO_3D_GSL_ROOT}/lib/libgsl.dylib")
+  set(EXP_FEMTO_3D_GSLCBLAS_LIBRARY "${EXP_FEMTO_3D_GSL_ROOT}/lib/libgslcblas.dylib")
+  set(EXP_FEMTO_3D_GSL_AVAILABLE ${GSL_FOUND})
+  if(NOT EXP_FEMTO_3D_GSL_AVAILABLE
+      AND EXISTS "${EXP_FEMTO_3D_GSL_INCLUDE_DIR}/gsl/gsl_sf_coulomb.h"
+      AND EXISTS "${EXP_FEMTO_3D_GSL_LIBRARY}"
+      AND EXISTS "${EXP_FEMTO_3D_GSLCBLAS_LIBRARY}")
+    set(EXP_FEMTO_3D_GSL_AVAILABLE ON)
+  endif()
+  if(EXISTS "${EXP_FEMTO_3D_CATS_INCLUDE_DIR}/CATS.h" AND EXISTS "${EXP_FEMTO_3D_CATS_LIBRARY}" AND EXP_FEMTO_3D_GSL_AVAILABLE)
+    set(EXP_FEMTO_3D_HAS_CATS ON)
+    message(STATUS "CATS finite-source Coulomb support enabled: ${EXP_FEMTO_3D_CATS_LIBRARY}")
+  else()
+    message(STATUS "CATS finite-source Coulomb support disabled; none/gamow modes remain available")
+  endif()
+endif()
+
 add_library(exp_femto_3d_core
   src/Config.cpp
   src/Logging.cpp
@@ -53,6 +79,22 @@ target_link_libraries(exp_femto_3d_core
     tomlplusplus::tomlplusplus
 )
 
+if(EXP_FEMTO_3D_HAS_CATS)
+  target_compile_definitions(exp_femto_3d_core PUBLIC EXP_FEMTO_3D_HAS_CATS=1)
+  target_include_directories(exp_femto_3d_core PUBLIC "${EXP_FEMTO_3D_CATS_INCLUDE_DIR}")
+  if(GSL_FOUND)
+    target_link_libraries(exp_femto_3d_core PUBLIC "${EXP_FEMTO_3D_CATS_LIBRARY}" GSL::gsl GSL::gslcblas)
+  else()
+    target_include_directories(exp_femto_3d_core PUBLIC "${EXP_FEMTO_3D_GSL_INCLUDE_DIR}")
+    target_link_libraries(exp_femto_3d_core PUBLIC
+      "${EXP_FEMTO_3D_CATS_LIBRARY}"
+      "${EXP_FEMTO_3D_GSL_LIBRARY}"
+      "${EXP_FEMTO_3D_GSLCBLAS_LIBRARY}"
+    )
+  endif()
+  set_property(TARGET exp_femto_3d_core APPEND PROPERTY BUILD_RPATH "${EXP_FEMTO_3D_CATS_ROOT}/install/lib")
+endif()
+
 target_compile_options(exp_femto_3d_core
   PRIVATE
     -Wall
@@ -67,6 +109,21 @@ add_executable(exp_femto_3d
 target_link_libraries(exp_femto_3d
   PRIVATE
     exp_femto_3d_core
+)
+
+
+add_executable(coulomb_kernel_validation_test
+  tests/CoulombKernelValidationTest.cpp
+)
+
+target_link_libraries(coulomb_kernel_validation_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME coulomb_kernel_validation_test
+  COMMAND coulomb_kernel_validation_test
 )
 
 add_executable(config_parse_validation_test

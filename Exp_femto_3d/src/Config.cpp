@@ -213,7 +213,27 @@ namespace exp_femto_3d {
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
-    config.fit.options.use_coulomb = ReadOptionalBool(fit, "use_coulomb", config.fit.options.use_coulomb);
+    const std::optional<bool> legacy_use_coulomb = ReadOptionalNullableBool(fit, "use_coulomb");
+    const auto explicit_coulomb_mode = fit["coulomb_mode"].value<std::string>();
+    if (explicit_coulomb_mode.has_value()) {
+      config.fit.options.coulomb_mode = ParseCoulombMode(*explicit_coulomb_mode);
+      if (legacy_use_coulomb.has_value()) {
+        const CoulombMode legacy_mode = *legacy_use_coulomb ? CoulombMode::kGamow : CoulombMode::kNone;
+        if (legacy_mode != config.fit.options.coulomb_mode) {
+          throw ConfigError("Conflicting fit.use_coulomb and fit.coulomb_mode values.");
+        }
+      }
+    } else if (legacy_use_coulomb.has_value()) {
+      config.fit.options.coulomb_mode = *legacy_use_coulomb ? CoulombMode::kGamow : CoulombMode::kNone;
+    }
+
+    const auto explicit_finite_source_mode = fit["finite_source_mode"].value<std::string>();
+    if (explicit_finite_source_mode.has_value()) {
+      config.fit.options.finite_source_mode = ParseFiniteSourceMode(*explicit_finite_source_mode);
+      if (config.fit.options.coulomb_mode != CoulombMode::kFiniteSource) {
+        throw ConfigError("fit.finite_source_mode is only valid with fit.coulomb_mode = \"finite_source\".");
+      }
+    }
     config.fit.options.use_core_halo_lambda =
         ReadOptionalBool(fit, "use_core_halo_lambda", config.fit.options.use_core_halo_lambda);
     config.fit.options.use_q2_baseline = ReadOptionalBool(fit, "use_q2_baseline", config.fit.options.use_q2_baseline);
@@ -349,6 +369,53 @@ namespace exp_femto_3d {
       return FitModel::kFull;
     }
     throw ConfigError("Unsupported fit model: " + token);
+  }
+
+  std::string ToString(const CoulombMode mode) {
+    switch (mode) {
+      case CoulombMode::kNone:
+        return "none";
+      case CoulombMode::kGamow:
+        return "gamow";
+      case CoulombMode::kFiniteSource:
+        return "finite_source";
+    }
+    return "none";
+  }
+
+  CoulombMode ParseCoulombMode(const std::string &token) {
+    const std::string lowered = ToLower(token);
+    if (lowered == "none") {
+      return CoulombMode::kNone;
+    }
+    if (lowered == "gamow") {
+      return CoulombMode::kGamow;
+    }
+    if (lowered == "finite_source" || lowered == "finite-source") {
+      return CoulombMode::kFiniteSource;
+    }
+    throw ConfigError("Unsupported Coulomb mode: " + token);
+  }
+
+  std::string ToString(const FiniteSourceMode mode) {
+    switch (mode) {
+      case FiniteSourceMode::kFixed1D:
+        return "fixed_1d";
+      case FiniteSourceMode::kIterative1D:
+        return "iterative_1d";
+    }
+    return "fixed_1d";
+  }
+
+  FiniteSourceMode ParseFiniteSourceMode(const std::string &token) {
+    const std::string lowered = ToLower(token);
+    if (lowered == "fixed_1d" || lowered == "fixed-1d") {
+      return FiniteSourceMode::kFixed1D;
+    }
+    if (lowered == "iterative_1d" || lowered == "iterative-1d") {
+      return FiniteSourceMode::kIterative1D;
+    }
+    throw ConfigError("Unsupported finite-source mode: " + token);
   }
 
   std::string ToString(const ProgressMode mode) {

@@ -3,86 +3,84 @@
 ## Latest Durable Handoff
 
 - completed:
-  - upgraded `build-cf` and `fit` progress rendering to show stage label,
-    percent, activity frame, and ETA
-  - added a one-second heartbeat so enabled progress output keeps refreshing
-    during long ROOT operations between completed slices
-  - added `progress_render_test` and linked `exp_femto_3d_core` with
-    `Threads::Threads`
+  - implemented the `docs/plan/fit_finite_coul.md` finite-source Coulomb fit
+    path
+  - added explicit `fit.coulomb_mode = "none"|"gamow"|"finite_source"` and
+    `fit.finite_source_mode = "fixed_1d"|"iterative_1d"` parsing
+  - kept legacy `fit.use_coulomb` compatibility only for unambiguous none/Gamow
+    configs and reject conflicting mixed legacy/new settings
+  - added optional CATS/GSL detection to CMake, with
+    `EXP_FEMTO_3D_ENABLE_CATS=OFF` available for no-CATS validation
+  - wired finite-source fitting through CATS-backed one-dimensional kernel
+    tables keyed by centrality/mT and seeded from the corresponding `phi_all`
+    slice
+  - implemented fixed and one-pass iterative source-radius flows before final
+    selected-slice fitting and artifact writing
+  - added fail-fast handling for invalid in-table CATS kernel values; only
+    above-table high-k evaluation falls back to unity
+  - preserved `usesCoulomb` and added Coulomb mode, finite-source mode, and
+    finite-source radius metadata in TSV and `meta/FitCatalog`
+  - added `meta/CoulombKernelCatalog` to both detailed fit ROOT and standalone
+    report ROOT outputs
+  - updated README and example configs for the new public mode names
+  - added/expanded config parsing, workflow smoke, and kernel validation tests
   - reran O2Physics ROOT executor configure/build/`ctest --output-on-failure`
-    on `2026-06-10`; all four registered tests passed with `PRIMARY_OK`
-  - added `scripts/run_exp_femto_3d.sh` as the project-local OO run entry
-    defaulting to `config/oo_build_and_fit.toml`
-  - the script runs `build-cf` followed by `fit` by default, supports
-    `--stage build-cf|fit|all`, and forwards fit-only `--model full|diag` plus
-    `--input-cf-root` overrides
-  - the script re-enters `O2Physics/latest-master-o2` through `alienv` when the
-    ROOT runtime is not already active
-  - verified the new script with `bash -n` and `--help` on `2026-06-10`; the
-    full OO real-data build/fit was not rerun because it writes production
-    output paths from the TOML config
-  - fixed the no-argument `alienv` re-entry path so macOS Bash 3.2 `set -u`
-    does not treat an empty preserved-argument array as unbound
-  - added standalone fit report ROOT output controlled by
-    `[output].fit_report_directory` and `[output].fit_report_root_name`
-  - report ROOT now includes `meta/FitCatalog`, mirrored
-    `summary/R2_vs_phi/...`, Eventgen-style
-    `source_parameters/<cent>/<mt>/source_parameters_overview_canvas`, and
-    `eps_vs_mt/<cent>/epsf_vs_mt(_canvas)`
-  - updated active/example TOML configs and README output contract for the new
-    report path
-  - reran O2Physics ROOT executor `ctest --output-on-failure` on `2026-06-10`;
-    all three registered tests passed
-  - added explicit TOML progress-mode parsing for build and fit
-  - persisted build-side phi mapping state into `meta/SliceCatalog`
-  - taught fit to follow input CF phi metadata by default or override it from
-    stored `raw_phi_*` coordinates
-  - added backward-compatible inference for legacy `SliceCatalog` trees that do
-    not yet contain `build_uses_symmetric_phi_range`
-  - added `build.split_mixed_event_by_phi` with default `false` and an opt-in
-    mode where ME denominators follow each SE phi slice
-  - persisted `split_mixed_event_by_phi` in `meta/SliceCatalog` with legacy
-    default `false`
-  - extended config, catalog roundtrip, and workflow smoke coverage for the new
-    phi/progress and split-ME semantics
-  - reran `ctest --output-on-failure` in a non-sandboxed O2Physics environment
-    on `2026-04-19`; all three registered tests passed
-  - reran O2Physics ROOT executor `ctest --output-on-failure` on `2026-05-18`;
-    all three registered tests passed
+    on `2026-06-21` for the default CATS-enabled build; all five registered
+    tests passed with `PRIMARY_OK`
+  - reran the same matrix on `2026-06-21` with
+    `-DEXP_FEMTO_3D_ENABLE_CATS=OFF`; all five registered tests passed with
+    `PRIMARY_OK`
+  - hardened `scripts/cmake.sh` so the default local build clean-rebuilds the
+    selected build tree and verifies CATS linkage when the generated link rule
+    expects CATS, avoiding stale no-CATS binaries in the shared `bin/` output
+  - reran `scripts/cmake.sh` through the O2Physics ROOT executor on
+    `2026-06-22`; it returned `PRIMARY_OK`, relinked the CATS-enabled operator
+    binary, and `otool -L bin/exp_femto_3d` showed `libCATS` plus GSL
+  - reran `ctest --test-dir build --output-on-failure` on `2026-06-22`; all
+    five registered tests passed with `PRIMARY_OK`
+  - reran `git diff --check`; it passed
 
 ## Next Recommended Owner Action
 
-- run the real-data regression comparison between the refactored executable and
-  the legacy macro on a known-good dataset
-- include the standalone fit report ROOT file in that regression by checking
-  the `source_parameters` overview canvases and `eps_vs_mt` graphs on a real
-  multi-mT dataset
-- cover both phi conventions during that regression: follow-input mapping and
-  explicit fit-side override
-- cover both ME denominator modes during that regression:
-  `build.split_mixed_event_by_phi = false` and `true`
+- run a real-data regression on a known-good OO/PbPb input set with
+  `fit.coulomb_mode = "finite_source"`
+- inspect `meta/CoulombKernelCatalog`, TSV `finiteSourceRadiusFm`, and report
+  ROOT source-parameter canvases for representative centrality/mT groups
+- compare the finite-source results against the existing Gamow baseline before
+  treating the new mode as production physics default
+- cover both `fit.finite_source_mode = "fixed_1d"` and `"iterative_1d"` during
+  that real-data regression
+- continue to keep no-CATS builds in the smoke matrix so finite-source requests
+  fail explicitly on machines without CATS
+- use `scripts/cmake.sh` for the default local build before running
+  finite-source configs; leave `EXP_FEMTO_3D_CLEAN_FIRST=1` unless doing a
+  deliberate fast incremental loop
 - keep treating sandbox-only `alienv` failures as environment noise unless a
   non-sandboxed O2Physics rerun reproduces them
 
 ## Suggested Next Commands
 
 ```bash
-/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/scripts/run_exp_femto_3d.sh
-
 /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/scripts/run_exp_femto_3d.sh \
   --stage fit \
   --input-cf-root /path/to/existing_cf.root
 ```
 
-For regression coverage:
+Set the fit mode in the TOML before the finite-source regression:
+
+```toml
+[fit]
+coulomb_mode = "finite_source"
+finite_source_mode = "fixed_1d"      # or "iterative_1d"
+```
+
+For local validation after edits:
 
 ```bash
-alienv setenv O2Physics/latest-master-o2 -c sh -lc '
-  cd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/build &&
-  ctest --output-on-failure
-'
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command '/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/scripts/cmake.sh && ctest --test-dir /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/build --output-on-failure'
 ```
 
 Then run a build-cf / fit comparison on a previously validated real input set,
-once with the input CF mapping followed as-is and once with an explicit fit-side
-phi override.
+once against the Gamow baseline and once against the finite-source mode.

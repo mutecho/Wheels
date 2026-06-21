@@ -77,7 +77,9 @@ namespace {
                           const std::string &fit_summary_name,
                           const std::string &fit_report_root_name,
                           const bool build_map_pair_phi_to_symmetric_range,
-                          const std::optional<bool> fit_map_pair_phi_to_symmetric_range) {
+                          const std::optional<bool> fit_map_pair_phi_to_symmetric_range,
+                          const std::string &fit_coulomb_lines = "use_coulomb = false\n",
+                          const bool use_pml = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -100,10 +102,10 @@ namespace {
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "model = \"full\"\n";
-    output << "use_coulomb = false\n";
+    output << fit_coulomb_lines;
     output << "use_core_halo_lambda = true\n";
     output << "use_q2_baseline = false\n";
-    output << "use_pml = false\n";
+    output << "use_pml = " << (use_pml ? "true" : "false") << "\n";
     output << "fit_q_max = 0.12\n";
     if (fit_map_pair_phi_to_symmetric_range.has_value()) {
       output << "map_pair_phi_to_symmetric_range = "
@@ -123,18 +125,40 @@ namespace {
     bool saw_non_integrated_slice = false;
   };
 
-  FitCatalogInspection InspectFitCatalog(const std::filesystem::path &fit_root_path) {
+  FitCatalogInspection InspectFitCatalog(const std::filesystem::path &fit_root_path,
+                                         const std::string &expected_coulomb_mode = "none") {
     TFile fit_file(fit_root_path.string().c_str(), "READ");
     auto *tree = dynamic_cast<TTree *>(fit_file.Get("meta/FitCatalog"));
     Expect(tree != nullptr, "FitCatalog missing");
+    Expect(tree->GetBranch("coulomb_mode") != nullptr, "FitCatalog coulomb_mode branch missing");
+    Expect(tree->GetBranch("coulombMode") != nullptr, "FitCatalog coulombMode branch missing");
+    Expect(tree->GetBranch("finite_source_mode") != nullptr, "FitCatalog finite_source_mode branch missing");
+    Expect(tree->GetBranch("finiteSourceMode") != nullptr, "FitCatalog finiteSourceMode branch missing");
+    Expect(tree->GetBranch("finite_source_radius_fm") != nullptr,
+           "FitCatalog finite_source_radius_fm branch missing");
+    Expect(tree->GetBranch("finiteSourceRadiusFm") != nullptr,
+           "FitCatalog finiteSourceRadiusFm branch missing");
 
     TTreeReader reader(tree);
     TTreeReaderValue<double> phi(reader, "phi");
+    TTreeReaderValue<int> uses_coulomb(reader, "uses_coulomb");
+    TTreeReaderValue<std::string> coulomb_mode(reader, "coulomb_mode");
+    TTreeReaderValue<std::string> finite_source_mode(reader, "finite_source_mode");
+    TTreeReaderValue<double> finite_source_radius_fm(reader, "finite_source_radius_fm");
     TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
     TTreeReaderValue<int> fit_uses_symmetric_phi_range(reader, "fit_uses_symmetric_phi_range");
 
     FitCatalogInspection inspection;
     while (reader.Next()) {
+      Expect(*coulomb_mode == expected_coulomb_mode, "FitCatalog Coulomb mode mismatch");
+      Expect((*uses_coulomb != 0) == (expected_coulomb_mode != "none"), "FitCatalog uses_coulomb mismatch");
+      if (expected_coulomb_mode == "finite_source") {
+        Expect(!finite_source_mode->empty(), "finite-source mode should be recorded");
+        Expect(std::isfinite(*finite_source_radius_fm) && *finite_source_radius_fm > 0.0,
+               "finite-source radius should be finite and positive");
+      } else {
+        Expect(finite_source_mode->empty(), "non-finite Coulomb modes should not record finiteSourceMode");
+      }
       if (*is_phi_integrated != 0) {
         continue;
       }
@@ -163,10 +187,25 @@ namespace {
     return {fit_function->GetXmin(), fit_function->GetXmax()};
   }
 
+  void ExpectCoulombKernelCatalog(const std::filesystem::path &root_path, const bool expect_rows) {
+    TFile file(root_path.string().c_str(), "READ");
+    auto *tree = dynamic_cast<TTree *>(file.Get("meta/CoulombKernelCatalog"));
+    Expect(tree != nullptr, "CoulombKernelCatalog missing");
+    Expect(tree->GetBranch("finite_source_mode") != nullptr, "kernel catalog finite_source_mode branch missing");
+    Expect(tree->GetBranch("seed_radius_fm") != nullptr, "kernel catalog seed radius branch missing");
+    Expect(tree->GetBranch("final_radius_fm") != nullptr, "kernel catalog final radius branch missing");
+    Expect(tree->GetBranch("kstar_bin_count") != nullptr, "kernel catalog kstar bin branch missing");
+    if (expect_rows) {
+      Expect(tree->GetEntries() > 0, "finite-source kernel catalog should contain rows");
+    }
+  }
+
   void ExpectReportOutputs(const std::filesystem::path &fit_report_root_path) {
     TFile report_file(fit_report_root_path.string().c_str(), "READ");
     Expect(!report_file.IsZombie(), "fit report ROOT file should be readable");
     Expect(report_file.Get("meta/FitCatalog") != nullptr, "fit report should include FitCatalog summary fields");
+    Expect(report_file.Get("meta/CoulombKernelCatalog") != nullptr,
+           "fit report should include CoulombKernelCatalog summary fields");
     Expect(report_file.Get("summary/R2_vs_phi/cent_0.00-10.00__mt_0.20-0.40/Rside2_vs_phi") != nullptr,
            "fit report should include legacy R2 summary graphs");
     Expect(report_file.Get("source_parameters/cent_0.00-10.00/mt_0.20-0.40/source_parameters_overview_canvas")
@@ -293,6 +332,73 @@ int main() {
   std::string header;
   std::getline(summary, header);
   Expect(header.find("sliceId") != std::string::npos, "summary TSV header missing");
+  Expect(header.find("coulombMode") != std::string::npos, "summary TSV coulombMode header missing");
+  Expect(header.find("finiteSourceRadiusFm") != std::string::npos,
+         "summary TSV finiteSourceRadiusFm header missing");
+  ExpectCoulombKernelCatalog(temp_dir / "mapped_follow_fit.root", false);
+  ExpectCoulombKernelCatalog(temp_dir / "mapped_follow_report.root", false);
+
+#ifndef EXP_FEMTO_3D_HAS_CATS
+  const std::string finite_unavailable_config_path = WriteConfig(temp_dir / "finite_unavailable.toml",
+                                                                 input_root,
+                                                                 temp_dir.string(),
+                                                                 "mapped_cf.root",
+                                                                 "finite_unavailable_fit.root",
+                                                                 "finite_unavailable.tsv",
+                                                                 "finite_unavailable_report.root",
+                                                                 true,
+                                                                 std::nullopt,
+                                                                 "coulomb_mode = \"finite_source\"\n"
+                                                                 "finite_source_mode = \"fixed_1d\"\n");
+  const ApplicationConfig finite_unavailable_config = LoadApplicationConfig(finite_unavailable_config_path);
+  bool saw_missing_cats_error = false;
+  try {
+    (void)RunFit(finite_unavailable_config, logger);
+  } catch (const std::runtime_error &error) {
+    saw_missing_cats_error = std::string(error.what()).find("requires CATS support") != std::string::npos;
+  }
+  Expect(saw_missing_cats_error, "finite_source should fail clearly when CATS is not compiled in");
+#endif
+
+#ifdef EXP_FEMTO_3D_HAS_CATS
+  const std::string finite_fixed_config_path = WriteConfig(temp_dir / "finite_fixed.toml",
+                                                           input_root,
+                                                           temp_dir.string(),
+                                                           "mapped_cf.root",
+                                                           "finite_fixed_fit.root",
+                                                           "finite_fixed.tsv",
+                                                           "finite_fixed_report.root",
+                                                           true,
+                                                           std::nullopt,
+                                                           "coulomb_mode = \"finite_source\"\n"
+                                                           "finite_source_mode = \"fixed_1d\"\n");
+  const ApplicationConfig finite_fixed_config = LoadApplicationConfig(finite_fixed_config_path);
+  const FitRunStatistics finite_fixed_stats = RunFit(finite_fixed_config, logger);
+  Expect(finite_fixed_stats.selected_slices == 4, "finite-source fit should select every built slice");
+  Expect(finite_fixed_stats.fitted_slices == 4, "finite-source fit should fit every selected slice");
+  (void)InspectFitCatalog(temp_dir / "finite_fixed_fit.root", "finite_source");
+  ExpectCoulombKernelCatalog(temp_dir / "finite_fixed_fit.root", true);
+  ExpectCoulombKernelCatalog(temp_dir / "finite_fixed_report.root", true);
+
+  const std::string finite_iterative_config_path = WriteConfig(temp_dir / "finite_iterative.toml",
+                                                               input_root,
+                                                               temp_dir.string(),
+                                                               "mapped_cf.root",
+                                                               "finite_iterative_fit.root",
+                                                               "finite_iterative.tsv",
+                                                               "finite_iterative_report.root",
+                                                               true,
+                                                               std::nullopt,
+                                                               "coulomb_mode = \"finite_source\"\n"
+                                                               "finite_source_mode = \"iterative_1d\"\n");
+  const ApplicationConfig finite_iterative_config = LoadApplicationConfig(finite_iterative_config_path);
+  const FitRunStatistics finite_iterative_stats = RunFit(finite_iterative_config, logger);
+  Expect(finite_iterative_stats.selected_slices == 4, "iterative finite-source fit should select every built slice");
+  Expect(finite_iterative_stats.fitted_slices == 4, "iterative finite-source fit should fit every selected slice");
+  (void)InspectFitCatalog(temp_dir / "finite_iterative_fit.root", "finite_source");
+  ExpectCoulombKernelCatalog(temp_dir / "finite_iterative_fit.root", true);
+  ExpectCoulombKernelCatalog(temp_dir / "finite_iterative_report.root", true);
+#endif
 
   std::cout << "workflow_smoke_test passed\n";
   return 0;

@@ -37,6 +37,11 @@
 #include "TTreeReader.h"
 #include "TTreeReaderValue.h"
 #include "TVirtualPad.h"
+#ifdef EXP_FEMTO_3D_HAS_CATS
+#include "CATS.h"
+#include "CATStools.h"
+#include "CATSconstants.h"
+#endif
 #include "exp_femto_3d/Config.h"
 
 namespace exp_femto_3d {
@@ -46,6 +51,10 @@ namespace exp_femto_3d {
     constexpr double kProjection1DWindow = 0.04;
     constexpr double kHbarC = 0.1973269804;
     constexpr double kPiPiLikeSignBohrRadiusFm = 387.5;
+    [[maybe_unused]] constexpr double kChargedPionMassMeV = 139.57018;
+    constexpr double kFiniteSourceKStarMinMeV = 0.0;
+    constexpr double kFiniteSourceKStarMaxMeV = 250.0;
+    constexpr int kFiniteSourceKStarBins = 250;
     constexpr double kFullR2MatrixTolerance = 1e-10;
     constexpr double kLevyArgumentTolerance = 1e-12;
     constexpr double kInvalidFullModelCFValue = 1e6;
@@ -53,11 +62,70 @@ namespace exp_femto_3d {
     constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
     constexpr const char *kSliceCatalogSplitMixedEventBranch = "split_mixed_event_by_phi";
 
+    double ComputeKStarMeV(const double q_out, const double q_side, const double q_long) {
+      const double q_inv_gev = std::sqrt(q_out * q_out + q_side * q_side + q_long * q_long);
+      return 0.5 * q_inv_gev * 1000.0;
+    }
+
+    struct CoulombKernelTable {
+      CoulombKernelCatalogEntry catalog_entry;
+      std::vector<double> kstar_mev;
+      std::vector<double> coulomb_factor;
+
+      [[nodiscard]] double Evaluate(const double q_out, const double q_side, const double q_long) const {
+        if (kstar_mev.empty() || coulomb_factor.empty() || kstar_mev.size() != coulomb_factor.size()) {
+          return 1.0;
+        }
+        const double kstar = ComputeKStarMeV(q_out, q_side, q_long);
+        if (kstar <= kstar_mev.front()) {
+          return coulomb_factor.front();
+        }
+        if (kstar >= kstar_mev.back()) {
+          return 1.0;
+        }
+        const auto upper = std::upper_bound(kstar_mev.begin(), kstar_mev.end(), kstar);
+        const std::size_t hi = static_cast<std::size_t>(std::distance(kstar_mev.begin(), upper));
+        const std::size_t lo = hi > 0 ? hi - 1 : 0;
+        const double x0 = kstar_mev[lo];
+        const double x1 = kstar_mev[hi];
+        const double y0 = coulomb_factor[lo];
+        const double y1 = coulomb_factor[hi];
+        if (x1 <= x0) {
+          return y0;
+        }
+        const double fraction = (kstar - x0) / (x1 - x0);
+        return y0 + fraction * (y1 - y0);
+      }
+    };
+
+    const CoulombKernelTable *g_active_coulomb_kernel = nullptr;
+
+    class ActiveCoulombKernelGuard {
+     public:
+      explicit ActiveCoulombKernelGuard(const CoulombKernelTable *kernel) : previous_(g_active_coulomb_kernel) {
+        g_active_coulomb_kernel = kernel;
+      }
+      ~ActiveCoulombKernelGuard() { g_active_coulomb_kernel = previous_; }
+
+     private:
+      const CoulombKernelTable *previous_ = nullptr;
+    };
+
+    class BatchModeGuard {
+     public:
+      BatchModeGuard() : previous_(gROOT->IsBatch()) { gROOT->SetBatch(kTRUE); }
+      ~BatchModeGuard() { gROOT->SetBatch(previous_); }
+
+     private:
+      bool previous_ = false;
+    };
+
     struct Levy3DPMLContext {
       TH3D *h_se_raw = nullptr;
       TH3D *h_me_raw = nullptr;
       bool use_full_model = false;
       LevyFitOptions fit_options;
+      const CoulombKernelTable *coulomb_kernel = nullptr;
       double raw_same_to_mixed_integral_ratio = 1.0;
     };
 
@@ -1018,6 +1086,85 @@ namespace exp_femto_3d {
       return clone;
     }
 
+    bool HasCatsFiniteSourceSupport() {
+#ifdef EXP_FEMTO_3D_HAS_CATS
+      return true;
+#else
+      return false;
+#endif
+    }
+
+#ifdef EXP_FEMTO_3D_HAS_CATS
+    double CatsSphericalGaussianSource(double *parameters) {
+      const double radius = parameters[1];
+      const double source_size = parameters[3];
+      return 4.0 * TMath::Pi() * radius * radius
+             * std::pow(4.0 * TMath::Pi() * source_size * source_size, -1.5)
+             * std::exp(-(radius * radius) / (4.0 * source_size * source_size));
+    }
+#endif
+
+    CoulombKernelTable BuildFiniteSourceCoulombKernel(const SliceCatalogEntry &entry,
+                                                      const FiniteSourceMode finite_source_mode,
+                                                      const double seed_radius_fm,
+                                                      const double final_radius_fm) {
+      if (!std::isfinite(final_radius_fm) || final_radius_fm <= 0.0) {
+        throw std::runtime_error("Finite-source Coulomb kernel requires a finite positive R_eff.");
+      }
+      CoulombKernelTable table;
+      table.catalog_entry.group_id = entry.group_id;
+      table.catalog_entry.centrality_index = entry.centrality_index;
+      table.catalog_entry.mt_index = entry.mt_index;
+      table.catalog_entry.cent_low = entry.cent_low;
+      table.catalog_entry.cent_high = entry.cent_high;
+      table.catalog_entry.mt_low = entry.mt_low;
+      table.catalog_entry.mt_high = entry.mt_high;
+      table.catalog_entry.finite_source_mode = ToString(finite_source_mode);
+      table.catalog_entry.seed_radius_fm = seed_radius_fm;
+      table.catalog_entry.final_radius_fm = final_radius_fm;
+      table.catalog_entry.kstar_min_mev = kFiniteSourceKStarMinMeV;
+      table.catalog_entry.kstar_max_mev = kFiniteSourceKStarMaxMeV;
+      table.catalog_entry.kstar_bin_count = kFiniteSourceKStarBins;
+
+#ifdef EXP_FEMTO_3D_HAS_CATS
+      table.catalog_entry.cats_enabled = true;
+      CATS kitty;
+      kitty.SetNotifications(CATS::nError);
+      kitty.SetMomBins(kFiniteSourceKStarBins, kFiniteSourceKStarMinMeV, kFiniteSourceKStarMaxMeV);
+      CATSparameters source_parameters(CATSparameters::tSource, 1, true);
+      source_parameters.SetParameter(0, final_radius_fm);
+      kitty.SetAnaSource(CatsSphericalGaussianSource, source_parameters);
+      kitty.SetUseAnalyticSource(true);
+      kitty.SetNumChannels(1);
+      kitty.SetNumPW(0, 0);
+      kitty.SetSpin(0, 0);
+      kitty.SetChannelWeight(0, 1.0);
+      kitty.SetQ1Q2(1);
+      kitty.SetPdgId(211, 211);
+      kitty.SetQuantumStatistics(0);
+      kitty.SetRedMass(0.5 * kChargedPionMassMeV);
+      kitty.KillTheCat();
+
+      table.kstar_mev.reserve(kFiniteSourceKStarBins);
+      table.coulomb_factor.reserve(kFiniteSourceKStarBins);
+      for (int bin = 0; bin < kFiniteSourceKStarBins; ++bin) {
+        const double momentum = kitty.GetMomentum(static_cast<unsigned>(bin));
+        double value = kitty.GetCorrFun(static_cast<unsigned>(bin));
+        if (!std::isfinite(value) || value < 0.0) {
+          throw std::runtime_error("CATS returned a non-finite or negative finite-source Coulomb value inside the kernel table.");
+        }
+        table.kstar_mev.push_back(momentum);
+        table.coulomb_factor.push_back(value);
+      }
+      return table;
+#else
+      (void)entry;
+      (void)finite_source_mode;
+      (void)seed_radius_fm;
+      throw std::runtime_error("fit.coulomb_mode=\"finite_source\" requires CATS support, but this build was configured without EXP_FEMTO_3D_HAS_CATS.");
+#endif
+    }
+
     std::string BuildSparseObjectPath(const ApplicationConfig &config, const std::string &subtask_name) {
       return config.input.task_name + "/" + subtask_name + "/" + config.input.sparse_object_name;
     }
@@ -1058,6 +1205,34 @@ namespace exp_femto_3d {
       return std::max(0.0, std::min(two_pi_eta / denominator, 1.0));
     }
 
+    CoulombMode CoulombModeFromCode(const double code) {
+      if (code < 0.5) {
+        return CoulombMode::kNone;
+      }
+      if (code < 1.5) {
+        return CoulombMode::kGamow;
+      }
+      return CoulombMode::kFiniteSource;
+    }
+
+    double EvaluateCoulombFactor(const double q_out,
+                                 const double q_side,
+                                 const double q_long,
+                                 const LevyFitOptions &fit_options) {
+      switch (fit_options.coulomb_mode) {
+        case CoulombMode::kNone:
+          return 1.0;
+        case CoulombMode::kGamow:
+          return ComputeLikeSignPiPiGamowFactor(q_out, q_side, q_long);
+        case CoulombMode::kFiniteSource:
+          if (g_active_coulomb_kernel == nullptr) {
+            return kInvalidFullModelCFValue;
+          }
+          return g_active_coulomb_kernel->Evaluate(q_out, q_side, q_long);
+      }
+      return 1.0;
+    }
+
     double ComputeBowlerSinyukovLikeSignPiPiValue(const double norm,
                                                   const double lambda,
                                                   const double levy_exponent,
@@ -1066,8 +1241,7 @@ namespace exp_femto_3d {
                                                   const double q_side,
                                                   const double q_long) {
       const double lambda_eff = fit_options.use_core_halo_lambda ? lambda : 1.0;
-      const double coulomb_factor =
-          fit_options.use_coulomb ? ComputeLikeSignPiPiGamowFactor(q_out, q_side, q_long) : 1.0;
+      const double coulomb_factor = EvaluateCoulombFactor(q_out, q_side, q_long, fit_options);
       const double quantum_stat_term = std::exp(-levy_exponent);
       return norm * ((1.0 - lambda_eff) + lambda_eff * coulomb_factor * (1.0 + quantum_stat_term));
     }
@@ -1172,7 +1346,7 @@ namespace exp_femto_3d {
     double Levy3DModel(double *x, double *parameters) {
       LevyFitOptions fit_options;
       fit_options.use_q2_baseline = parameters[7] > 0.5;
-      fit_options.use_coulomb = parameters[8] > 0.5;
+      fit_options.coulomb_mode = CoulombModeFromCode(parameters[8]);
       fit_options.use_core_halo_lambda = parameters[9] > 0.5;
       return EvaluateDiagonalLevyCF(x[0],
                                     x[1],
@@ -1190,7 +1364,7 @@ namespace exp_femto_3d {
     double Levy3DFullModel(double *x, double *parameters) {
       LevyFitOptions fit_options;
       fit_options.use_q2_baseline = parameters[10] > 0.5;
-      fit_options.use_coulomb = parameters[11] > 0.5;
+      fit_options.coulomb_mode = CoulombModeFromCode(parameters[11]);
       fit_options.use_core_halo_lambda = parameters[12] > 0.5;
       return EvaluateFullLevyCF(x[0],
                                 x[1],
@@ -1229,7 +1403,7 @@ namespace exp_femto_3d {
       fit_function->SetParName(5, "alpha");
       fit_function->SetParName(6, "BaselineQ2");
       fit_function->SetParName(7, "UseQ2Baseline");
-      fit_function->SetParName(8, "UseCoulomb");
+      fit_function->SetParName(8, "CoulombModeCode");
       fit_function->SetParName(9, "UseCoreHaloLambda");
       fit_function->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 1.5, 0.0, 0.0, 0.0, 1.0);
       fit_function->SetParLimits(0, 0.5, 1.5);
@@ -1240,7 +1414,7 @@ namespace exp_femto_3d {
       fit_function->SetParLimits(5, 0.5, 2.0);
       fit_function->SetParLimits(6, baseline_min, baseline_max);
       fit_function->FixParameter(7, fit_options.use_q2_baseline ? 1.0 : 0.0);
-      fit_function->FixParameter(8, fit_options.use_coulomb ? 1.0 : 0.0);
+      fit_function->FixParameter(8, static_cast<double>(CoulombModeCode(fit_options.coulomb_mode)));
       fit_function->FixParameter(9, fit_options.use_core_halo_lambda ? 1.0 : 0.0);
       if (!fit_options.use_q2_baseline) {
         fit_function->FixParameter(6, 0.0);
@@ -1278,7 +1452,7 @@ namespace exp_femto_3d {
       fit_function->SetParName(8, "alpha");
       fit_function->SetParName(9, "BaselineQ2");
       fit_function->SetParName(10, "UseQ2Baseline");
-      fit_function->SetParName(11, "UseCoulomb");
+      fit_function->SetParName(11, "CoulombModeCode");
       fit_function->SetParName(12, "UseCoreHaloLambda");
       const double initial_parameters[13] = {1.0, 0.5, 25.0, 25.0, 25.0, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 1.0};
       fit_function->SetParameters(initial_parameters);
@@ -1290,7 +1464,7 @@ namespace exp_femto_3d {
       fit_function->SetParLimits(8, 0.5, 2.0);
       fit_function->SetParLimits(9, baseline_min, baseline_max);
       fit_function->FixParameter(10, fit_options.use_q2_baseline ? 1.0 : 0.0);
-      fit_function->FixParameter(11, fit_options.use_coulomb ? 1.0 : 0.0);
+      fit_function->FixParameter(11, static_cast<double>(CoulombModeCode(fit_options.coulomb_mode)));
       fit_function->FixParameter(12, fit_options.use_core_halo_lambda ? 1.0 : 0.0);
       if (!fit_options.use_q2_baseline) {
         fit_function->FixParameter(9, 0.0);
@@ -1512,8 +1686,10 @@ namespace exp_femto_3d {
       g_levy_3d_pml_context.h_me_raw = h_me_raw;
       g_levy_3d_pml_context.use_full_model = use_full_model;
       g_levy_3d_pml_context.fit_options = fit_options;
+      g_levy_3d_pml_context.coulomb_kernel = g_active_coulomb_kernel;
       g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio = raw_to_normalized_scale;
 
+      ActiveCoulombKernelGuard kernel_guard(g_levy_3d_pml_context.coulomb_kernel);
       TMinuit minuit(fit_function->GetNpar());
       minuit.SetFCN(Levy3DPMLFCN);
       minuit.SetPrintLevel(-1);
@@ -1711,8 +1887,11 @@ namespace exp_femto_3d {
     }
 
     std::string BuildFitSwitchLine(const LevyFitResult &fit_result) {
-      return std::string("Coulomb(#pi^{#pm}#pi^{#pm}): ") + (fit_result.uses_coulomb ? "on" : "off")
-             + ", core-halo: " + (fit_result.uses_core_halo_lambda ? "on" : "off")
+      std::string coulomb_text = "Coulomb: " + fit_result.coulomb_mode;
+      if (!fit_result.finite_source_mode.empty()) {
+        coulomb_text += "/" + fit_result.finite_source_mode;
+      }
+      return coulomb_text + ", core-halo: " + (fit_result.uses_core_halo_lambda ? "on" : "off")
              + ", q^{2} baseline: " + (fit_result.uses_q2_baseline ? "on" : "off");
     }
 
@@ -1864,6 +2043,20 @@ namespace exp_femto_3d {
       return canvas;
     }
 
+    struct SingleSliceFitOutput {
+      std::unique_ptr<TF3> fit_function;
+      LevyFitResult result;
+    };
+
+    double ComputeEffectiveRadiusFromResult(const LevyFitResult &result) {
+      if (!std::isfinite(result.rout2) || !std::isfinite(result.rside2) || !std::isfinite(result.rlong2)
+          || result.rout2 <= 0.0 || result.rside2 <= 0.0 || result.rlong2 <= 0.0) {
+        throw std::runtime_error("Finite-source Coulomb seed fit produced non-finite or non-positive diagonal R^2 values for "
+                                 + result.slice_id + ".");
+      }
+      return std::sqrt((result.rout2 + result.rside2 + result.rlong2) / 3.0);
+    }
+
     void FillFitResultFromFunction(const SliceCatalogEntry &entry,
                                    TF3 *fit_function,
                                    const FitModel model,
@@ -1874,6 +2067,7 @@ namespace exp_femto_3d {
                                    const int fit_status,
                                    const double fit_edm,
                                    const int fit_minuit_istat,
+                                   const double finite_source_radius_fm,
                                    LevyFitResult &fit_result) {
       fit_result.fit_model = ToString(model);
       fit_result.slice_id = entry.slice_id;
@@ -1891,7 +2085,12 @@ namespace exp_femto_3d {
       fit_result.phi = fit_phi_coordinates.center;
       fit_result.fit_uses_symmetric_phi_range = fit_uses_symmetric_phi_range;
       fit_result.has_off_diagonal = model == FitModel::kFull;
-      fit_result.uses_coulomb = fit_options.use_coulomb;
+      fit_result.uses_coulomb = UsesCoulomb(fit_options.coulomb_mode);
+      fit_result.coulomb_mode = ToString(fit_options.coulomb_mode);
+      fit_result.finite_source_mode = fit_options.coulomb_mode == CoulombMode::kFiniteSource
+                                          ? ToString(fit_options.finite_source_mode)
+                                          : "";
+      fit_result.finite_source_radius_fm = finite_source_radius_fm;
       fit_result.uses_core_halo_lambda = fit_options.use_core_halo_lambda;
       fit_result.uses_q2_baseline = fit_options.use_q2_baseline;
       fit_result.uses_pml = fit_options.use_pml;
@@ -1929,19 +2128,22 @@ namespace exp_femto_3d {
       fit_result.minuit_istat = fit_options.use_pml ? fit_minuit_istat : -1;
     }
 
-    bool FitAndWriteSingleSlice(TH3D *h_cf,
-                                TH3D *h_se_raw,
-                                TH3D *h_me_raw,
-                                const SliceCatalogEntry &entry,
-                                const FitModel model,
-                                const LevyFitOptions &fit_options,
-                                const bool fit_uses_symmetric_phi_range,
-                                const std::string &fit_root_path,
-                                LevyFitResult &fit_result,
-                                TFile *shared_output_file) {
-      TF3 *fit_function = model == FitModel::kFull
-                              ? BuildFullLevyFitFunction(entry.slice_id + "_levy3d_full_fit", fit_options)
-                              : BuildLevyFitFunction(entry.slice_id + "_levy3d_fit", fit_options);
+    std::optional<SingleSliceFitOutput> FitSingleSlice(TH3D *h_cf,
+                                                       TH3D *h_se_raw,
+                                                       TH3D *h_me_raw,
+                                                       const SliceCatalogEntry &entry,
+                                                       const FitModel model,
+                                                       const LevyFitOptions &fit_options,
+                                                       const bool fit_uses_symmetric_phi_range,
+                                                       const CoulombKernelTable *coulomb_kernel) {
+      if (fit_options.coulomb_mode == CoulombMode::kFiniteSource && coulomb_kernel == nullptr) {
+        throw std::runtime_error("Finite-source Coulomb fit has no prepared kernel for group " + entry.group_id + ".");
+      }
+      ActiveCoulombKernelGuard kernel_guard(coulomb_kernel);
+      SingleSliceFitOutput output;
+      output.fit_function.reset(model == FitModel::kFull
+                                    ? BuildFullLevyFitFunction(entry.slice_id + "_levy3d_full_fit", fit_options)
+                                    : BuildLevyFitFunction(entry.slice_id + "_levy3d_fit", fit_options));
 
       double fit_statistic = 0.0;
       double fit_edm = std::numeric_limits<double>::quiet_NaN();
@@ -1950,7 +2152,7 @@ namespace exp_femto_3d {
       int fit_minuit_istat = -1;
       bool fit_succeeded = false;
       if (fit_options.use_pml) {
-        fit_succeeded = RunPMLFit(fit_function,
+        fit_succeeded = RunPMLFit(output.fit_function.get(),
                                   h_se_raw,
                                   h_me_raw,
                                   model == FitModel::kFull,
@@ -1961,15 +2163,19 @@ namespace exp_femto_3d {
                                   fit_edm,
                                   fit_minuit_istat);
       } else {
-        const auto fit_status_object = h_cf->Fit(fit_function, "RSMNQ0");
-        fit_statistic = fit_function->GetChisquare();
-        fit_ndf = fit_function->GetNDF();
+        const auto fit_status_object = h_cf->Fit(output.fit_function.get(), "RSMNQ0");
+        fit_statistic = output.fit_function->GetChisquare();
+        fit_ndf = output.fit_function->GetNDF();
         fit_status = static_cast<int>(fit_status_object);
         fit_succeeded = true;
       }
 
+      const double finite_source_radius_fm =
+          fit_options.coulomb_mode == CoulombMode::kFiniteSource && coulomb_kernel != nullptr
+              ? coulomb_kernel->catalog_entry.final_radius_fm
+              : std::numeric_limits<double>::quiet_NaN();
       FillFitResultFromFunction(entry,
-                                fit_function,
+                                output.fit_function.get(),
                                 model,
                                 fit_options,
                                 fit_uses_symmetric_phi_range,
@@ -1978,14 +2184,23 @@ namespace exp_femto_3d {
                                 fit_status,
                                 fit_edm,
                                 fit_minuit_istat,
-                                fit_result);
+                                finite_source_radius_fm,
+                                output.result);
       if (!fit_succeeded) {
-        delete fit_function;
-        return false;
+        return std::nullopt;
       }
+      return std::optional<SingleSliceFitOutput>(std::move(output));
+    }
 
-      const bool old_batch_mode = gROOT->IsBatch();
-      gROOT->SetBatch(kTRUE);
+    void WriteSingleSliceFitArtifacts(TH3D *h_cf,
+                                      const SliceCatalogEntry &entry,
+                                      TF3 *fit_function,
+                                      const LevyFitResult &fit_result,
+                                      const std::string &fit_root_path,
+                                      TFile *shared_output_file,
+                                      const CoulombKernelTable *coulomb_kernel) {
+      ActiveCoulombKernelGuard kernel_guard(coulomb_kernel);
+      BatchModeGuard batch_guard;
 
       auto *projection_x_data = BuildProjectionXWithinWindow(h_cf, entry.slice_id + "_data_ProjX", kProjection1DWindow);
       auto *projection_y_data = BuildProjectionYWithinWindow(h_cf, entry.slice_id + "_data_ProjY", kProjection1DWindow);
@@ -2053,16 +2268,12 @@ namespace exp_femto_3d {
       delete canvas_y;
       delete canvas_z;
       delete comparison_canvas;
-      delete fit_function;
-
-      gROOT->SetBatch(old_batch_mode);
-      return true;
     }
 
     void WriteFitResultsSummaryTsv(const std::string &path, const std::vector<LevyFitResult> &results) {
       std::ofstream output(path);
-      output << "sliceId\tgroupId\tfitModel\tusesCoulomb\tusesCoreHaloLambda\tusesQ2Baseline"
-                "\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh\tphi\tisPhiIntegrated"
+      output << "sliceId\tgroupId\tfitModel\tusesCoulomb\tcoulombMode\tfiniteSourceMode\tfiniteSourceRadiusFm"
+                "\tusesCoreHaloLambda\tusesQ2Baseline\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh\tphi\tisPhiIntegrated"
                 "\tnorm\tnormErr\tlambda\tlambdaErr\tRout2\tRout2Err\tRside2\tRside2Err"
                 "\tRlong2\tRlong2Err\tRoutside2\tRoutside2Err\tRoutlong2\tRoutlong2Err"
                 "\tRsidelong2\tRsidelong2Err\talpha\talphaErr\tbaselineQ2\tbaselineQ2Err"
@@ -2070,7 +2281,8 @@ namespace exp_femto_3d {
       output << std::fixed << std::setprecision(6);
       for (const LevyFitResult &result : results) {
         output << result.slice_id << "\t" << result.group_id << "\t" << result.fit_model << "\t"
-               << (result.uses_coulomb ? 1 : 0) << "\t" << (result.uses_core_halo_lambda ? 1 : 0) << "\t"
+               << (result.uses_coulomb ? 1 : 0) << "\t" << result.coulomb_mode << "\t" << result.finite_source_mode
+               << "\t" << result.finite_source_radius_fm << "\t" << (result.uses_core_halo_lambda ? 1 : 0) << "\t"
                << (result.uses_q2_baseline ? 1 : 0) << "\t" << (result.uses_pml ? 1 : 0) << "\t" << result.cent_low
                << "\t" << result.cent_high << "\t" << result.mt_low << "\t" << result.mt_high << "\t" << result.phi
                << "\t" << (result.is_phi_integrated ? 1 : 0) << "\t" << result.norm << "\t" << result.norm_err << "\t"
@@ -2129,6 +2341,9 @@ namespace exp_femto_3d {
       int status = 0;
       int minuit_istat = 0;
       int uses_coulomb = 0;
+      std::string coulomb_mode;
+      std::string finite_source_mode;
+      double finite_source_radius_fm = 0.0;
       int uses_core_halo_lambda = 0;
       int uses_q2_baseline = 0;
       int uses_pml = 0;
@@ -2173,6 +2388,12 @@ namespace exp_femto_3d {
       tree->Branch("status", &status);
       tree->Branch("minuit_istat", &minuit_istat);
       tree->Branch("uses_coulomb", &uses_coulomb);
+      tree->Branch("coulomb_mode", &coulomb_mode);
+      tree->Branch("coulombMode", &coulomb_mode);
+      tree->Branch("finite_source_mode", &finite_source_mode);
+      tree->Branch("finiteSourceMode", &finite_source_mode);
+      tree->Branch("finite_source_radius_fm", &finite_source_radius_fm);
+      tree->Branch("finiteSourceRadiusFm", &finite_source_radius_fm);
       tree->Branch("uses_core_halo_lambda", &uses_core_halo_lambda);
       tree->Branch("uses_q2_baseline", &uses_q2_baseline);
       tree->Branch("uses_pml", &uses_pml);
@@ -2218,10 +2439,70 @@ namespace exp_femto_3d {
         status = result.status;
         minuit_istat = result.minuit_istat;
         uses_coulomb = result.uses_coulomb ? 1 : 0;
+        coulomb_mode = result.coulomb_mode;
+        finite_source_mode = result.finite_source_mode;
+        finite_source_radius_fm = result.finite_source_radius_fm;
         uses_core_halo_lambda = result.uses_core_halo_lambda ? 1 : 0;
         uses_q2_baseline = result.uses_q2_baseline ? 1 : 0;
         uses_pml = result.uses_pml ? 1 : 0;
         has_off_diagonal = result.has_off_diagonal ? 1 : 0;
+        tree->Fill();
+      }
+
+      tree->Write("", TObject::kOverwrite);
+      output_file.cd();
+    }
+
+    void WriteCoulombKernelCatalogTree(TFile &output_file, const std::vector<CoulombKernelCatalogEntry> &entries) {
+      auto *meta_directory = GetOrCreateDirectoryPath(output_file, "meta");
+      meta_directory->cd();
+
+      auto tree = std::make_unique<TTree>("CoulombKernelCatalog", "CoulombKernelCatalog");
+      std::string group_id;
+      int centrality_index = -1;
+      int mt_index = -1;
+      double cent_low = 0.0;
+      double cent_high = 0.0;
+      double mt_low = 0.0;
+      double mt_high = 0.0;
+      std::string finite_source_mode;
+      double seed_radius_fm = 0.0;
+      double final_radius_fm = 0.0;
+      int cats_enabled = 0;
+      double kstar_min_mev = 0.0;
+      double kstar_max_mev = 0.0;
+      int kstar_bin_count = 0;
+
+      tree->Branch("group_id", &group_id);
+      tree->Branch("centrality_index", &centrality_index);
+      tree->Branch("mt_index", &mt_index);
+      tree->Branch("cent_low", &cent_low);
+      tree->Branch("cent_high", &cent_high);
+      tree->Branch("mt_low", &mt_low);
+      tree->Branch("mt_high", &mt_high);
+      tree->Branch("finite_source_mode", &finite_source_mode);
+      tree->Branch("seed_radius_fm", &seed_radius_fm);
+      tree->Branch("final_radius_fm", &final_radius_fm);
+      tree->Branch("cats_enabled", &cats_enabled);
+      tree->Branch("kstar_min_mev", &kstar_min_mev);
+      tree->Branch("kstar_max_mev", &kstar_max_mev);
+      tree->Branch("kstar_bin_count", &kstar_bin_count);
+
+      for (const CoulombKernelCatalogEntry &entry : entries) {
+        group_id = entry.group_id;
+        centrality_index = entry.centrality_index;
+        mt_index = entry.mt_index;
+        cent_low = entry.cent_low;
+        cent_high = entry.cent_high;
+        mt_low = entry.mt_low;
+        mt_high = entry.mt_high;
+        finite_source_mode = entry.finite_source_mode;
+        seed_radius_fm = entry.seed_radius_fm;
+        final_radius_fm = entry.final_radius_fm;
+        cats_enabled = entry.cats_enabled ? 1 : 0;
+        kstar_min_mev = entry.kstar_min_mev;
+        kstar_max_mev = entry.kstar_max_mev;
+        kstar_bin_count = entry.kstar_bin_count;
         tree->Fill();
       }
 
@@ -2547,13 +2828,15 @@ namespace exp_femto_3d {
 
     // The standalone report file is independent of the detailed per-slice fit ROOT file.
     void WriteFitReportRootFile(const std::string &fit_report_root_path,
-                                const std::vector<LevyFitResult> &fit_results) {
+                                const std::vector<LevyFitResult> &fit_results,
+                                const std::vector<CoulombKernelCatalogEntry> &kernel_catalog_entries) {
       CreateOrResetRootFile(fit_report_root_path);
       auto output_file = OpenRootFile(fit_report_root_path, "UPDATE");
 
       // The report file is summary-only: it mirrors the legacy summary products
       // and adds canvases grouped by centrality and mT.
       WriteFitCatalogTree(*output_file, fit_results);
+      WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
       WriteR2Graphs(*output_file, fit_results);
       auto *source_parameters_directory = GetOrCreateDirectoryPath(*output_file, "source_parameters");
       WriteSourceParameterOverviewCanvases(*source_parameters_directory, fit_results);
@@ -2848,6 +3131,10 @@ namespace exp_femto_3d {
       throw std::runtime_error(
           "output.fit_report_root_name must resolve to a file distinct from the CF and detailed fit ROOT files.");
     }
+    if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource && !HasCatsFiniteSourceSupport()) {
+      throw std::runtime_error(
+          "fit.coulomb_mode=\"finite_source\" requires CATS support; reconfigure with EXP_FEMTO_3D_HAS_CATS=1.");
+    }
 
     CreateOrResetRootFile(fit_root_path);
     const bool old_add_directory = TH1::AddDirectoryStatus();
@@ -2864,31 +3151,135 @@ namespace exp_femto_3d {
     const bool fit_uses_symmetric_phi_range =
         config.fit.map_pair_phi_to_symmetric_range.value_or(input_cf_uses_symmetric_phi_range);
 
+    std::vector<const SliceCatalogEntry *> selected_entries;
+    selected_entries.reserve(catalog_entries.size());
+    for (const SliceCatalogEntry &entry : catalog_entries) {
+      if (MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins)) {
+        selected_entries.push_back(&entry);
+      }
+    }
+
     FitRunStatistics statistics;
     statistics.catalog_slices = catalog_entries.size();
-    const std::size_t total_selected_slices = static_cast<std::size_t>(std::count_if(
-        catalog_entries.begin(), catalog_entries.end(), [&](const SliceCatalogEntry &entry) {
-          return MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins);
-        }));
+    const std::size_t total_selected_slices = selected_entries.size();
     std::size_t processed_selected_slices = 0;
     ProgressReporter progress(logger, "fit", total_selected_slices, config.fit.progress);
+
+    const FitModel model = override_model.value_or(config.fit.model);
+    logger.Info("Starting fit stage with model=" + ToString(model) + ", coulombMode="
+                + ToString(config.fit.options.coulomb_mode) + ", finiteSourceMode="
+                + (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource
+                       ? ToString(config.fit.options.finite_source_mode)
+                       : std::string(""))
+                + ", inputCFPhiMapping=" + std::string(input_cf_uses_symmetric_phi_range ? "symmetric" : "raw")
+                + ", fitPhiMapping=" + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
+    progress.Update(0);
+
+    std::map<FitResultGroupKey, CoulombKernelTable> finite_source_kernels;
+    std::vector<CoulombKernelCatalogEntry> kernel_catalog_entries;
+
+    auto load_raw_histograms_if_needed = [&](const SliceCatalogEntry &entry,
+                                             std::unique_ptr<TH3D> &h_se_raw,
+                                             std::unique_ptr<TH3D> &h_me_raw,
+                                             const bool throw_on_missing) -> bool {
+      if (!config.fit.options.use_pml) {
+        return true;
+      }
+      h_se_raw.reset(LoadStoredHistogram3D(*input_file, entry.se_object_path, entry.slice_id + "_se_raw"));
+      h_me_raw.reset(LoadStoredHistogram3D(*input_file, entry.me_object_path, entry.slice_id + "_me_raw"));
+      if (h_se_raw && h_me_raw) {
+        return true;
+      }
+      if (throw_on_missing) {
+        throw std::runtime_error("PML requested but raw SE/ME histograms are missing for finite-source seed slice "
+                                 + entry.slice_id + ".");
+      }
+      return false;
+    };
+
+    if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
+      std::vector<FitResultGroupKey> group_order;
+      std::map<FitResultGroupKey, const SliceCatalogEntry *> phi_integrated_by_group;
+      for (const SliceCatalogEntry *entry : selected_entries) {
+        const FitResultGroupKey key{entry->centrality_index, entry->mt_index};
+        if (phi_integrated_by_group.find(key) == phi_integrated_by_group.end()
+            && std::find(group_order.begin(), group_order.end(), key) == group_order.end()) {
+          group_order.push_back(key);
+        }
+        if (entry->is_phi_integrated) {
+          phi_integrated_by_group[key] = entry;
+        }
+      }
+
+      logger.Info("Preparing finite-source Coulomb kernels for " + std::to_string(group_order.size())
+                  + " cent/mT groups.");
+      for (const FitResultGroupKey &key : group_order) {
+        const auto seed_entry_iter = phi_integrated_by_group.find(key);
+        if (seed_entry_iter == phi_integrated_by_group.end()) {
+          throw std::runtime_error("Finite-source Coulomb requires a phi-integrated seed slice for selected group.");
+        }
+        const SliceCatalogEntry &seed_entry = *seed_entry_iter->second;
+        std::unique_ptr<TH3D> h_cf(
+            LoadStoredHistogram3D(*input_file, seed_entry.cf_object_path, seed_entry.slice_id + "_finite_seed_cf"));
+        if (!h_cf) {
+          throw std::runtime_error("Missing CF histogram for finite-source seed slice " + seed_entry.slice_id + ".");
+        }
+        std::unique_ptr<TH3D> h_se_raw;
+        std::unique_ptr<TH3D> h_me_raw;
+        load_raw_histograms_if_needed(seed_entry, h_se_raw, h_me_raw, true);
+
+        LevyFitOptions seed_options = config.fit.options;
+        seed_options.coulomb_mode = CoulombMode::kGamow;
+        auto seed_fit = FitSingleSlice(h_cf.get(),
+                                       h_se_raw.get(),
+                                       h_me_raw.get(),
+                                       seed_entry,
+                                       model,
+                                       seed_options,
+                                       fit_uses_symmetric_phi_range,
+                                       nullptr);
+        if (!seed_fit.has_value()) {
+          throw std::runtime_error("Gamow seed fit failed for finite-source group " + seed_entry.group_id + ".");
+        }
+        const double seed_radius_fm = ComputeEffectiveRadiusFromResult(seed_fit->result);
+        double final_radius_fm = seed_radius_fm;
+        CoulombKernelTable working_kernel = BuildFiniteSourceCoulombKernel(
+            seed_entry, config.fit.options.finite_source_mode, seed_radius_fm, seed_radius_fm);
+
+        if (config.fit.options.finite_source_mode == FiniteSourceMode::kIterative1D) {
+          auto iterative_fit = FitSingleSlice(h_cf.get(),
+                                             h_se_raw.get(),
+                                             h_me_raw.get(),
+                                             seed_entry,
+                                             model,
+                                             config.fit.options,
+                                             fit_uses_symmetric_phi_range,
+                                             &working_kernel);
+          if (!iterative_fit.has_value()) {
+            throw std::runtime_error("Finite-source iterative seed fit failed for group " + seed_entry.group_id + ".");
+          }
+          final_radius_fm = ComputeEffectiveRadiusFromResult(iterative_fit->result);
+          working_kernel = BuildFiniteSourceCoulombKernel(
+              seed_entry, config.fit.options.finite_source_mode, seed_radius_fm, final_radius_fm);
+        }
+
+        logger.Info("Finite-source kernel " + seed_entry.group_id + ": seed R_eff="
+                    + FormatDouble(seed_radius_fm, 3) + " fm, final R_eff=" + FormatDouble(final_radius_fm, 3)
+                    + " fm, k*=" + FormatDouble(working_kernel.catalog_entry.kstar_min_mev, 1) + "-"
+                    + FormatDouble(working_kernel.catalog_entry.kstar_max_mev, 1) + " MeV/c.");
+        kernel_catalog_entries.push_back(working_kernel.catalog_entry);
+        finite_source_kernels.emplace(key, std::move(working_kernel));
+      }
+    }
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.fit.reopen_output_file_per_slice) {
       shared_output_file = OpenRootFile(fit_root_path, "UPDATE");
     }
 
-    const FitModel model = override_model.value_or(config.fit.model);
-    logger.Info("Starting fit stage with model=" + ToString(model) + ", inputCFPhiMapping="
-                + std::string(input_cf_uses_symmetric_phi_range ? "symmetric" : "raw") + ", fitPhiMapping="
-                + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
-    progress.Update(0);
-
     std::vector<LevyFitResult> fit_results;
-    for (const SliceCatalogEntry &entry : catalog_entries) {
-      if (!MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins)) {
-        continue;
-      }
+    for (const SliceCatalogEntry *entry_ptr : selected_entries) {
+      const SliceCatalogEntry &entry = *entry_ptr;
       ++statistics.selected_slices;
       logger.Debug("Fitting slice " + entry.slice_id);
 
@@ -2903,30 +3294,41 @@ namespace exp_femto_3d {
 
       std::unique_ptr<TH3D> h_se_raw;
       std::unique_ptr<TH3D> h_me_raw;
-      if (config.fit.options.use_pml) {
-        h_se_raw.reset(LoadStoredHistogram3D(*input_file, entry.se_object_path, entry.slice_id + "_se_raw"));
-        h_me_raw.reset(LoadStoredHistogram3D(*input_file, entry.me_object_path, entry.slice_id + "_me_raw"));
-        if (!h_se_raw || !h_me_raw) {
-          logger.Warn("PML requested but raw SE/ME histograms are missing for " + entry.slice_id);
-          ++statistics.skipped_missing_raw_histograms;
-          ++processed_selected_slices;
-          progress.Update(processed_selected_slices);
-          continue;
-        }
+      if (!load_raw_histograms_if_needed(entry, h_se_raw, h_me_raw, false)) {
+        logger.Warn("PML requested but raw SE/ME histograms are missing for " + entry.slice_id);
+        ++statistics.skipped_missing_raw_histograms;
+        ++processed_selected_slices;
+        progress.Update(processed_selected_slices);
+        continue;
       }
 
-      LevyFitResult fit_result;
-      if (FitAndWriteSingleSlice(h_cf.get(),
-                                 h_se_raw.get(),
-                                 h_me_raw.get(),
-                                 entry,
-                                 model,
-                                 config.fit.options,
-                                 fit_uses_symmetric_phi_range,
-                                 fit_root_path,
-                                 fit_result,
-                                 shared_output_file.get())) {
-        fit_results.push_back(fit_result);
+      const CoulombKernelTable *coulomb_kernel = nullptr;
+      if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
+        const FitResultGroupKey key{entry.centrality_index, entry.mt_index};
+        const auto kernel_iter = finite_source_kernels.find(key);
+        if (kernel_iter == finite_source_kernels.end()) {
+          throw std::runtime_error("Missing finite-source Coulomb kernel for group " + entry.group_id + ".");
+        }
+        coulomb_kernel = &kernel_iter->second;
+      }
+
+      auto fit_output = FitSingleSlice(h_cf.get(),
+                                       h_se_raw.get(),
+                                       h_me_raw.get(),
+                                       entry,
+                                       model,
+                                       config.fit.options,
+                                       fit_uses_symmetric_phi_range,
+                                       coulomb_kernel);
+      if (fit_output.has_value()) {
+        WriteSingleSliceFitArtifacts(h_cf.get(),
+                                     entry,
+                                     fit_output->fit_function.get(),
+                                     fit_output->result,
+                                     fit_root_path,
+                                     shared_output_file.get(),
+                                     coulomb_kernel);
+        fit_results.push_back(fit_output->result);
         ++statistics.fitted_slices;
       }
       ++processed_selected_slices;
@@ -2936,16 +3338,18 @@ namespace exp_femto_3d {
     if (shared_output_file) {
       WriteR2Graphs(*shared_output_file, fit_results);
       WriteFitCatalogTree(*shared_output_file, fit_results);
+      WriteCoulombKernelCatalogTree(*shared_output_file, kernel_catalog_entries);
       shared_output_file->Close();
       shared_output_file.reset();
     } else {
       auto output_file = OpenRootFile(fit_root_path, "UPDATE");
       WriteR2Graphs(*output_file, fit_results);
       WriteFitCatalogTree(*output_file, fit_results);
+      WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
       output_file->Close();
     }
     WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
-    WriteFitReportRootFile(fit_report_root_path, fit_results);
+    WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries);
 
     progress.Finish();
     TH1::AddDirectory(old_add_directory);

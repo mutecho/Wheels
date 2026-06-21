@@ -2,23 +2,43 @@
 
 ## Task Snapshot
 
-- scope: upgrade build/fit progress rendering to match the Eventgen-style ETA
-  display
-- current conclusion: `build-cf` and `fit` progress now show stage label,
-  percent, an activity frame, and ETA, with a one-second heartbeat while ROOT
-  work is still running
+- scope: implement finite-source Coulomb fit support from
+  `docs/plan/fit_finite_coul.md`
+- current conclusion: `fit` now supports explicit Coulomb modes
+  `none`, `gamow`, and `finite_source`; finite-source mode uses optional local
+  CATS tables keyed by centrality/mT, seeded from the corresponding `phi_all`
+  slice, and writes the selected mode plus finite-source radius into fit
+  metadata
 - primary evidence:
-  - `FormatProgressLine` renders the label, 50-column bar, integer percent,
-    activity frame, and ETA from a value-only snapshot
-  - `ProgressReporter` starts a heartbeat when progress is enabled and stops it
-    before finish/abort cleanup
-  - `Logger` progress rendering is mutex-protected so warning/info output closes
-    the progress line before writing log messages
-  - `progress_render_test` covers half-complete ETA, not-started unknown ETA,
-    and over-complete clamping to 100%
-  - `2026-06-10` O2Physics ROOT executor configure/build/`ctest
-    --output-on-failure` returned `PRIMARY_OK`; all four registered tests
-    passed
+  - `[fit].coulomb_mode` parses `none|gamow|finite_source`; legacy
+    `[fit].use_coulomb` remains accepted only when it maps unambiguously to
+    `none` or `gamow`
+  - `[fit].finite_source_mode` parses `fixed_1d|iterative_1d` and is rejected
+    unless `coulomb_mode = "finite_source"`
+  - CMake enables CATS-backed finite-source support when the local CATS/GSL
+    libraries are available, and a no-CATS build fails finite-source workflows
+    explicitly instead of silently falling back
+  - finite-source fitting builds a one-dimensional Coulomb kernel from CATS
+    using `k* = 0.5 * q_inv`, seeds each centrality/mT group from `phi_all`,
+    and supports one-pass fixed or one-pass iterative source-radius updates
+  - fit summaries preserve `usesCoulomb` and add `coulombMode`,
+    `finiteSourceMode`, and `finiteSourceRadiusFm`; detailed and report ROOT
+    outputs include `meta/CoulombKernelCatalog`
+  - `workflow_smoke_test` covers `fixed_1d`, `iterative_1d`, and the no-CATS
+    finite-source failure path; `coulomb_kernel_validation_test` covers the
+    q-to-k mapping, table interpolation/clamping, no-FSI unity reference, and
+    finite-source radius ordering
+  - `scripts/cmake.sh` now clean-builds the selected build tree by default and
+    verifies that `bin/exp_femto_3d` links CATS whenever the current build rule
+    expects CATS, preventing a stale no-CATS binary from surviving in the
+    shared source-tree `bin/` output directory
+  - `2026-06-21` O2Physics ROOT executor configure/build/`ctest
+    --output-on-failure` returned `PRIMARY_OK` in both CATS-enabled and
+    no-CATS build matrices; all five registered tests passed in both matrices
+  - `2026-06-22` O2Physics ROOT executor `scripts/cmake.sh` returned
+    `PRIMARY_OK`, relinked the default CATS-enabled targets, `otool -L` showed
+    `libCATS` and GSL on `bin/exp_femto_3d`, and `ctest --output-on-failure`
+    passed all five registered tests
 
 ## Previous Snapshot
 
@@ -88,43 +108,68 @@
 
 ## Verification Status
 
-- verification_status: locally verified for progress formatting, config parsing,
-  and ROOT-backed smoke coverage
+- verification_status: locally verified for config parsing, Coulomb kernel
+  behavior, and ROOT-backed smoke coverage
 - project_state_sync_status: written
 
 Reason:
 
+- `2026-06-21` O2Physics ROOT executor configure/build/`ctest
+  --output-on-failure` returned `PRIMARY_OK` for the default CATS-enabled build
+- the CATS-enabled configure step reported
+  `CATS finite-source Coulomb support enabled` using the local CATS install
+- the CATS-enabled `ctest` run passed 5/5 tests:
+  `coulomb_kernel_validation_test`, `config_parse_validation_test`,
+  `progress_render_test`, `slice_catalog_roundtrip_test`, and
+  `workflow_smoke_test`
+- `2026-06-21` O2Physics ROOT executor configure/build/`ctest
+  --output-on-failure` also returned `PRIMARY_OK` with
+  `-DEXP_FEMTO_3D_ENABLE_CATS=OFF`
+- the no-CATS `ctest` run passed the same 5/5 registered tests, including the
+  explicit finite-source unavailable failure path
+- `2026-06-22` `scripts/cmake.sh` returned `PRIMARY_OK` through the O2Physics
+  ROOT executor, clean-rebuilt the default build, and produced a CATS-linked
+  `bin/exp_femto_3d`
+- `2026-06-22` `ctest --test-dir Exp_femto_3d/build --output-on-failure`
+  returned `PRIMARY_OK`; all five registered tests passed after the build
+  helper change
+- `2026-06-22` `otool -L bin/exp_femto_3d | grep -E 'CATS|gsl'` showed
+  `libCATS.dylib`, `libgsl`, and `libgslcblas`
+- `git diff --check` passed after the finite-source implementation and ledger
+  updates
+- full real-data physics regression on production OO/PbPb inputs has not yet
+  been rerun; current coverage is toy ROOT workflow smoke plus direct kernel
+  behavior checks
 - `2026-06-10` O2Physics ROOT executor `cmake -S ... -B ...`, `cmake --build
   ... -j4`, and `ctest --output-on-failure` all returned `PRIMARY_OK`
-- `ctest` now runs four tests: `config_parse_validation_test`,
-  `progress_render_test`, `slice_catalog_roundtrip_test`, and
-  `workflow_smoke_test`; all passed
+- `ctest` passed the earlier four-test matrix after Eventgen-style progress
+  rendering was added
 - `2026-06-10` `bash -n scripts/run_exp_femto_3d.sh` and
-  `scripts/run_exp_femto_3d.sh --help` passed for the new script entry
-- `2026-06-10` `bash -u` branch checks passed for both empty and non-empty
-  preserved-argument cases after the no-argument re-entry fix
-- the full `oo_build_and_fit.toml` real-data build/fit was intentionally not
-  rerun during script creation because it would write configured production
+  `scripts/run_exp_femto_3d.sh --help` passed for the OO run script entry
+- the full `oo_build_and_fit.toml` real-data build/fit remains intentionally
+  unrereun during local smoke work because it writes configured production
   outputs under `/Users/allenzhou/ALICE/alidata/femtoep_res/OO` and
   `Exp_femto_3d/res`
-- O2Physics ROOT executor `ctest --output-on-failure` passed on `2026-06-10`
-  after adding the standalone fit report ROOT file and report-object smoke
-  checks
-- authoritative local test execution for the current worktree passed in a clean
-  non-sandboxed O2Physics environment on `2026-04-19`
+- authoritative local test execution for the phi-mapping worktree passed in a
+  clean non-sandboxed O2Physics environment on `2026-04-19`
 - O2Physics ROOT executor `ctest --output-on-failure` passed on `2026-05-18`
   after the mixed-event phi-splitting switch was added
-- the same date's sandboxed run still produced `/dev/fd/... Operation not
-  permitted`, so ROOT-guarded skips remain non-authoritative environment noise
-- full real-data equivalence validation against the legacy macro has not yet
-  been rerun after the current phi-mapping update
-- the new run script is verified as an operator wrapper, but the default OO
-  `all` stage has not been executed in this update
+- sandboxed runs that fail during `alienv` bootstrap with `/dev/fd/... Operation
+  not permitted` remain non-authoritative environment noise
 
 ## Active Constraints
 
 - ROOT-dependent validation must be run from a fully entered O2Physics
   environment
+- finite-source Coulomb fits require CATS support at configure/build time;
+  builds without CATS reject `coulomb_mode = "finite_source"` during workflow
+  execution
+- CATS kernel tables are one-dimensional in `k*` and seeded per centrality/mT
+  group from the selected `phi_all` slice; physics closure still requires a
+  real-data regression on a known-good dataset
+- `scripts/cmake.sh` defaults to a clean-first build because all build trees
+  currently write executables into the shared source-tree `bin/` directory;
+  use `EXP_FEMTO_3D_CLEAN_FIRST=0` only for a deliberate fast incremental loop
 - `scripts/run_exp_femto_3d.sh` defaults to `config/oo_build_and_fit.toml` and
   executes both `build-cf` and `fit`, so running it without `--stage` writes the
   configured OO outputs
@@ -132,8 +177,6 @@ Reason:
   `"auto"` mode the ETA line is shown only when `stderr` is attached to a TTY
 - sandboxed tool runs that fail during `alienv` bootstrap are not reliable
   evidence for code-level ROOT regressions
-- physics-level closure still requires a real-data regression on a known-good
-  dataset
 - `build.split_mixed_event_by_phi = false` preserves the historical
   phi-integrated mixed-event denominator per centrality/mT group; `true` is the
   opt-in mode for denominators that follow each SE phi slice
@@ -145,9 +188,21 @@ Reason:
 
 ## Active Worktree Highlights
 
+- `fit` exposes `fit.coulomb_mode = "none"|"gamow"|"finite_source"` and keeps
+  legacy `fit.use_coulomb` compatibility for unambiguous none/Gamow configs
+- `fit.finite_source_mode = "fixed_1d"|"iterative_1d"` controls whether the
+  final CATS kernel uses the Gamow-seeded `phi_all` radius directly or performs
+  one finite-source seed refit before rebuilding the final kernel
+- detailed and report ROOT outputs write `meta/CoulombKernelCatalog`; TSV and
+  `meta/FitCatalog` expose Coulomb mode and finite-source radius metadata
+- CMake auto-detects local CATS/GSL and can be forced off with
+  `-DEXP_FEMTO_3D_ENABLE_CATS=OFF` for explicit no-CATS validation
+- `scripts/cmake.sh` is the default local build helper; it resolves the project
+  root from the script path, clean-builds by default, and checks the final
+  operator binary for CATS linkage when the current link rule includes CATS
 - `scripts/run_exp_femto_3d.sh` provides the project-local OO run entry with
   runtime re-entry, stage selection, and fit overrides
-- build and fit now expose explicit progress-mode control plus Eventgen-style
+- build and fit expose explicit progress-mode control plus Eventgen-style
   activity and ETA rendering
 - `SliceCatalog` carries file-level build phi mapping metadata for downstream
   consumers
@@ -162,8 +217,8 @@ Reason:
 
 ## Coordination Ledger State
 
-- `project-state/` is now the active adopted coordination ledger for
+- `project-state/` is the active adopted coordination ledger for
   `Exp_femto_3d`
-- this sync updates the ledger from the earlier ROOT-runtime bootstrap state to
-  the current phi-mapping/progress-control development state, the OO run script
-  entry, and the Eventgen-style progress rendering update
+- this sync records the finite-source Coulomb implementation, CATS/no-CATS
+  validation matrix, the hardened `scripts/cmake.sh` build helper, and the
+  remaining real-data physics-regression gap

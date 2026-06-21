@@ -85,6 +85,8 @@ max = 0.4
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
   Expect(config.fit.map_pair_phi_to_symmetric_range.has_value(), "fit phi mapping override should parse");
   Expect(!*config.fit.map_pair_phi_to_symmetric_range, "fit phi mapping override should be false");
+  Expect(config.fit.options.coulomb_mode == CoulombMode::kNone, "legacy use_coulomb=false should map to none");
+  Expect(ToString(CoulombMode::kGamow) == "gamow", "CoulombMode string helper mismatch");
 
   const std::string overlapping_bins_config = R"toml(
 [input]
@@ -233,6 +235,86 @@ max = 0.4
   Expect(pbpb_example.fit_mt_bins.size() == 3, "pbpb example fit_selection.mt should parse");
   Expect(pbpb_example.build.progress == ProgressMode::kAuto, "pbpb build progress should parse");
   Expect(pbpb_example.fit.progress == ProgressMode::kAuto, "pbpb fit progress should parse");
+  Expect(pbpb_example.fit.options.coulomb_mode == CoulombMode::kGamow,
+         "legacy use_coulomb=true should map to gamow");
+
+  const auto mode_config = [](const std::string &fit_coulomb_lines) {
+    return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "diag"
+)toml" + fit_coulomb_lines + R"toml(
+use_core_halo_lambda = true
+use_q2_baseline = false
+use_pml = false
+fit_q_max = 0.15
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  };
+
+  const ApplicationConfig explicit_none =
+      LoadApplicationConfig(WriteFile(temp_dir / "coulomb_none.toml", mode_config("coulomb_mode = \"none\"\n")));
+  Expect(explicit_none.fit.options.coulomb_mode == CoulombMode::kNone, "explicit none Coulomb mode should parse");
+
+  const ApplicationConfig explicit_gamow =
+      LoadApplicationConfig(WriteFile(temp_dir / "coulomb_gamow.toml", mode_config("coulomb_mode = \"gamow\"\n")));
+  Expect(explicit_gamow.fit.options.coulomb_mode == CoulombMode::kGamow, "explicit gamow Coulomb mode should parse");
+
+  const ApplicationConfig explicit_finite = LoadApplicationConfig(WriteFile(
+      temp_dir / "coulomb_finite.toml",
+      mode_config("coulomb_mode = \"finite_source\"\nfinite_source_mode = \"iterative_1d\"\n")));
+  Expect(explicit_finite.fit.options.coulomb_mode == CoulombMode::kFiniteSource,
+         "explicit finite-source Coulomb mode should parse");
+  Expect(explicit_finite.fit.options.finite_source_mode == FiniteSourceMode::kIterative1D,
+         "explicit iterative finite-source mode should parse");
+
+  const ApplicationConfig agreeing_legacy = LoadApplicationConfig(WriteFile(
+      temp_dir / "coulomb_agree.toml", mode_config("use_coulomb = true\ncoulomb_mode = \"gamow\"\n")));
+  Expect(agreeing_legacy.fit.options.coulomb_mode == CoulombMode::kGamow,
+         "agreeing legacy and explicit Coulomb fields should parse");
+
+  const auto expect_config_error = [&](const std::string &name, const std::string &contents) {
+    bool saw_error = false;
+    try {
+      (void)LoadApplicationConfig(WriteFile(temp_dir / name, contents));
+    } catch (const ConfigError &) {
+      saw_error = true;
+    }
+    Expect(saw_error, name + " should fail config validation");
+  };
+
+  expect_config_error("coulomb_conflict_false_gamow.toml",
+                      mode_config("use_coulomb = false\ncoulomb_mode = \"gamow\"\n"));
+  expect_config_error("coulomb_conflict_true_none.toml",
+                      mode_config("use_coulomb = true\ncoulomb_mode = \"none\"\n"));
+  expect_config_error("coulomb_conflict_true_finite.toml",
+                      mode_config("use_coulomb = true\ncoulomb_mode = \"finite_source\"\n"));
+  expect_config_error("coulomb_invalid_mode.toml", mode_config("coulomb_mode = \"bogus\"\n"));
+  expect_config_error("finite_mode_without_finite_source.toml",
+                      mode_config("coulomb_mode = \"gamow\"\nfinite_source_mode = \"fixed_1d\"\n"));
+  expect_config_error("finite_mode_invalid.toml",
+                      mode_config("coulomb_mode = \"finite_source\"\nfinite_source_mode = \"bogus\"\n"));
 
   const std::string invalid_config = R"toml(
 [input]
