@@ -84,7 +84,7 @@ namespace femto3d {
     AxisSpec rho_out_axis{"#rho_{out}", -20.0, 20.0, 0.5};
     AxisSpec rho_side_axis{"#rho_{side}", -20.0, 20.0, 0.5};
     AxisSpec rho_long_axis{"#rho_{long}", -20.0, 20.0, 0.5};
-    AxisSpec projection_axis{"r", -20.0, 20.0, 0.5};
+    AxisSpec projection_axis{"r", -60.0, 60.0, 0.5};
     bool warn_on_overflow = true;
   };
 

@@ -28,10 +28,10 @@
     finite-source failure path; `coulomb_kernel_validation_test` covers the
     q-to-k mapping, table interpolation/clamping, no-FSI unity reference, and
     finite-source radius ordering
-  - `scripts/cmake.sh` now clean-builds the selected build tree by default and
+  - `scripts/cmake.sh` now defaults to CMake's incremental build path, refreshes
+    stale ROOT cache entries only when the active ROOT runtime changes, and
     verifies that `bin/exp_femto_3d` links CATS whenever the current build rule
-    expects CATS, preventing a stale no-CATS binary from surviving in the
-    shared source-tree `bin/` output directory
+    expects CATS
   - `2026-06-21` O2Physics ROOT executor configure/build/`ctest
     --output-on-failure` returned `PRIMARY_OK` in both CATS-enabled and
     no-CATS build matrices; all five registered tests passed in both matrices
@@ -135,6 +135,16 @@ Reason:
   helper change
 - `2026-06-22` `otool -L bin/exp_femto_3d | grep -E 'CATS|gsl'` showed
   `libCATS.dylib`, `libgsl`, and `libgslcblas`
+- `2026-06-23` `scripts/cmake.sh` returned `PRIMARY_OK` through the O2Physics
+  ROOT executor, refreshed stale `ROOT/v6-36-10-alice1-local7` CMake cache
+  entries to active `ROOT/v6-36-10-alice1-local8`, and a second helper run
+  performed no compile or link work
+- `2026-06-23` `ctest --test-dir build --output-on-failure` returned
+  `PRIMARY_OK`; all five registered tests passed after the incremental helper
+  change
+- `2026-06-23` `otool` checks showed `bin/exp_femto_3d` has ROOT
+  `LC_RPATH` at `ROOT/v6-36-10-alice1-local8/lib` and still links
+  `libCATS.dylib`, `libgsl`, and `libgslcblas`
 - `git diff --check` passed after the finite-source implementation and ledger
   updates
 - full real-data physics regression on production OO/PbPb inputs has not yet
@@ -167,9 +177,8 @@ Reason:
 - CATS kernel tables are one-dimensional in `k*` and seeded per centrality/mT
   group from the selected `phi_all` slice; physics closure still requires a
   real-data regression on a known-good dataset
-- `scripts/cmake.sh` defaults to a clean-first build because all build trees
-  currently write executables into the shared source-tree `bin/` directory;
-  use `EXP_FEMTO_3D_CLEAN_FIRST=0` only for a deliberate fast incremental loop
+- `scripts/cmake.sh` defaults to CMake's incremental dependency checks; use
+  `EXP_FEMTO_3D_CLEAN_FIRST=1` only for a deliberately full clean rebuild
 - `scripts/run_exp_femto_3d.sh` defaults to `config/oo_build_and_fit.toml` and
   executes both `build-cf` and `fit`, so running it without `--stage` writes the
   configured OO outputs
@@ -198,8 +207,9 @@ Reason:
 - CMake auto-detects local CATS/GSL and can be forced off with
   `-DEXP_FEMTO_3D_ENABLE_CATS=OFF` for explicit no-CATS validation
 - `scripts/cmake.sh` is the default local build helper; it resolves the project
-  root from the script path, clean-builds by default, and checks the final
-  operator binary for CATS linkage when the current link rule includes CATS
+  root from the script path, refreshes stale ROOT cache/link rules only when
+  the active ROOT runtime changes, and checks the final operator binary for
+  CATS linkage when the current link rule includes CATS
 - `scripts/run_exp_femto_3d.sh` provides the project-local OO run entry with
   runtime re-entry, stage selection, and fit overrides
 - build and fit expose explicit progress-mode control plus Eventgen-style

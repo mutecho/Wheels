@@ -114,6 +114,11 @@ output_root = "output.root"
     std::cerr << "Expected alpha fit bounds to default to [0.20, 2.00].\n";
     return 18;
   }
+  if (std::abs(valid.analysis.histograms.projection_axis.min + 60.0) > 1.0e-12 ||
+      std::abs(valid.analysis.histograms.projection_axis.max - 60.0) > 1.0e-12) {
+    std::cerr << "Expected projection-axis fit input range to default to [-60.0, 60.0].\n";
+    return 21;
+  }
 
   const std::string legacy_config = R"toml(
 [input]

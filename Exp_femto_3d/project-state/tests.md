@@ -1,5 +1,49 @@
 # Tests
 
+## T-011: Incremental Build Helper Refreshes ROOT Links Only When Needed
+
+- date: 2026-06-23
+- environment: O2Physics ROOT executor, `PRIMARY_OK`
+- command:
+
+```bash
+bash -n /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/scripts/cmake.sh
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'bash scripts/cmake.sh'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'bash scripts/cmake.sh'
+
+rg -n "ROOT_DIR|local8|local7" build/CMakeCache.txt build/CMakeFiles/exp_femto_3d.dir/link.txt
+otool -l bin/exp_femto_3d | rg -A2 "LC_RPATH|path .*ROOT|path .*CATS"
+otool -L bin/exp_femto_3d | rg "CATS|gsl"
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'ctest --test-dir build --output-on-failure'
+```
+
+- result: passed
+- evidence:
+  - `bash -n scripts/cmake.sh` passed
+  - first `scripts/cmake.sh` run detected cached
+    `ROOT/v6-36-10-alice1-local7` and refreshed to active
+    `ROOT/v6-36-10-alice1-local8`
+  - second `scripts/cmake.sh` run returned `PRIMARY_OK` with only
+    `Built target ...` lines, confirming no compile or link work when inputs
+    are unchanged
+  - `build/CMakeFiles/exp_femto_3d.dir/link.txt` and the binary `LC_RPATH`
+    both point at `ROOT/v6-36-10-alice1-local8/lib`
+  - `otool -L bin/exp_femto_3d` showed `libCATS.dylib`, `libgsl`, and
+    `libgslcblas`
+  - `ctest --test-dir build --output-on-failure` returned `PRIMARY_OK` and
+    passed all five registered tests
+- significance: keeps stale ROOT/CATS link protection while avoiding the
+  previous unconditional clean rebuild on every helper invocation
+
 ## T-010: Clean-First Build Helper Rebuilds CATS Operator Binary
 
 - date: 2026-06-22

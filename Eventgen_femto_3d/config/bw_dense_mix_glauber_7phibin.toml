@@ -69,8 +69,8 @@ bin_width = 0.5
 
 [histograms.projection_axis]
 title = "r"
-min = -20.0
-max = 20.0
+min = -60.0
+max = 60.0
 bin_width = 0.5
 
 [projection_fit]

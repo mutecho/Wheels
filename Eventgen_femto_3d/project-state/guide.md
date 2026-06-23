@@ -93,11 +93,19 @@
 推荐在 O2/ROOT 运行时中构建：
 
 ```bash
-cmake -S /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d \
-      -B /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/build
-
-cmake --build /Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/build
+/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/scripts/cmake.sh
 ```
+
+该脚本会从自身位置解析项目根目录，默认使用
+`/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/build`，并将主程序输出到源码树
+`bin/eventgen_femto_3d`。可用 `EVENTGEN_FEMTO_3D_BUILD_DIR` 覆盖 build tree，用
+`EVENTGEN_FEMTO_3D_BUILD_JOBS` 覆盖并行数。默认走增量构建；需要全量清理时设置
+`EVENTGEN_FEMTO_3D_CLEAN_FIRST=1`。
+
+当当前 shell 可见 `root-config` 时，`cmake.sh` 会把当前 ROOT 的 `ROOT_DIR`
+显式传给 CMake；若 CMake cache 仍指向旧 ROOT 包，脚本会清理 `ROOT_*` cache 并触发
+relink，避免 `bin/eventgen_femto_3d` 链接旧 ROOT 而 wrapper 运行在新 ROOT 时产生
+`TClassTable::Add` / `TCling::LoadPCM` 噪声。
 
 构建完成后，主程序默认位于：
 

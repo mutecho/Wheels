@@ -1,5 +1,48 @@
 # Tests
 
+## 2026-06-23 R2 projection fit range 验证
+
+- verification_status: `verified`
+
+## 运行命令
+
+- `rg -n -- "\\[histograms\\.(rho_out_axis|rho_side_axis|rho_long_axis|projection_axis)\\]|min = -60\\.0|max = 60\\.0|min = -20\\.0|max = 20\\.0" config include/femto3d/AnalysisConfig.h`
+- `bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d --command 'bash scripts/cmake.sh'`
+- `bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d --command 'ctest --test-dir build --output-on-failure'`
+
+## 本轮结果
+
+- 确认 `R2` 拟合输入范围由 `histograms.projection_axis` 控制；修改后默认和 6 个 TOML 配置均为 `min = -60.0`、`max = 60.0`。
+- 确认 `rho_out_axis`、`rho_side_axis`、`rho_long_axis` 仍为 `[-20, 20]`。
+- `config_parse_validation_test` 新增覆盖默认 `projection_axis = [-60, 60]`。
+- 构建命令首次沙箱运行返回 `STATUS: ESCALATION_REQUIRED`；同一命令提升权限后返回 `STATUS: PRIMARY_OK`。
+- O2Physics ROOT executor `ctest` 返回 `STATUS: PRIMARY_OK`，`8/8` 通过。
+
+## 2026-06-23 cmake.sh 按需重连验证
+
+- verification_status: `verified`
+
+## 运行命令
+
+- `bash -n scripts/cmake.sh`
+- `bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d --command 'bash scripts/cmake.sh'`
+- `bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d --command 'bash scripts/cmake.sh'`
+- `rg -n "ROOT_DIR|local8|local7" build/CMakeCache.txt build/CMakeFiles/eventgen_femto_3d.dir/link.txt`
+- `otool -l bin/eventgen_femto_3d | rg -A2 "LC_RPATH|path .*ROOT"`
+- `bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d --command 'ctest --test-dir build --output-on-failure'`
+- `/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/scripts/run_eventgen_femto_3d.sh --config /Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/config/blastwave_flat_trees.toml --output-root /private/tmp/eventgen_femto_3d_root_noise_probe.root --no-progress`
+
+## 本轮结果
+
+- `scripts/cmake.sh` 的 bash 语法检查通过。
+- 首次 O2Physics ROOT executor 构建返回 `STATUS: PRIMARY_OK`，检测到 `ROOT/v6-36-10-alice1-local7` -> `ROOT/v6-36-10-alice1-local8` 的 cache 漂移，并刷新 ROOT CMake cache。
+- 第二次 O2Physics ROOT executor 构建返回 `STATUS: PRIMARY_OK`，日志只有 `Built target ...`，没有 `Building CXX object` 或 `Linking CXX executable`，确认无更新时保持增量 no-op。
+- `build/CMakeFiles/eventgen_femto_3d.dir/link.txt` 已指向 `ROOT/v6-36-10-alice1-local8/lib`。
+- `bin/eventgen_femto_3d` 的 `LC_RPATH` 已指向 `ROOT/v6-36-10-alice1-local8/lib`。
+- O2Physics ROOT executor `ctest` 返回 `STATUS: PRIMARY_OK`，`8/8` 通过。
+- 真实 wrapper smoke 成功读取 `5000` 个事件，选择 `203546` 个粒子，接受 `3249284` 个 pair，输出 `/private/tmp/eventgen_femto_3d_root_noise_probe.root`。
+- wrapper smoke 输出中没有 `Warning in <TClassTable::Add>`、`Error in <TCling::LoadPCM>` 或 `Info in <TCling::LoadPCM>` 噪声。
+
 ## 2026-06-10 projection-fit alpha bounds 配置化验证
 
 - verification_status: `verified`

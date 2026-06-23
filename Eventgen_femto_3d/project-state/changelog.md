@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-23
+
+- 将默认与现有运行配置的 `histograms.projection_axis` 从 `[-20, 20]` 扩大到 `[-60, 60]`，使 R2 投影拟合输入不再受原先一维图示范围截断；`rho_out/side/long` 3D source 轴保持 `[-20, 20]`。
+- 扩展 `config_parse_validation_test`，覆盖默认 `projection_axis = [-60, 60]`。
+- 在 O2Physics ROOT executor 下完成构建与全量 `ctest`，最终 `STATUS: PRIMARY_OK`，`8/8` 通过。
+- 将 `scripts/cmake.sh` 改为从脚本位置解析项目根目录和 build tree，避免依赖硬编码源码绝对路径。
+- 默认构建改回 CMake 增量路径，不再每次 `--clean-first`；人工需要全量重建时可显式设置 `EVENTGEN_FEMTO_3D_CLEAN_FIRST=1`。
+- 新增 ROOT CMake cache 漂移检测：当前 `root-config --prefix` 与已缓存 `ROOT_DIR` 不一致时，清理 ROOT cache、重新 configure，并 touch `link.txt` 触发目标 relink。
+- `cmake.sh` 在当前 shell 可见 `root-config` 时每次显式向 CMake 传入当前 `ROOT_DIR`，避免 cache 类型变化后漏检下一次 ROOT 模块升级。
+- 新增 `EVENTGEN_FEMTO_3D_BUILD_DIR` 与 `EVENTGEN_FEMTO_3D_BUILD_JOBS` 覆盖入口。
+- 在 O2Physics ROOT executor 下验证首次运行可从 `ROOT/v6-36-10-alice1-local7` 刷新到 `ROOT/v6-36-10-alice1-local8`，第二次无更新运行不重复重编/重连，全量 `ctest` `8/8` 通过。
+- 真实 wrapper smoke 写出 `/private/tmp/eventgen_femto_3d_root_noise_probe.root`，未再出现 `TClassTable::Add` 或 `TCling::LoadPCM` 噪声。
+
 ## 2026-06-10
 
 - 将 `projection_fit.alpha_min` 与 `projection_fit.alpha_max` 暴露到 TOML 配置；未设置时默认仍为 `0.2` 与 `2.0`。

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-23
+
+- Changed `scripts/cmake.sh` back to CMake's incremental build path by
+  default; `EXP_FEMTO_3D_CLEAN_FIRST=1` now means an explicit full clean
+  rebuild request.
+- Added active ROOT runtime drift detection: when `root-config --prefix` points
+  at a different `ROOTConfig.cmake` than cached `ROOT_DIR`, the helper clears
+  ROOT CMake cache entries, reconfigures against the active ROOT, and refreshes
+  link rules so targets relink as needed.
+- Kept the CATS binary guard and added an on-demand CATS link-rule refresh for
+  the stale no-CATS binary case, without forcing every ordinary build to
+  recompile.
+- Verified through the O2Physics ROOT executor that the first run refreshed
+  `ROOT/v6-36-10-alice1-local7` to `ROOT/v6-36-10-alice1-local8`, the second
+  run performed no compile/link work, `bin/exp_femto_3d` still links CATS/GSL,
+  and `ctest` passed `5/5`.
+
 ## 2026-06-10
 
 - Upgraded build/fit progress rendering to the Eventgen-style line with stage

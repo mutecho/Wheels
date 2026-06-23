@@ -30,13 +30,18 @@
   - reran the same matrix on `2026-06-21` with
     `-DEXP_FEMTO_3D_ENABLE_CATS=OFF`; all five registered tests passed with
     `PRIMARY_OK`
-  - hardened `scripts/cmake.sh` so the default local build clean-rebuilds the
-    selected build tree and verifies CATS linkage when the generated link rule
-    expects CATS, avoiding stale no-CATS binaries in the shared `bin/` output
+  - hardened `scripts/cmake.sh` so the default local build stays incremental,
+    refreshes stale ROOT CMake cache/link rules when the active ROOT runtime
+    changes, and verifies CATS linkage when the generated link rule expects
+    CATS
   - reran `scripts/cmake.sh` through the O2Physics ROOT executor on
-    `2026-06-22`; it returned `PRIMARY_OK`, relinked the CATS-enabled operator
-    binary, and `otool -L bin/exp_femto_3d` showed `libCATS` plus GSL
-  - reran `ctest --test-dir build --output-on-failure` on `2026-06-22`; all
+    `2026-06-23`; it returned `PRIMARY_OK`, refreshed cached
+    `ROOT/v6-36-10-alice1-local7` links to active
+    `ROOT/v6-36-10-alice1-local8`, and a second run performed no compile/link
+    work
+  - `otool` checks on `bin/exp_femto_3d` showed the active ROOT `LC_RPATH`,
+    `libCATS`, and GSL
+  - reran `ctest --test-dir build --output-on-failure` on `2026-06-23`; all
     five registered tests passed with `PRIMARY_OK`
   - reran `git diff --check`; it passed
 
@@ -53,8 +58,8 @@
 - continue to keep no-CATS builds in the smoke matrix so finite-source requests
   fail explicitly on machines without CATS
 - use `scripts/cmake.sh` for the default local build before running
-  finite-source configs; leave `EXP_FEMTO_3D_CLEAN_FIRST=1` unless doing a
-  deliberate fast incremental loop
+  finite-source configs; set `EXP_FEMTO_3D_CLEAN_FIRST=1` only when a full
+  clean rebuild is deliberately needed
 - keep treating sandbox-only `alienv` failures as environment noise unless a
   non-sandboxed O2Physics rerun reproduces them
 

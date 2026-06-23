@@ -1,5 +1,64 @@
 # Current Status
 
+## 2026-06-23 R2 projection fit range 扩大
+
+- 状态: 已完成 R2 拟合输入投影轴范围从 `[-20, 20]` 扩大到 `[-60, 60]`
+- verification_status: `verified`
+- project_state_sync_status: `written`
+
+## 本轮范围
+
+- 更新默认配置:
+  - [AnalysisConfig.h](/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/include/femto3d/AnalysisConfig.h)
+- 更新运行与示例 TOML:
+  - `config/*.toml`
+  - `config/examples/*.toml`
+- 更新测试:
+  - [ConfigParseValidationTest.cpp](/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/tests/ConfigParseValidationTest.cpp)
+
+## 本轮分析结论
+
+- 当前 R2 拟合没有单独的 fit-window 参数；`ProjectionFit.cpp` 会把一维投影 histogram 中有有效误差的 bin 全部放进 Minuit chi2。
+- 一维投影 histogram 的轴来自 `histograms.projection_axis`，此前默认和当前运行配置均为 `[-20, 20]`，因此超出该范围的投影样本只进入 overflow，不参与拟合。
+- `Rlong2` 的 Minuit 参数上界是 `1.0e3`，问题不在 R2 参数上界，而在投影输入范围可能截断 long 方向尾部。
+- 本轮只扩大 `histograms.projection_axis` 到 `[-60, 60]`，bin width 保持 `0.5`；`rho_out/side/long` 的 3D source 直方图轴暂不扩大，避免 3D bin 数显著增加。
+
+## 本轮验证结论
+
+- O2Physics ROOT executor 首次沙箱运行返回 `STATUS: ESCALATION_REQUIRED`，原因是 `alienv` 入口访问 `/dev/fd` 被 sandbox 拦截。
+- 同一构建命令提升权限后返回 `STATUS: PRIMARY_OK`。
+- O2Physics ROOT executor 运行 `ctest --test-dir build --output-on-failure` 返回 `STATUS: PRIMARY_OK`，`8/8` 通过。
+
+## 2026-06-23 cmake.sh 按需重连
+
+- 状态: 已完成 `scripts/cmake.sh` 自定位、ROOT cache 漂移检测与默认增量构建
+- verification_status: `verified`
+- project_state_sync_status: `written`
+
+## 本轮范围
+
+- 更新构建脚本:
+  - [cmake.sh](/Users/allenzhou/Research_software/Code_Base/Eventgen_femto_3d/scripts/cmake.sh)
+
+## 本轮分析结论
+
+- `scripts/cmake.sh` 现在从脚本位置解析 `project_root`，不再硬编码本机绝对源码路径，因此可从任意当前目录调用。
+- 默认 build tree 仍为 `${project_root}/build`，可通过 `EVENTGEN_FEMTO_3D_BUILD_DIR` 覆盖。
+- 默认并行数仍为 `8`，可通过 `EVENTGEN_FEMTO_3D_BUILD_JOBS` 覆盖。
+- 构建默认不再执行 `--clean-first`，而是交给 CMake 增量依赖判断；如需人工全量重建，可显式设置 `EVENTGEN_FEMTO_3D_CLEAN_FIRST=1`。
+- 脚本会比较当前 `root-config --prefix` 对应的 `ROOTConfig.cmake` 与 build tree 里缓存的 `ROOT_DIR`；若发现 ROOT runtime 已更新，则清理 ROOT 相关 CMake cache、重新 configure，并 touch 生成的 `link.txt` 让 CMake 触发目标 relink。
+- 只要当前 shell 可见 `root-config`，脚本每次都会显式向 CMake 传入当前 `ROOT_DIR`，避免 cache 类型变化后漏检下一次 ROOT 模块升级。
+- 本轮附件中的 `TClassTable::Add` / `TCling::LoadPCM` 噪声来自旧 `local7` 链接产物与当前 `local8` wrapper runtime 混用，不是 femto 分析流程自身日志。
+
+## 本轮验证结论
+
+- `bash -n scripts/cmake.sh` 语法检查通过。
+- O2Physics ROOT executor 首次运行 `bash scripts/cmake.sh` 检测到 `ROOT/v6-36-10-alice1-local7` -> `ROOT/v6-36-10-alice1-local8` 的 cache 漂移，刷新 ROOT cache 并重新链接输出。
+- O2Physics ROOT executor 第二次运行 `bash scripts/cmake.sh` 返回 `STATUS: PRIMARY_OK`，无 `Building CXX object` 或 `Linking CXX executable` 输出，确认无更新时不会重复重编/重连。
+- `build/CMakeFiles/eventgen_femto_3d.dir/link.txt` 与 `bin/eventgen_femto_3d` 的 `LC_RPATH` 均指向 `ROOT/v6-36-10-alice1-local8/lib`。
+- O2Physics ROOT executor 运行 `ctest --test-dir build --output-on-failure` 返回 `STATUS: PRIMARY_OK`，`8/8` 通过。
+- 真实 wrapper smoke 写出 `/private/tmp/eventgen_femto_3d_root_noise_probe.root`，读取 `5000` 个事件、选择 `203546` 个粒子、接受 `3249284` 个 pair；输出中未再出现 `TClassTable::Add` 或 `TCling::LoadPCM` 噪声。
+
 ## 2026-06-10 projection-fit alpha bounds 配置化
 
 - 状态: 已完成 `projection_fit.alpha_min` / `projection_fit.alpha_max` 配置化

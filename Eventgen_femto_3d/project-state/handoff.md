@@ -2,7 +2,7 @@
 
 ## 最新交接
 
-- 交接时间: 2026-06-10 CST
+- 交接时间: 2026-06-23 CST
 - 当前 owner: 父线程主执行者
 - 下一步 owner: 任意继续维护该模块的执行者
 - verification_status: `verified`
@@ -10,6 +10,28 @@
 
 ## 已完成事项
 
+- 已确认 R2 拟合输入范围此前跟随一维投影 histogram 轴。
+  - `ProjectionFit.cpp` 会读取 `histograms.projection_axis` 覆盖范围内、误差有效的投影 bin 进入 Minuit chi2。
+  - 旧默认和当前运行配置均为 `[-20, 20]`，超出范围的投影样本不会进入拟合。
+- 已将默认和现有运行配置的 `histograms.projection_axis` 扩大到 `[-60, 60]`。
+  - 影响默认配置、`config/*.toml` 和 `config/examples/*.toml`。
+  - `rho_out/side/long` 3D source 轴仍保持 `[-20, 20]`，避免扩大 3D histogram 内存面。
+  - `ConfigParseValidationTest.cpp` 已覆盖默认 `projection_axis = [-60, 60]`。
+- 已在 O2Physics ROOT executor 下完成:
+  - `bash scripts/cmake.sh`: `STATUS: PRIMARY_OK`
+  - `ctest --test-dir build --output-on-failure`: `8/8` 通过，`STATUS: PRIMARY_OK`
+- 已修复 `scripts/cmake.sh` 的 ROOT CMake cache 漂移问题。
+  - 当前脚本从自身位置解析项目根目录、build tree 与源码树 `bin/` 输出路径。
+  - 默认走 CMake 增量构建；需要全量清理时设置 `EVENTGEN_FEMTO_3D_CLEAN_FIRST=1`。
+  - 当前 shell 可见 `root-config` 时，脚本会从 `root-config --prefix` 推导 `ROOT_DIR` 并显式传给 CMake。
+  - 若 cache 中的 `ROOT_DIR` 与当前 ROOT 不一致，脚本会清理 `ROOT_*` cache 并 touch `link.txt` 触发 relink。
+  - 本轮已将构建 cache 与主程序 link line 从 `ROOT/v6-36-10-alice1-local7` 刷新到 `ROOT/v6-36-10-alice1-local8`。
+- 已确认附件中的 ROOT 噪声来自旧构建 cache 与当前 wrapper runtime 混用，而不是分析算法日志。
+  - 真实 wrapper smoke 写出 `/private/tmp/eventgen_femto_3d_root_noise_probe.root`。
+  - 输出中未再出现 `TClassTable::Add` 或 `TCling::LoadPCM` 噪声。
+- 已在 O2Physics ROOT executor 下完成:
+  - `bash scripts/cmake.sh`: `STATUS: PRIMARY_OK`
+  - `ctest --test-dir build --output-on-failure`: `8/8` 通过，`STATUS: PRIMARY_OK`
 - 已将 `projection_fit.alpha_min` 与 `projection_fit.alpha_max` 暴露到 TOML 配置。
   - 未设置时默认仍为 `0.2` 与 `2.0`。
   - 配置校验要求 `0 < alpha_min < alpha_max`。
@@ -59,14 +81,14 @@
   - 三个输出 `fit_summary` 均有 `30` 行，`unique_phi_bins=15`，HBT xyz 与 alpha 成功行数均为 `30/30`。
 - 三个输出 ROOT inspector 均返回 `RUNTIME_STATUS: PRIMARY_OK` 与 `STATUS: OK`。
 - 沙箱内直接运行 15-bin 脚本会触发 `alienv` `/dev/fd` 权限问题；授权非沙箱运行已成功。
-- 本轮未修改 C++ 源码、构建系统或测试注册表，因此未重跑 `ctest`。
+- 本轮未修改 C++ 源码或测试注册表；构建脚本发生变化，已重跑 O2Physics ROOT executor 下的 `ctest`。
 - 之前实现的 blast-wave 输入适配、legacy 输入兼容、`CLI + TOML` 入口以及相关测试覆盖仍然成立。
 
 ## 下一步注意事项
 
 - 若要复现 15-phi-bin 结果，直接运行 `/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_15phibin.sh`，不需要额外命令行参数。
 - 若需要复现上一轮 7-phi-bin 结果，运行 `/Users/allenzhou/Research_software/Code_base/Eventgen_femto_3d/scripts/run_dense_mix_glauber_7phibin.sh`。
-- 如果 O2Physics ROOT 模块更新后再次出现 `dyld` 找不到 ROOT 动态库，先在 O2Physics 环境下重新运行 CMake configure/build，再判断分析问题。
+- 如果 O2Physics ROOT 模块更新后再次出现 `dyld` 找不到 ROOT 动态库、`TClassTable::Add` 重复注册或 `TCling::LoadPCM` PCM 噪声，先在 O2Physics 环境下重新运行 `scripts/cmake.sh`，确认 `build/CMakeCache.txt` 与 `build/CMakeFiles/eventgen_femto_3d.dir/link.txt` 指向同一套当前 ROOT，再判断分析问题。
 - 若要强制查看分析进度，给主程序或 wrapper 透传 `--progress`；若日志环境不想出现进度条，透传 `--no-progress`。
 - 本轮新增 `epsf_vs_mt` 只在某个 centrality 下至少一个 mT bin 有足够有效 `Rside2_vs_phi` 点时写出。
 - 本轮新增 `source_parameters_overview_canvas` 只在对应 `cent/femto_mt` 下存在可画 summary 点时写出。
