@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-30
+
+- Added `docs/数学物理公式流程说明.md` as the current math/physics workflow
+  reference for the refactored 3D femtoscopy pipeline.
+- Documented the sparse-axis contract, SE/ME normalization, CF construction,
+  phi coordinate mapping, `SliceCatalog`, diag/full Levy fit formulas,
+  Gamow/finite-source Coulomb branches, PML objective, fit/report outputs,
+  `R2_vs_phi`, and `epsf_vs_mt` semantics with code-location pointers.
+- Linked the new formula workflow document from `README.md`.
+- Synced `project-state/` to record that this was a docs-only update; no
+  analysis code or runtime artifacts were changed.
+
 ## 2026-06-23
 
 - Changed `scripts/cmake.sh` back to CMake's incremental build path by

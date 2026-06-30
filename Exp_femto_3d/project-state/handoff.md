@@ -3,6 +3,31 @@
 ## Latest Durable Handoff
 
 - completed:
+  - added `docs/数学物理公式流程说明.md` as the current formula workflow
+    reference for `Exp_femto_3d`
+  - documented the sparse-axis contract, build-side SE/ME normalization,
+    `CF3D` construction, phi coordinate mapping, `SliceCatalog`, diag/full
+    Levy formulas, optional PML objective, Gamow and finite-source Coulomb
+    branches, fit output catalogs, `R2_vs_phi`, report canvases, and
+    `epsf_vs_mt`
+  - linked the new document from `README.md`
+  - synced `project-state/current-status.md` and `project-state/changelog.md`
+    for this docs-only update
+  - verified by reading the current implementation and docs; no analysis code,
+    configs, build files, or runtime outputs were changed
+
+## Next Recommended Owner Action
+
+- when future work changes sparse axes, CF normalization, phi mapping,
+  `SliceCatalog`, Levy/Coulomb formulas, fit metadata, or summary-output
+  semantics, update `docs/数学物理公式流程说明.md` in the same pass
+- no runtime validation is required for this documentation-only handoff, but
+  the existing O2Physics ROOT executor validation path remains the authoritative
+  route for behavior changes
+
+## Previous Durable Handoff
+
+- completed:
   - implemented the `docs/plan/fit_finite_coul.md` finite-source Coulomb fit
     path
   - added explicit `fit.coulomb_mode = "none"|"gamow"|"finite_source"` and
@@ -45,7 +70,7 @@
     five registered tests passed with `PRIMARY_OK`
   - reran `git diff --check`; it passed
 
-## Next Recommended Owner Action
+## Previous Recommended Owner Action
 
 - run a real-data regression on a known-good OO/PbPb input set with
   `fit.coulomb_mode = "finite_source"`
@@ -63,7 +88,7 @@
 - keep treating sandbox-only `alienv` failures as environment noise unless a
   non-sandboxed O2Physics rerun reproduces them
 
-## Suggested Next Commands
+## Previous Suggested Next Commands
 
 ```bash
 /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/scripts/run_exp_femto_3d.sh \

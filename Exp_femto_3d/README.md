@@ -7,9 +7,16 @@ Refactored C++17/CMake version of the original `3d_cf_from_exp.cpp` ROOT macro.
 - `include/exp_femto_3d/`: public types and workflow interfaces
 - `src/`: configuration parsing, logging, CF building, and Levy fitting
 - `app/`: CLI entry point
+- `docs/`: human-facing workflow notes, including the math/physics formula flow
 - `config/examples/`: example TOML configurations
 - `tests/`: config and workflow verification helpers
 - `legacy/`: archived macro reference kept out of the CMake build
+
+## Documentation
+
+- [`docs/数学物理公式流程说明.md`](docs/数学物理公式流程说明.md): current
+  math/physics workflow reference from sparse inputs through CF building,
+  Levy/Coulomb fitting, and summary outputs
 
 ## Build
 

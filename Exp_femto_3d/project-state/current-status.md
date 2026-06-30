@@ -2,6 +2,29 @@
 
 ## Task Snapshot
 
+- scope: add the required math/physics formula workflow document for
+  `Exp_femto_3d`
+- current conclusion: `docs/数学物理公式流程说明.md` now documents the current
+  sparse-input, CF-building, Levy/Coulomb-fitting, and summary-output flow with
+  formulas, abstract operations, and code-location pointers
+- primary evidence:
+  - the document is grounded in `README.md`, `include/exp_femto_3d/Types.h`,
+    `src/Config.cpp`, `src/Workflow.cpp`, `CMakeLists.txt`, public TOML
+    configs, and the existing ROOT-backed tests
+  - it covers the 7-axis `THnSparseF` contract, SE/ME visible-range
+    normalization, `CF3D = SE_norm / ME_norm`, phi-integrated versus per-phi
+    ME denominator semantics, raw/display phi mapping, and `SliceCatalog`
+  - it records the diag/full Levy model, optional \(q^2\) baseline, PML
+    objective, Gamow mode, CATS-backed 1D finite-source Coulomb mode, and
+    `fixed_1d`/`iterative_1d` kernel-preparation flow
+  - it records output meanings for `FitCatalog`, `CoulombKernelCatalog`,
+    `R2_vs_phi`, source-parameter report canvases, and `epsf_vs_mt`
+  - `README.md` now links the new formula workflow document
+- verification: docs-only update; verified by source/code-reference review and
+  Markdown inspection, with no runtime analysis code changed
+
+## Previous Snapshot
+
 - scope: implement finite-source Coulomb fit support from
   `docs/plan/fit_finite_coul.md`
 - current conclusion: `fit` now supports explicit Coulomb modes
@@ -40,7 +63,7 @@
     `libCATS` and GSL on `bin/exp_femto_3d`, and `ctest --output-on-failure`
     passed all five registered tests
 
-## Previous Snapshot
+## Earlier Snapshot
 
 - scope: add a project-local run script for the OO 3D build/fit workflow
 - current conclusion: `scripts/run_exp_femto_3d.sh` is now the default
@@ -61,7 +84,7 @@
   - the full OO real-data build/fit was not rerun because the default config
     writes production ROOT/TSV/report outputs
 
-## Earlier Snapshot
+## Historical Snapshot
 
 - scope: add a standalone fit report ROOT output for `fit` results
 - current conclusion: `fit` writes an independently configured report ROOT file
@@ -82,7 +105,7 @@
   - `2026-06-10` O2Physics ROOT executor `ctest --output-on-failure` passed all
     three registered tests and the workflow smoke checks the new report objects
 
-## Historical Snapshot
+## Older Historical Snapshot
 
 - scope: sync `project-state/` with the current `3d_cf_from_exp` refactor work
   around phi-mapping persistence/override, explicit progress-mode control, and
@@ -109,11 +132,14 @@
 ## Verification Status
 
 - verification_status: locally verified for config parsing, Coulomb kernel
-  behavior, and ROOT-backed smoke coverage
+  behavior, ROOT-backed smoke coverage, and docs-only formula workflow sync
 - project_state_sync_status: written
 
 Reason:
 
+- `2026-06-30` docs-only review created `docs/数学物理公式流程说明.md`, linked it
+  from `README.md`, and synced `project-state/`; no C++/TOML runtime behavior
+  changed in this pass
 - `2026-06-21` O2Physics ROOT executor configure/build/`ctest
   --output-on-failure` returned `PRIMARY_OK` for the default CATS-enabled build
 - the CATS-enabled configure step reported
@@ -197,6 +223,10 @@ Reason:
 
 ## Active Worktree Highlights
 
+- `docs/数学物理公式流程说明.md` is the source-of-truth formula workflow document
+  for the current `build-cf` and `fit` computation chain; update it when sparse
+  axes, CF normalization, fit formulas, Coulomb kernels, output semantics, or
+  cited code ownership changes
 - `fit` exposes `fit.coulomb_mode = "none"|"gamow"|"finite_source"` and keeps
   legacy `fit.use_coulomb` compatibility for unambiguous none/Gamow configs
 - `fit.finite_source_mode = "fixed_1d"|"iterative_1d"` controls whether the
