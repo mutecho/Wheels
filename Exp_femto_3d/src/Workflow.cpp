@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -61,6 +62,7 @@ namespace exp_femto_3d {
     constexpr double kFitPenaltyValue = 1e30;
     constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
     constexpr const char *kSliceCatalogSplitMixedEventBranch = "split_mixed_event_by_phi";
+    constexpr const char *kQnIntegratedLabel = "qn_all";
 
     double ComputeKStarMeV(const double q_out, const double q_side, const double q_long) {
       const double q_inv_gev = std::sqrt(q_out * q_out + q_side * q_side + q_long * q_long);
@@ -173,9 +175,17 @@ namespace exp_femto_3d {
       bool success = false;
     };
 
-    using FitResultGroupKey = std::pair<int, int>;
+    using FitResultGroupKey = std::tuple<int, int, int>;
     using GroupedFitResults = std::map<FitResultGroupKey, std::vector<LevyFitResult>>;
-    using EpsSummaryMap = std::map<int, std::vector<EpsSummaryPoint>>;
+    using EpsSummaryMap = std::map<std::pair<int, int>, std::vector<EpsSummaryPoint>>;
+
+    struct QnSliceSelection {
+      int qn_index = -1;
+      double qn_low = std::numeric_limits<double>::quiet_NaN();
+      double qn_high = std::numeric_limits<double>::quiet_NaN();
+      std::string qn_label = kQnIntegratedLabel;
+      bool is_qn_integrated = true;
+    };
 
     std::string FormatDouble(const double value, const int precision = 2) {
       std::ostringstream stream;
@@ -206,10 +216,24 @@ namespace exp_femto_3d {
       return BuildReportRangeDirectory("mt", result.mt_low, result.mt_high);
     }
 
-    std::string BuildGroupId(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
+    std::string BuildReportQnDirectory(const LevyFitResult &result) {
+      return result.is_qn_integrated ? "" : result.qn_label;
+    }
+
+    std::string BuildBaseGroupId(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
       return "cent_" + FormatDirectoryValue(centrality_bin.min, 2) + "-"
              + FormatDirectoryValue(centrality_bin.max, 2) + "__mt_" + FormatDirectoryValue(mt_bin.min, 2) + "-"
              + FormatDirectoryValue(mt_bin.max, 2);
+    }
+
+    std::string BuildGroupId(const RangeBin &centrality_bin,
+                             const RangeBin &mt_bin,
+                             const QnSliceSelection &qn_selection) {
+      std::string group_id = BuildBaseGroupId(centrality_bin, mt_bin);
+      if (!qn_selection.is_qn_integrated) {
+        group_id += "__" + qn_selection.qn_label;
+      }
+      return group_id;
     }
 
     std::string BuildSliceId(const std::string &group_id,
@@ -467,7 +491,7 @@ namespace exp_femto_3d {
         if (result.is_phi_integrated) {
           continue;
         }
-        grouped_results[{result.centrality_index, result.mt_index}].push_back(result);
+        grouped_results[{result.centrality_index, result.mt_index, result.qn_index}].push_back(result);
       }
       for (auto &[key, group_results] : grouped_results) {
         (void)key;
@@ -574,6 +598,13 @@ namespace exp_femto_3d {
       info_box->AddText(("m_{T}: " + FormatRangeText(representative_result.mt_low, representative_result.mt_high)
                          + " GeV/c^{2}")
                             .c_str());
+      if (representative_result.is_qn_integrated) {
+        info_box->AddText("qn: all");
+      } else {
+        info_box->AddText(("qn: " + representative_result.qn_label + " "
+                           + FormatRangeText(representative_result.qn_low, representative_result.qn_high))
+                              .c_str());
+      }
       info_box->AddText(BuildRelativePhiAxisTitle().c_str());
       return info_box;
     }
@@ -863,8 +894,66 @@ namespace exp_femto_3d {
       delete projection_z;
     }
 
+    std::vector<QnSliceSelection> BuildQnSliceSelections(const ApplicationConfig &config, const TAxis &qn_axis) {
+      std::vector<QnSliceSelection> selections;
+      QnSliceSelection integrated_selection;
+      integrated_selection.qn_index = -1;
+      integrated_selection.qn_low = qn_axis.GetBinLowEdge(1);
+      integrated_selection.qn_high = qn_axis.GetBinUpEdge(qn_axis.GetNbins());
+      integrated_selection.qn_label = kQnIntegratedLabel;
+      integrated_selection.is_qn_integrated = true;
+      selections.push_back(integrated_selection);
+
+      if (!config.build.split_same_event_by_qn) {
+        return selections;
+      }
+
+      for (std::size_t index = 0; index < config.qn_bins.size(); ++index) {
+        const RangeBin &qn_bin = config.qn_bins[index];
+        QnSliceSelection selection;
+        selection.qn_index = static_cast<int>(index);
+        selection.qn_low = qn_bin.min;
+        selection.qn_high = qn_bin.max;
+        selection.qn_label = qn_bin.label;
+        selection.is_qn_integrated = false;
+        selections.push_back(selection);
+      }
+      return selections;
+    }
+
+    void ResetAxisVisibleRange(TAxis &axis) {
+      axis.SetRange(1, axis.GetNbins());
+    }
+
+    // qn bins are configured as half-open physical ranges and mapped to exact THnSparse axis bins.
+    void ApplyQnSelection(THnSparseF &sparse, const QnSliceSelection &selection) {
+      TAxis *axis = sparse.GetAxis(5);
+      if (axis == nullptr) {
+        throw std::runtime_error("Input THnSparse is missing qn axis 5.");
+      }
+      if (selection.is_qn_integrated) {
+        ResetAxisVisibleRange(*axis);
+        return;
+      }
+      if (selection.qn_high <= axis->GetBinLowEdge(1) || selection.qn_low >= axis->GetBinUpEdge(axis->GetNbins())) {
+        throw std::runtime_error("Configured qn bin " + selection.qn_label + " does not overlap THnSparse qn axis.");
+      }
+
+      const double low_inside = std::nextafter(selection.qn_low, std::numeric_limits<double>::infinity());
+      const double high_inside = std::nextafter(selection.qn_high, -std::numeric_limits<double>::infinity());
+      int first_bin = axis->FindFixBin(low_inside);
+      int last_bin = axis->FindFixBin(high_inside);
+      first_bin = std::max(1, std::min(first_bin, axis->GetNbins()));
+      last_bin = std::max(1, std::min(last_bin, axis->GetNbins()));
+      if (last_bin < first_bin) {
+        throw std::runtime_error("Configured qn bin " + selection.qn_label + " does not overlap THnSparse qn axis.");
+      }
+      axis->SetRange(first_bin, last_bin);
+    }
+
     SliceCatalogEntry MakeSliceCatalogEntry(const RangeBin &centrality_bin,
                                             const RangeBin &mt_bin,
+                                            const QnSliceSelection &qn_selection,
                                             const int centrality_index,
                                             const int mt_index,
                                             const int phi_index,
@@ -878,7 +967,7 @@ namespace exp_femto_3d {
                                             const bool split_mixed_event_by_phi,
                                             const bool is_phi_integrated) {
       SliceCatalogEntry entry;
-      entry.group_id = BuildGroupId(centrality_bin, mt_bin);
+      entry.group_id = BuildGroupId(centrality_bin, mt_bin, qn_selection);
       entry.slice_id = BuildSliceId(entry.group_id, is_phi_integrated, display_phi_center);
       entry.slice_directory = BuildSliceDirectory(entry.slice_id);
       entry.se_object_path = entry.slice_directory + "/SE_raw3d";
@@ -889,11 +978,15 @@ namespace exp_femto_3d {
       entry.projection_z_path = entry.slice_directory + "/CF3D_ProjZ";
       entry.centrality_index = centrality_index;
       entry.mt_index = mt_index;
+      entry.qn_index = qn_selection.qn_index;
       entry.phi_index = phi_index;
       entry.cent_low = centrality_bin.min;
       entry.cent_high = centrality_bin.max;
       entry.mt_low = mt_bin.min;
       entry.mt_high = mt_bin.max;
+      entry.qn_low = qn_selection.qn_low;
+      entry.qn_high = qn_selection.qn_high;
+      entry.qn_label = qn_selection.qn_label;
       entry.raw_phi_low = raw_phi_low;
       entry.raw_phi_high = raw_phi_high;
       entry.raw_phi_center = raw_phi_center;
@@ -902,6 +995,7 @@ namespace exp_femto_3d {
       entry.display_phi_center = display_phi_center;
       entry.build_uses_symmetric_phi_range = build_uses_symmetric_phi_range;
       entry.split_mixed_event_by_phi = split_mixed_event_by_phi;
+      entry.is_qn_integrated = qn_selection.is_qn_integrated;
       entry.is_phi_integrated = is_phi_integrated;
       return entry;
     }
@@ -922,11 +1016,15 @@ namespace exp_femto_3d {
       std::string projection_z_path;
       int centrality_index = -1;
       int mt_index = -1;
+      int qn_index = -1;
       int phi_index = -1;
       double cent_low = 0.0;
       double cent_high = 0.0;
       double mt_low = 0.0;
       double mt_high = 0.0;
+      double qn_low = std::numeric_limits<double>::quiet_NaN();
+      double qn_high = std::numeric_limits<double>::quiet_NaN();
+      std::string qn_label;
       double raw_phi_low = 0.0;
       double raw_phi_high = 0.0;
       double raw_phi_center = 0.0;
@@ -935,6 +1033,7 @@ namespace exp_femto_3d {
       double display_phi_center = 0.0;
       int build_uses_symmetric_phi_range = 0;
       int split_mixed_event_by_phi = 0;
+      int is_qn_integrated = 1;
       int is_phi_integrated = 0;
 
       tree->Branch("slice_id", &slice_id);
@@ -948,11 +1047,15 @@ namespace exp_femto_3d {
       tree->Branch("projection_z_path", &projection_z_path);
       tree->Branch("centrality_index", &centrality_index);
       tree->Branch("mt_index", &mt_index);
+      tree->Branch("qn_index", &qn_index);
       tree->Branch("phi_index", &phi_index);
       tree->Branch("cent_low", &cent_low);
       tree->Branch("cent_high", &cent_high);
       tree->Branch("mt_low", &mt_low);
       tree->Branch("mt_high", &mt_high);
+      tree->Branch("qn_low", &qn_low);
+      tree->Branch("qn_high", &qn_high);
+      tree->Branch("qn_label", &qn_label);
       tree->Branch("raw_phi_low", &raw_phi_low);
       tree->Branch("raw_phi_high", &raw_phi_high);
       tree->Branch("raw_phi_center", &raw_phi_center);
@@ -961,6 +1064,7 @@ namespace exp_femto_3d {
       tree->Branch("display_phi_center", &display_phi_center);
       tree->Branch(kSliceCatalogBuildPhiMappingBranch, &build_uses_symmetric_phi_range);
       tree->Branch(kSliceCatalogSplitMixedEventBranch, &split_mixed_event_by_phi);
+      tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
       for (const SliceCatalogEntry &entry : entries) {
@@ -975,11 +1079,15 @@ namespace exp_femto_3d {
         projection_z_path = entry.projection_z_path;
         centrality_index = entry.centrality_index;
         mt_index = entry.mt_index;
+        qn_index = entry.qn_index;
         phi_index = entry.phi_index;
         cent_low = entry.cent_low;
         cent_high = entry.cent_high;
         mt_low = entry.mt_low;
         mt_high = entry.mt_high;
+        qn_low = entry.qn_low;
+        qn_high = entry.qn_high;
+        qn_label = entry.qn_label;
         raw_phi_low = entry.raw_phi_low;
         raw_phi_high = entry.raw_phi_high;
         raw_phi_center = entry.raw_phi_center;
@@ -988,6 +1096,7 @@ namespace exp_femto_3d {
         display_phi_center = entry.display_phi_center;
         build_uses_symmetric_phi_range = entry.build_uses_symmetric_phi_range ? 1 : 0;
         split_mixed_event_by_phi = entry.split_mixed_event_by_phi ? 1 : 0;
+        is_qn_integrated = entry.is_qn_integrated ? 1 : 0;
         is_phi_integrated = entry.is_phi_integrated ? 1 : 0;
         tree->Fill();
       }
@@ -1014,11 +1123,27 @@ namespace exp_femto_3d {
       TTreeReaderValue<std::string> projection_z_path(reader, "projection_z_path");
       TTreeReaderValue<int> centrality_index(reader, "centrality_index");
       TTreeReaderValue<int> mt_index(reader, "mt_index");
+      std::unique_ptr<TTreeReaderValue<int>> qn_index;
+      if (tree->GetBranch("qn_index") != nullptr) {
+        qn_index = std::make_unique<TTreeReaderValue<int>>(reader, "qn_index");
+      }
       TTreeReaderValue<int> phi_index(reader, "phi_index");
       TTreeReaderValue<double> cent_low(reader, "cent_low");
       TTreeReaderValue<double> cent_high(reader, "cent_high");
       TTreeReaderValue<double> mt_low(reader, "mt_low");
       TTreeReaderValue<double> mt_high(reader, "mt_high");
+      std::unique_ptr<TTreeReaderValue<double>> qn_low;
+      if (tree->GetBranch("qn_low") != nullptr) {
+        qn_low = std::make_unique<TTreeReaderValue<double>>(reader, "qn_low");
+      }
+      std::unique_ptr<TTreeReaderValue<double>> qn_high;
+      if (tree->GetBranch("qn_high") != nullptr) {
+        qn_high = std::make_unique<TTreeReaderValue<double>>(reader, "qn_high");
+      }
+      std::unique_ptr<TTreeReaderValue<std::string>> qn_label;
+      if (tree->GetBranch("qn_label") != nullptr) {
+        qn_label = std::make_unique<TTreeReaderValue<std::string>>(reader, "qn_label");
+      }
       TTreeReaderValue<double> raw_phi_low(reader, "raw_phi_low");
       TTreeReaderValue<double> raw_phi_high(reader, "raw_phi_high");
       TTreeReaderValue<double> raw_phi_center(reader, "raw_phi_center");
@@ -1034,6 +1159,10 @@ namespace exp_femto_3d {
       if (tree->GetBranch(kSliceCatalogSplitMixedEventBranch) != nullptr) {
         split_mixed_event_by_phi =
             std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogSplitMixedEventBranch);
+      }
+      std::unique_ptr<TTreeReaderValue<int>> is_qn_integrated;
+      if (tree->GetBranch("is_qn_integrated") != nullptr) {
+        is_qn_integrated = std::make_unique<TTreeReaderValue<int>>(reader, "is_qn_integrated");
       }
       TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
 
@@ -1051,11 +1180,15 @@ namespace exp_femto_3d {
         entry.projection_z_path = *projection_z_path;
         entry.centrality_index = *centrality_index;
         entry.mt_index = *mt_index;
+        entry.qn_index = qn_index ? **qn_index : -1;
         entry.phi_index = *phi_index;
         entry.cent_low = *cent_low;
         entry.cent_high = *cent_high;
         entry.mt_low = *mt_low;
         entry.mt_high = *mt_high;
+        entry.qn_low = qn_low ? **qn_low : std::numeric_limits<double>::quiet_NaN();
+        entry.qn_high = qn_high ? **qn_high : std::numeric_limits<double>::quiet_NaN();
+        entry.qn_label = qn_label ? **qn_label : kQnIntegratedLabel;
         entry.raw_phi_low = *raw_phi_low;
         entry.raw_phi_high = *raw_phi_high;
         entry.raw_phi_center = *raw_phi_center;
@@ -1066,6 +1199,7 @@ namespace exp_femto_3d {
             build_uses_symmetric_phi_range ? (**build_uses_symmetric_phi_range != 0) : false;
         entry.split_mixed_event_by_phi =
             split_mixed_event_by_phi ? (**split_mixed_event_by_phi != 0) : false;
+        entry.is_qn_integrated = is_qn_integrated ? (**is_qn_integrated != 0) : true;
         entry.is_phi_integrated = (*is_phi_integrated != 0);
         entries.push_back(entry);
       }
@@ -1115,10 +1249,15 @@ namespace exp_femto_3d {
       table.catalog_entry.group_id = entry.group_id;
       table.catalog_entry.centrality_index = entry.centrality_index;
       table.catalog_entry.mt_index = entry.mt_index;
+      table.catalog_entry.qn_index = entry.qn_index;
       table.catalog_entry.cent_low = entry.cent_low;
       table.catalog_entry.cent_high = entry.cent_high;
       table.catalog_entry.mt_low = entry.mt_low;
       table.catalog_entry.mt_high = entry.mt_high;
+      table.catalog_entry.qn_low = entry.qn_low;
+      table.catalog_entry.qn_high = entry.qn_high;
+      table.catalog_entry.qn_label = entry.qn_label;
+      table.catalog_entry.is_qn_integrated = entry.is_qn_integrated;
       table.catalog_entry.finite_source_mode = ToString(finite_source_mode);
       table.catalog_entry.seed_radius_fm = seed_radius_fm;
       table.catalog_entry.final_radius_fm = final_radius_fm;
@@ -2075,12 +2214,17 @@ namespace exp_femto_3d {
       fit_result.slice_directory = BuildFitDirectory(entry.slice_id);
       fit_result.centrality_index = entry.centrality_index;
       fit_result.mt_index = entry.mt_index;
+      fit_result.qn_index = entry.qn_index;
       fit_result.phi_index = entry.phi_index;
       fit_result.cent_low = entry.cent_low;
       fit_result.cent_high = entry.cent_high;
       fit_result.mt_low = entry.mt_low;
       fit_result.mt_high = entry.mt_high;
+      fit_result.qn_low = entry.qn_low;
+      fit_result.qn_high = entry.qn_high;
+      fit_result.qn_label = entry.qn_label;
       const PhiSliceCoordinates fit_phi_coordinates = ResolveSlicePhiCoordinates(entry, fit_uses_symmetric_phi_range);
+      fit_result.is_qn_integrated = entry.is_qn_integrated;
       fit_result.is_phi_integrated = entry.is_phi_integrated;
       fit_result.phi = fit_phi_coordinates.center;
       fit_result.fit_uses_symmetric_phi_range = fit_uses_symmetric_phi_range;
@@ -2273,7 +2417,8 @@ namespace exp_femto_3d {
     void WriteFitResultsSummaryTsv(const std::string &path, const std::vector<LevyFitResult> &results) {
       std::ofstream output(path);
       output << "sliceId\tgroupId\tfitModel\tusesCoulomb\tcoulombMode\tfiniteSourceMode\tfiniteSourceRadiusFm"
-                "\tusesCoreHaloLambda\tusesQ2Baseline\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh\tphi\tisPhiIntegrated"
+                "\tusesCoreHaloLambda\tusesQ2Baseline\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh"
+                "\tqnIndex\tqnLow\tqnHigh\tqnLabel\tisQnIntegrated\tphi\tisPhiIntegrated"
                 "\tnorm\tnormErr\tlambda\tlambdaErr\tRout2\tRout2Err\tRside2\tRside2Err"
                 "\tRlong2\tRlong2Err\tRoutside2\tRoutside2Err\tRoutlong2\tRoutlong2Err"
                 "\tRsidelong2\tRsidelong2Err\talpha\talphaErr\tbaselineQ2\tbaselineQ2Err"
@@ -2284,7 +2429,9 @@ namespace exp_femto_3d {
                << (result.uses_coulomb ? 1 : 0) << "\t" << result.coulomb_mode << "\t" << result.finite_source_mode
                << "\t" << result.finite_source_radius_fm << "\t" << (result.uses_core_halo_lambda ? 1 : 0) << "\t"
                << (result.uses_q2_baseline ? 1 : 0) << "\t" << (result.uses_pml ? 1 : 0) << "\t" << result.cent_low
-               << "\t" << result.cent_high << "\t" << result.mt_low << "\t" << result.mt_high << "\t" << result.phi
+               << "\t" << result.cent_high << "\t" << result.mt_low << "\t" << result.mt_high << "\t"
+               << result.qn_index << "\t" << result.qn_low << "\t" << result.qn_high << "\t" << result.qn_label
+               << "\t" << (result.is_qn_integrated ? 1 : 0) << "\t" << result.phi
                << "\t" << (result.is_phi_integrated ? 1 : 0) << "\t" << result.norm << "\t" << result.norm_err << "\t"
                << result.lambda << "\t" << result.lambda_err << "\t" << result.rout2 << "\t" << result.rout2_err << "\t"
                << result.rside2 << "\t" << result.rside2_err << "\t" << result.rlong2 << "\t" << result.rlong2_err
@@ -2307,13 +2454,18 @@ namespace exp_femto_3d {
       std::string fit_model;
       int centrality_index = -1;
       int mt_index = -1;
+      int qn_index = -1;
       int phi_index = -1;
       double cent_low = 0.0;
       double cent_high = 0.0;
       double mt_low = 0.0;
       double mt_high = 0.0;
+      double qn_low = std::numeric_limits<double>::quiet_NaN();
+      double qn_high = std::numeric_limits<double>::quiet_NaN();
+      std::string qn_label;
       double phi = 0.0;
       int fit_uses_symmetric_phi_range = 0;
+      int is_qn_integrated = 1;
       int is_phi_integrated = 0;
       double norm = 0.0;
       double norm_err = 0.0;
@@ -2354,13 +2506,18 @@ namespace exp_femto_3d {
       tree->Branch("fit_model", &fit_model);
       tree->Branch("centrality_index", &centrality_index);
       tree->Branch("mt_index", &mt_index);
+      tree->Branch("qn_index", &qn_index);
       tree->Branch("phi_index", &phi_index);
       tree->Branch("cent_low", &cent_low);
       tree->Branch("cent_high", &cent_high);
       tree->Branch("mt_low", &mt_low);
       tree->Branch("mt_high", &mt_high);
+      tree->Branch("qn_low", &qn_low);
+      tree->Branch("qn_high", &qn_high);
+      tree->Branch("qn_label", &qn_label);
       tree->Branch("phi", &phi);
       tree->Branch("fit_uses_symmetric_phi_range", &fit_uses_symmetric_phi_range);
+      tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
       tree->Branch("norm", &norm);
       tree->Branch("norm_err", &norm_err);
@@ -2405,13 +2562,18 @@ namespace exp_femto_3d {
         fit_model = result.fit_model;
         centrality_index = result.centrality_index;
         mt_index = result.mt_index;
+        qn_index = result.qn_index;
         phi_index = result.phi_index;
         cent_low = result.cent_low;
         cent_high = result.cent_high;
         mt_low = result.mt_low;
         mt_high = result.mt_high;
+        qn_low = result.qn_low;
+        qn_high = result.qn_high;
+        qn_label = result.qn_label;
         phi = result.phi;
         fit_uses_symmetric_phi_range = result.fit_uses_symmetric_phi_range ? 1 : 0;
+        is_qn_integrated = result.is_qn_integrated ? 1 : 0;
         is_phi_integrated = result.is_phi_integrated ? 1 : 0;
         norm = result.norm;
         norm_err = result.norm_err;
@@ -2461,10 +2623,15 @@ namespace exp_femto_3d {
       std::string group_id;
       int centrality_index = -1;
       int mt_index = -1;
+      int qn_index = -1;
       double cent_low = 0.0;
       double cent_high = 0.0;
       double mt_low = 0.0;
       double mt_high = 0.0;
+      double qn_low = std::numeric_limits<double>::quiet_NaN();
+      double qn_high = std::numeric_limits<double>::quiet_NaN();
+      std::string qn_label;
+      int is_qn_integrated = 1;
       std::string finite_source_mode;
       double seed_radius_fm = 0.0;
       double final_radius_fm = 0.0;
@@ -2476,10 +2643,15 @@ namespace exp_femto_3d {
       tree->Branch("group_id", &group_id);
       tree->Branch("centrality_index", &centrality_index);
       tree->Branch("mt_index", &mt_index);
+      tree->Branch("qn_index", &qn_index);
       tree->Branch("cent_low", &cent_low);
       tree->Branch("cent_high", &cent_high);
       tree->Branch("mt_low", &mt_low);
       tree->Branch("mt_high", &mt_high);
+      tree->Branch("qn_low", &qn_low);
+      tree->Branch("qn_high", &qn_high);
+      tree->Branch("qn_label", &qn_label);
+      tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("finite_source_mode", &finite_source_mode);
       tree->Branch("seed_radius_fm", &seed_radius_fm);
       tree->Branch("final_radius_fm", &final_radius_fm);
@@ -2492,10 +2664,15 @@ namespace exp_femto_3d {
         group_id = entry.group_id;
         centrality_index = entry.centrality_index;
         mt_index = entry.mt_index;
+        qn_index = entry.qn_index;
         cent_low = entry.cent_low;
         cent_high = entry.cent_high;
         mt_low = entry.mt_low;
         mt_high = entry.mt_high;
+        qn_low = entry.qn_low;
+        qn_high = entry.qn_high;
+        qn_label = entry.qn_label;
+        is_qn_integrated = entry.is_qn_integrated ? 1 : 0;
         finite_source_mode = entry.finite_source_mode;
         seed_radius_fm = entry.seed_radius_fm;
         final_radius_fm = entry.final_radius_fm;
@@ -2705,7 +2882,12 @@ namespace exp_femto_3d {
         TDirectory *cent_directory =
             GetOrCreateDirectory(directory, BuildReportCentralityDirectory(group_results.front()));
         TDirectory *mt_directory = GetOrCreateDirectory(*cent_directory, BuildReportMtDirectory(group_results.front()));
-        mt_directory->cd();
+        TDirectory *target_directory = mt_directory;
+        const std::string qn_directory_name = BuildReportQnDirectory(group_results.front());
+        if (!qn_directory_name.empty()) {
+          target_directory = GetOrCreateDirectory(*mt_directory, qn_directory_name);
+        }
+        target_directory->cd();
 
         auto canvas =
             std::make_unique<TCanvas>("source_parameters_overview_canvas", "Source parameter overview", 1200, 1800);
@@ -2762,7 +2944,8 @@ namespace exp_femto_3d {
     // Write one epsilon_f(mT) summary graph per centrality from the side-radius harmonic fits.
     void WriteEpsVsMtGraphs(TDirectory &directory, const std::vector<LevyFitResult> &results) {
       EpsSummaryMap eps_summary_points;
-      std::map<int, std::string> centrality_directory_names;
+      std::map<std::pair<int, int>, std::string> centrality_directory_names;
+      std::map<std::pair<int, int>, std::string> qn_directory_names;
       const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
       for (const auto &entry : grouped_results) {
         const std::vector<LevyFitResult> &group_results = entry.second;
@@ -2774,9 +2957,10 @@ namespace exp_femto_3d {
             ComputeEpsFromRsideSummaryPoints(BuildRadiusSummaryPoints(group_results, kSideRadiusIndex),
                                              group_results.front());
         if (eps_point.has_value() && eps_point->valid) {
-          eps_summary_points[group_results.front().centrality_index].push_back(*eps_point);
-          centrality_directory_names[group_results.front().centrality_index] =
-              BuildReportCentralityDirectory(group_results.front());
+          const auto summary_key = std::make_pair(group_results.front().centrality_index, group_results.front().qn_index);
+          eps_summary_points[summary_key].push_back(*eps_point);
+          centrality_directory_names[summary_key] = BuildReportCentralityDirectory(group_results.front());
+          qn_directory_names[summary_key] = BuildReportQnDirectory(group_results.front());
         }
       }
 
@@ -2794,6 +2978,11 @@ namespace exp_femto_3d {
         }
 
         TDirectory *cent_directory = GetOrCreateDirectory(directory, centrality_directory_names[entry.first]);
+        TDirectory *target_directory = cent_directory;
+        const std::string qn_directory_name = qn_directory_names[entry.first];
+        if (!qn_directory_name.empty()) {
+          target_directory = GetOrCreateDirectory(*cent_directory, qn_directory_name);
+        }
         auto graph = std::make_unique<TGraphErrors>(valid_count);
         graph->SetName("epsf_vs_mt");
         graph->SetTitle("#epsilon_{f} vs m_{T}");
@@ -2813,7 +3002,7 @@ namespace exp_femto_3d {
           ++point_index;
         }
 
-        cent_directory->cd();
+        target_directory->cd();
         auto canvas = std::make_unique<TCanvas>("epsf_vs_mt_canvas", "#epsilon_{f} vs m_{T}", 800, 600);
         canvas->SetTicks(1, 1);
         graph->Draw("ALPE1");
@@ -2872,9 +3061,15 @@ namespace exp_femto_3d {
 
     TAxis *phi_axis = h_se_origin->GetAxis(6);
     const int n_phi_bins = phi_axis->GetNbins();
+    TAxis *qn_axis = h_se_origin->GetAxis(5);
+    if (qn_axis == nullptr || h_me_origin->GetAxis(5) == nullptr) {
+      TH1::AddDirectory(old_add_directory);
+      throw std::runtime_error("Cannot resolve qn axis 5 from required THnSparse inputs.");
+    }
+    const std::vector<QnSliceSelection> qn_slice_selections = BuildQnSliceSelections(config, *qn_axis);
 
     BuildCfRunStatistics statistics;
-    statistics.requested_groups = config.centrality_bins.size() * config.mt_bins.size();
+    statistics.requested_groups = config.centrality_bins.size() * config.mt_bins.size() * qn_slice_selections.size();
     std::vector<SliceCatalogEntry> catalog_entries;
     // Count planned slices up front so skipped branches still advance the CLI progress bar.
     const std::size_t slices_per_group = static_cast<std::size_t>(n_phi_bins + 1);
@@ -2894,20 +3089,23 @@ namespace exp_femto_3d {
       const RangeBin &centrality_bin = config.centrality_bins[centrality_index];
       for (std::size_t mt_index = 0; mt_index < config.mt_bins.size(); ++mt_index) {
         const RangeBin &mt_bin = config.mt_bins[mt_index];
-        const std::string group_id = BuildGroupId(centrality_bin, mt_bin);
-        logger.Debug("Building group " + group_id);
+        const std::string base_group_id = BuildBaseGroupId(centrality_bin, mt_bin);
+        logger.Debug("Building base group " + base_group_id);
 
         h_se_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
         h_se_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
         h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
+        ResetAxisVisibleRange(*h_se_origin->GetAxis(5));
         h_me_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
         h_me_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
+        ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
 
         // Build either one group-integrated ME denominator or a denominator that follows the current SE phi range.
         auto build_me_projection = [&](const int first_phi_bin,
                                        const int last_phi_bin,
                                        const std::string &norm_name) -> std::unique_ptr<MixedEventProjection> {
           h_me_origin->GetAxis(6)->SetRange(first_phi_bin, last_phi_bin);
+          ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
           auto raw = std::unique_ptr<TH3D>(static_cast<TH3D *>(h_me_origin->Projection(0, 1, 2)));
           raw->SetDirectory(nullptr);
           auto norm = std::unique_ptr<TH3D>(static_cast<TH3D *>(raw->Clone(norm_name.c_str())));
@@ -2925,11 +3123,11 @@ namespace exp_femto_3d {
 
         std::unique_ptr<MixedEventProjection> integrated_me_projection;
         if (!config.build.split_mixed_event_by_phi) {
-          integrated_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_norm");
+          integrated_me_projection = build_me_projection(1, n_phi_bins, base_group_id + "_ME_norm");
           if (integrated_me_projection == nullptr) {
-            logger.Warn("Zero mixed-event integral for " + group_id + "; skipping group.");
-            ++statistics.skipped_zero_mixed_event_groups;
-            processed_slices += slices_per_group;
+            logger.Warn("Zero mixed-event integral for " + base_group_id + "; skipping group.");
+            statistics.skipped_zero_mixed_event_groups += qn_slice_selections.size();
+            processed_slices += slices_per_group * qn_slice_selections.size();
             progress.Update(processed_slices);
             continue;
           }
@@ -2978,122 +3176,136 @@ namespace exp_femto_3d {
           delete h_cf;
         };
 
-        h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-        auto *h_se_all_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
-        h_se_all_raw->SetDirectory(nullptr);
-        auto *h_se_all_norm = static_cast<TH3D *>(h_se_all_raw->Clone((group_id + "_SE_all_norm").c_str()));
-        h_se_all_norm->SetDirectory(nullptr);
-        const double int_se_all = IntegralVisibleRange(h_se_all_norm, true);
-        if (int_se_all == 0.0) {
-          logger.Warn("Zero same-event integral for " + group_id + " phi=all.");
-          ++statistics.skipped_zero_same_event_slices;
-          ++processed_slices;
-          progress.Update(processed_slices);
-        } else {
-          h_se_all_norm->Scale(1.0 / int_se_all);
-          std::unique_ptr<MixedEventProjection> split_me_projection;
-          const MixedEventProjection *me_projection = integrated_me_projection.get();
-          if (config.build.split_mixed_event_by_phi) {
-            split_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_all_norm");
-            if (split_me_projection == nullptr) {
-              logger.Warn("Zero mixed-event integral for " + group_id + " phi=all.");
-              ++statistics.skipped_zero_mixed_event_slices;
-              ++processed_slices;
-              progress.Update(processed_slices);
-              me_projection = nullptr;
-            } else {
-              me_projection = split_me_projection.get();
-            }
-          }
-          if (me_projection != nullptr) {
-            const double raw_phi_low = phi_axis->GetBinLowEdge(1);
-            const double raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
-            const auto entry = MakeSliceCatalogEntry(centrality_bin,
-                                                     mt_bin,
-                                                     static_cast<int>(centrality_index),
-                                                     static_cast<int>(mt_index),
-                                                     -1,
-                                                     raw_phi_low,
-                                                     raw_phi_high,
-                                                     0.5 * (raw_phi_low + raw_phi_high),
-                                                     raw_phi_low,
-                                                     raw_phi_high,
-                                                     std::numeric_limits<double>::quiet_NaN(),
-                                                     config.build.map_pair_phi_to_symmetric_range,
-                                                     config.build.split_mixed_event_by_phi,
-                                                     true);
-            write_slice(h_se_all_raw, h_se_all_norm, *me_projection, entry);
-          }
-        }
-        delete h_se_all_raw;
-        delete h_se_all_norm;
+        auto write_qn_selection = [&](const QnSliceSelection &qn_selection) {
+          const std::string group_id = BuildGroupId(centrality_bin, mt_bin, qn_selection);
+          logger.Debug("Building group " + group_id);
+          ApplyQnSelection(*h_se_origin, qn_selection);
 
-        for (int phi_index = 1; phi_index <= n_phi_bins; ++phi_index) {
-          h_se_origin->GetAxis(6)->SetRange(phi_index, phi_index);
-          auto *h_se_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
-          h_se_raw->SetDirectory(nullptr);
-          auto *h_se_norm = static_cast<TH3D *>(h_se_raw->Clone((group_id + "_SE_slice_norm").c_str()));
-          h_se_norm->SetDirectory(nullptr);
-          const double int_se = IntegralVisibleRange(h_se_norm, true);
-          if (int_se == 0.0) {
-            logger.Warn("Zero same-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
-                        + "; skipping slice.");
+          h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
+          auto *h_se_all_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
+          h_se_all_raw->SetDirectory(nullptr);
+          auto *h_se_all_norm = static_cast<TH3D *>(h_se_all_raw->Clone((group_id + "_SE_all_norm").c_str()));
+          h_se_all_norm->SetDirectory(nullptr);
+          const double int_se_all = IntegralVisibleRange(h_se_all_norm, true);
+          if (int_se_all == 0.0) {
+            logger.Warn("Zero same-event integral for " + group_id + " phi=all.");
             ++statistics.skipped_zero_same_event_slices;
             ++processed_slices;
             progress.Update(processed_slices);
-            delete h_se_raw;
-            delete h_se_norm;
-            continue;
+          } else {
+            h_se_all_norm->Scale(1.0 / int_se_all);
+            std::unique_ptr<MixedEventProjection> split_me_projection;
+            const MixedEventProjection *me_projection = integrated_me_projection.get();
+            if (config.build.split_mixed_event_by_phi) {
+              split_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_all_norm");
+              if (split_me_projection == nullptr) {
+                logger.Warn("Zero mixed-event integral for " + group_id + " phi=all.");
+                ++statistics.skipped_zero_mixed_event_slices;
+                ++processed_slices;
+                progress.Update(processed_slices);
+                me_projection = nullptr;
+              } else {
+                me_projection = split_me_projection.get();
+              }
+            }
+            if (me_projection != nullptr) {
+              const double raw_phi_low = phi_axis->GetBinLowEdge(1);
+              const double raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
+              const auto entry = MakeSliceCatalogEntry(centrality_bin,
+                                                       mt_bin,
+                                                       qn_selection,
+                                                       static_cast<int>(centrality_index),
+                                                       static_cast<int>(mt_index),
+                                                       -1,
+                                                       raw_phi_low,
+                                                       raw_phi_high,
+                                                       0.5 * (raw_phi_low + raw_phi_high),
+                                                       raw_phi_low,
+                                                       raw_phi_high,
+                                                       std::numeric_limits<double>::quiet_NaN(),
+                                                       config.build.map_pair_phi_to_symmetric_range,
+                                                       config.build.split_mixed_event_by_phi,
+                                                       true);
+              write_slice(h_se_all_raw, h_se_all_norm, *me_projection, entry);
+            }
           }
-          h_se_norm->Scale(1.0 / int_se);
+          delete h_se_all_raw;
+          delete h_se_all_norm;
 
-          std::unique_ptr<MixedEventProjection> split_me_projection;
-          const MixedEventProjection *me_projection = integrated_me_projection.get();
-          if (config.build.split_mixed_event_by_phi) {
-            split_me_projection =
-                build_me_projection(phi_index, phi_index, group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
-            if (split_me_projection == nullptr) {
-              logger.Warn("Zero mixed-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
+          for (int phi_index = 1; phi_index <= n_phi_bins; ++phi_index) {
+            h_se_origin->GetAxis(6)->SetRange(phi_index, phi_index);
+            auto *h_se_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
+            h_se_raw->SetDirectory(nullptr);
+            auto *h_se_norm = static_cast<TH3D *>(h_se_raw->Clone((group_id + "_SE_slice_norm").c_str()));
+            h_se_norm->SetDirectory(nullptr);
+            const double int_se = IntegralVisibleRange(h_se_norm, true);
+            if (int_se == 0.0) {
+              logger.Warn("Zero same-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
                           + "; skipping slice.");
-              ++statistics.skipped_zero_mixed_event_slices;
+              ++statistics.skipped_zero_same_event_slices;
               ++processed_slices;
               progress.Update(processed_slices);
               delete h_se_raw;
               delete h_se_norm;
               continue;
             }
-            me_projection = split_me_projection.get();
+            h_se_norm->Scale(1.0 / int_se);
+
+            std::unique_ptr<MixedEventProjection> split_me_projection;
+            const MixedEventProjection *me_projection = integrated_me_projection.get();
+            if (config.build.split_mixed_event_by_phi) {
+              split_me_projection =
+                  build_me_projection(phi_index, phi_index, group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
+              if (split_me_projection == nullptr) {
+                logger.Warn("Zero mixed-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
+                            + "; skipping slice.");
+                ++statistics.skipped_zero_mixed_event_slices;
+                ++processed_slices;
+                progress.Update(processed_slices);
+                delete h_se_raw;
+                delete h_se_norm;
+                continue;
+              }
+              me_projection = split_me_projection.get();
+            }
+
+            const double raw_phi_low = phi_axis->GetBinLowEdge(phi_index);
+            const double raw_phi_high = phi_axis->GetBinUpEdge(phi_index);
+            const double raw_phi_center = phi_axis->GetBinCenter(phi_index);
+            // Build records both raw and display phi so fit can later follow or override
+            // the original mapping choice without rebuilding the CF histograms.
+            const PhiSliceCoordinates display_phi_coordinates = BuildPhiSliceCoordinatesFromRaw(
+                raw_phi_low, raw_phi_high, raw_phi_center, config.build.map_pair_phi_to_symmetric_range);
+
+            const auto entry = MakeSliceCatalogEntry(centrality_bin,
+                                                     mt_bin,
+                                                     qn_selection,
+                                                     static_cast<int>(centrality_index),
+                                                     static_cast<int>(mt_index),
+                                                     phi_index - 1,
+                                                     raw_phi_low,
+                                                     raw_phi_high,
+                                                     raw_phi_center,
+                                                     display_phi_coordinates.low,
+                                                     display_phi_coordinates.high,
+                                                     display_phi_coordinates.center,
+                                                     config.build.map_pair_phi_to_symmetric_range,
+                                                     config.build.split_mixed_event_by_phi,
+                                                     false);
+            write_slice(h_se_raw, h_se_norm, *me_projection, entry);
+            delete h_se_raw;
+            delete h_se_norm;
           }
+        };
 
-          const double raw_phi_low = phi_axis->GetBinLowEdge(phi_index);
-          const double raw_phi_high = phi_axis->GetBinUpEdge(phi_index);
-          const double raw_phi_center = phi_axis->GetBinCenter(phi_index);
-          // Build records both raw and display phi so fit can later follow or override
-          // the original mapping choice without rebuilding the CF histograms.
-          const PhiSliceCoordinates display_phi_coordinates = BuildPhiSliceCoordinatesFromRaw(
-              raw_phi_low, raw_phi_high, raw_phi_center, config.build.map_pair_phi_to_symmetric_range);
-
-          const auto entry = MakeSliceCatalogEntry(centrality_bin,
-                                                   mt_bin,
-                                                   static_cast<int>(centrality_index),
-                                                   static_cast<int>(mt_index),
-                                                   phi_index - 1,
-                                                   raw_phi_low,
-                                                   raw_phi_high,
-                                                   raw_phi_center,
-                                                   display_phi_coordinates.low,
-                                                   display_phi_coordinates.high,
-                                                   display_phi_coordinates.center,
-                                                   config.build.map_pair_phi_to_symmetric_range,
-                                                   config.build.split_mixed_event_by_phi,
-                                                   false);
-          write_slice(h_se_raw, h_se_norm, *me_projection, entry);
-          delete h_se_raw;
-          delete h_se_norm;
+        for (const QnSliceSelection &qn_selection : qn_slice_selections) {
+          write_qn_selection(qn_selection);
         }
 
         h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
         h_me_origin->GetAxis(6)->SetRange(1, n_phi_bins);
+        ResetAxisVisibleRange(*h_se_origin->GetAxis(5));
+        ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
       }
     }
 
@@ -3201,7 +3413,7 @@ namespace exp_femto_3d {
       std::vector<FitResultGroupKey> group_order;
       std::map<FitResultGroupKey, const SliceCatalogEntry *> phi_integrated_by_group;
       for (const SliceCatalogEntry *entry : selected_entries) {
-        const FitResultGroupKey key{entry->centrality_index, entry->mt_index};
+        const FitResultGroupKey key{entry->centrality_index, entry->mt_index, entry->qn_index};
         if (phi_integrated_by_group.find(key) == phi_integrated_by_group.end()
             && std::find(group_order.begin(), group_order.end(), key) == group_order.end()) {
           group_order.push_back(key);
@@ -3304,7 +3516,7 @@ namespace exp_femto_3d {
 
       const CoulombKernelTable *coulomb_kernel = nullptr;
       if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
-        const FitResultGroupKey key{entry.centrality_index, entry.mt_index};
+        const FitResultGroupKey key{entry.centrality_index, entry.mt_index, entry.qn_index};
         const auto kernel_iter = finite_source_kernels.find(key);
         if (kernel_iter == finite_source_kernels.end()) {
           throw std::runtime_error("Missing finite-source Coulomb kernel for group " + entry.group_id + ".");

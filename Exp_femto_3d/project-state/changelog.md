@@ -2,6 +2,22 @@
 
 ## 2026-06-30
 
+- Added `[build].split_same_event_by_qn` and `[[bins.qn]]` support so
+  qn-specific SAME slices can be written while preserving the legacy qn-all
+  slices and keeping MIXED qn integrated.
+- Updated `SliceCatalog`, `FitCatalog`, `CoulombKernelCatalog`, and TSV output
+  metadata with `qn_index`, `qn_low`, `qn_high`, `qn_label`, and
+  `is_qn_integrated`; legacy catalogs default to `qn_all`.
+- Updated `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` for
+  `/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya/3Dfemto_cent_mt_q2_phi_LHC23_merge.root`
+  to write qn-all plus qn1/qn2/qn3 outputs in the standard
+  `Exp_femto_3d` `SliceCatalog`/`slices` structure.
+- Added config-parse, catalog roundtrip, and smoke coverage for qn metadata and
+  qn split output paths.
+- Verified the Wenya production build/fit through the O2Physics ROOT executor:
+  `build-cf` stored `1040` slices, `fit` fitted `468/468` selected slices, ROOT
+  inspection found qn_all/qn1/qn2/qn3 counts as expected, and the TSV has `469`
+  lines.
 - Added `docs/数学物理公式流程说明.md` as the current math/physics workflow
   reference for the refactored 3D femtoscopy pipeline.
 - Documented the sparse-axis contract, SE/ME normalization, CF construction,

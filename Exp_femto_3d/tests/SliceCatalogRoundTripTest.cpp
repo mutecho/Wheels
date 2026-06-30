@@ -29,8 +29,9 @@ namespace {
                   const double mt,
                   const double centrality,
                   const double phi,
-                  const double weight) {
-    double values[7] = {q_out, q_side, q_long, mt, centrality, 0.0, phi};
+                  const double weight,
+                  const double qn = 0.5) {
+    double values[7] = {q_out, q_side, q_long, mt, centrality, qn, phi};
     sparse.Fill(values, weight);
   }
 
@@ -49,17 +50,19 @@ namespace {
     auto *same_dir = task->mkdir("Same");
     auto *mixed_dir = task->mkdir("Mixed");
 
-    const int bins[7] = {4, 4, 4, 2, 2, 1, 3};
-    const double min[7] = {-0.2, -0.2, -0.2, 0.2, 0.0, -0.5, 0.0};
-    const double max[7] = {0.2, 0.2, 0.2, 0.4, 10.0, 0.5, 3.14159265358979323846};
+    const int bins[7] = {4, 4, 4, 2, 2, 10, 3};
+    const double min[7] = {-0.2, -0.2, -0.2, 0.2, 0.0, 0.0, 0.0};
+    const double max[7] = {0.2, 0.2, 0.2, 0.4, 10.0, 10.0, 3.14159265358979323846};
 
     auto same = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     for (double phi : {0.3, 1.3, 2.5}) {
-      FillSparse(*same, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 10.0);
-      FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 8.0);
-      FillSparse(*mixed, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 12.0 + 6.0 * phi);
-      FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 11.0 + 4.0 * phi);
+      for (double qn : {1.0, 5.0, 8.0}) {
+        FillSparse(*same, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 10.0 + qn, qn);
+        FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 8.0 + qn, qn);
+        FillSparse(*mixed, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 12.0 + 6.0 * phi + qn, qn);
+        FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 11.0 + 4.0 * phi + qn, qn);
+      }
     }
 
     same_dir->cd();
@@ -74,7 +77,8 @@ namespace {
                           const std::string &input_root,
                           const std::string &output_dir,
                           const std::string &cf_root_name = "catalog_test.root",
-                          const bool split_mixed_event_by_phi = false) {
+                          const bool split_mixed_event_by_phi = false,
+                          const bool split_same_event_by_qn = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -93,6 +97,7 @@ namespace {
     output << "write_normalized_se_me_1d_projections = false\n";
     output << "reopen_output_file_per_slice = true\n";
     output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
+    output << "split_same_event_by_qn = " << (split_same_event_by_qn ? "true" : "false") << "\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "model = \"diag\"\n";
@@ -104,6 +109,11 @@ namespace {
     output << "progress = false\n\n";
     output << "[[bins.centrality]]\nmin = 0\nmax = 10\n\n";
     output << "[[bins.mt]]\nmin = 0.2\nmax = 0.4\n";
+    if (split_same_event_by_qn) {
+      output << "\n[[bins.qn]]\nlabel = \"qn1\"\nmin = 0\nmax = 3\n";
+      output << "\n[[bins.qn]]\nlabel = \"qn2\"\nmin = 3\nmax = 7\n";
+      output << "\n[[bins.qn]]\nlabel = \"qn3\"\nmin = 7\nmax = 10\n";
+    }
     return path.string();
   }
 
@@ -216,6 +226,8 @@ int main() {
   Expect(entries.size() == 4, "catalog size mismatch");
   Expect(entries.front().slice_directory.rfind("slices/", 0) == 0, "slice directory should live under slices/");
   Expect(entries[0].cf_object_path.find("/CF3D") != std::string::npos, "catalog should store CF object path");
+  Expect(entries[0].is_qn_integrated && entries[0].qn_index == -1 && entries[0].qn_label == "qn_all",
+         "default catalog entries should be qn-integrated");
   Expect(entries[1].build_uses_symmetric_phi_range, "catalog should persist build phi mapping metadata");
   Expect(entries[3].display_phi_center < 0.0, "mapped phi slice should keep a negative display center");
 
@@ -224,6 +236,8 @@ int main() {
   Expect(legacy_entries[1].build_uses_symmetric_phi_range,
          "legacy catalog reader should infer mapped build phi metadata");
   Expect(!legacy_entries[1].split_mixed_event_by_phi, "legacy catalog should default to integrated ME metadata");
+  Expect(legacy_entries[1].is_qn_integrated && legacy_entries[1].qn_label == "qn_all",
+         "legacy catalog should default to qn-integrated metadata");
   Expect(legacy_entries[3].display_phi_center < 0.0, "legacy catalog should preserve stored display phi values");
 
   const std::string split_config_path =
@@ -234,6 +248,38 @@ int main() {
   Expect(split_build_stats.skipped_zero_mixed_event_slices == 0, "toy split-ME build should not skip ME slices");
   const auto split_entries = LoadSliceCatalog((temp_dir / "catalog_split.root").string());
   Expect(split_entries[1].split_mixed_event_by_phi, "catalog should persist split-ME metadata");
+
+  const std::string qn_config_path =
+      WriteConfig(temp_dir / "config_qn.toml", input_root, temp_dir.string(), "catalog_qn.root", false, true);
+  const ApplicationConfig qn_config = LoadApplicationConfig(qn_config_path);
+  const BuildCfRunStatistics qn_build_stats = RunBuildCf(qn_config, logger);
+  Expect(qn_build_stats.stored_slices == 16, "qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
+  const auto qn_entries = LoadSliceCatalog((temp_dir / "catalog_qn.root").string());
+  Expect(qn_entries.size() == 16, "qn-split catalog size mismatch");
+  int qn_all_count = 0;
+  int qn1_count = 0;
+  int qn2_count = 0;
+  int qn3_count = 0;
+  for (const SliceCatalogEntry &entry : qn_entries) {
+    if (entry.is_qn_integrated) {
+      ++qn_all_count;
+      Expect(entry.qn_index == -1 && entry.qn_label == "qn_all",
+             "qn-integrated slice should keep legacy qn metadata");
+      Expect(entry.group_id.find("__qn") == std::string::npos,
+             "qn-integrated group id should preserve the legacy path");
+    } else if (entry.qn_label == "qn1") {
+      ++qn1_count;
+      Expect(entry.qn_index == 0 && entry.group_id.find("__qn1") != std::string::npos, "qn1 metadata mismatch");
+    } else if (entry.qn_label == "qn2") {
+      ++qn2_count;
+      Expect(entry.qn_index == 1 && entry.group_id.find("__qn2") != std::string::npos, "qn2 metadata mismatch");
+    } else if (entry.qn_label == "qn3") {
+      ++qn3_count;
+      Expect(entry.qn_index == 2 && entry.group_id.find("__qn3") != std::string::npos, "qn3 metadata mismatch");
+    }
+  }
+  Expect(qn_all_count == 4 && qn1_count == 4 && qn2_count == 4 && qn3_count == 4,
+         "qn-split catalog should contain four phi slices for each qn state");
 
   TFile integrated_file((temp_dir / "catalog_test.root").string().c_str(), "READ");
   TFile split_file((temp_dir / "catalog_split.root").string().c_str(), "READ");

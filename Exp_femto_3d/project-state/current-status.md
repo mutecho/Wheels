@@ -2,6 +2,50 @@
 
 ## Task Snapshot
 
+- scope: add and validate Wenya PbPb LHC23 qn-all plus qn1/qn2/qn3
+  build/fit support
+- current conclusion:
+  `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` now runs the
+  target Wenya input through the existing `Exp_femto_3d` `SliceCatalog`/`slices`
+  output structure with qn-all preserved and SAME-side qn split into qn1,
+  qn2, and qn3
+- primary evidence:
+  - the config reads
+    `/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya/3Dfemto_cent_mt_q2_phi_LHC23_merge.root`
+    from `SameEvent_3Dqn` and `MixedEvent_3Dqn`
+  - `[build].split_same_event_by_qn = true` and `[[bins.qn]]` defines
+    `qn1 = 0-3`, `qn2 = 3-7`, and `qn3 = 7-10`; qn-all remains in the output
+    with the historical cent/mT group id
+  - build bins follow the existing PbPb mT setup and stop centrality at
+    `50-80`; fit selection follows the existing PbPb `0-10`, `10-30`,
+    `30-50` centrality subset and three selected mT bins
+  - fit settings remain the existing PbPb Gamow/Coulomb, core-halo lambda,
+    q2-baseline, PML, full-model setup with `fit_q_max = 0.15`
+  - `config_parse_validation_test` now parses and checks the Wenya production
+    config contract
+  - `scripts/cmake.sh` configured with CATS support and rebuilt all targets
+  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
+    the two ROOT-backed tests were then run directly through the O2Physics
+    executor and returned `PRIMARY_OK`
+  - production `build-cf` returned `PRIMARY_OK` and wrote `1040` slices with no
+    skipped zero-content groups or slices
+  - production `fit` returned `PRIMARY_OK` and fitted `468/468` selected slices
+    with no missing CF objects or raw SE/ME histograms
+  - ROOT inspection returned `PRIMARY_OK`: `meta/SliceCatalog` has `1040`
+    entries, qn metadata branches, and qn_all/qn1/qn2/qn3 each have `260`
+    build slices and `20` phi-all slices
+  - detailed fit `meta/FitCatalog` has `468` entries; qn_all/qn1/qn2/qn3 each
+    have `117` fitted slices and `9` phi-all fitted slices
+  - detailed fit ROOT contains representative qn-all and qn1/qn2/qn3
+    `summary/R2_vs_phi` objects
+  - report ROOT contains `meta/FitCatalog`, representative qn-all and qn1
+    `summary/R2_vs_phi`, `source_parameters`, and `eps_vs_mt` objects; TSV has
+    `469` lines including the header
+- verification: production Wenya build/fit completed and outputs were inspected
+  successfully
+
+## Previous Snapshot
+
 - scope: add the required math/physics formula workflow document for
   `Exp_femto_3d`
 - current conclusion: `docs/数学物理公式流程说明.md` now documents the current
@@ -23,7 +67,7 @@
 - verification: docs-only update; verified by source/code-reference review and
   Markdown inspection, with no runtime analysis code changed
 
-## Previous Snapshot
+## Earlier Snapshot
 
 - scope: implement finite-source Coulomb fit support from
   `docs/plan/fit_finite_coul.md`
@@ -63,7 +107,7 @@
     `libCATS` and GSL on `bin/exp_femto_3d`, and `ctest --output-on-failure`
     passed all five registered tests
 
-## Earlier Snapshot
+## Older Snapshot
 
 - scope: add a project-local run script for the OO 3D build/fit workflow
 - current conclusion: `scripts/run_exp_femto_3d.sh` is now the default
@@ -84,7 +128,7 @@
   - the full OO real-data build/fit was not rerun because the default config
     writes production ROOT/TSV/report outputs
 
-## Historical Snapshot
+## Older Historical Snapshot
 
 - scope: add a standalone fit report ROOT output for `fit` results
 - current conclusion: `fit` writes an independently configured report ROOT file
@@ -105,7 +149,7 @@
   - `2026-06-10` O2Physics ROOT executor `ctest --output-on-failure` passed all
     three registered tests and the workflow smoke checks the new report objects
 
-## Older Historical Snapshot
+## Oldest Historical Snapshot
 
 - scope: sync `project-state/` with the current `3d_cf_from_exp` refactor work
   around phi-mapping persistence/override, explicit progress-mode control, and
@@ -131,12 +175,22 @@
 
 ## Verification Status
 
-- verification_status: locally verified for config parsing, Coulomb kernel
-  behavior, ROOT-backed smoke coverage, and docs-only formula workflow sync
+- verification_status: locally verified for config parsing, ROOT-backed smoke
+  coverage, Wenya production build/fit output structure, Coulomb kernel
+  behavior, and docs-only formula workflow sync
 - project_state_sync_status: written
 
 Reason:
 
+- `2026-06-30` added Wenya PbPb LHC23 qn-all plus qn1/qn2/qn3 production
+  support and verified it with O2Physics ROOT executor build, `ctest`,
+  production `build-cf`, production `fit`, ROOT catalog/report inspection, and
+  TSV line-count checks
+- the production Wenya `build-cf` wrote
+  `/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya/EP_dependence_CF_wenya_lhc23_merge_qn_split_plus_integrated.root`
+  with `1040` `SliceCatalog` entries and no skipped slices
+- the production Wenya `fit` wrote the detailed fit ROOT, TSV summary, and
+  report ROOT for `468` selected slices with no missing objects
 - `2026-06-30` docs-only review created `docs/数学物理公式流程说明.md`, linked it
   from `README.md`, and synced `project-state/`; no C++/TOML runtime behavior
   changed in this pass
@@ -227,6 +281,10 @@ Reason:
   for the current `build-cf` and `fit` computation chain; update it when sparse
   axes, CF normalization, fit formulas, Coulomb kernels, output semantics, or
   cited code ownership changes
+- `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` is the dedicated
+  Wenya PbPb LHC23 production config; it preserves qn-all output and adds
+  qn1/qn2/qn3 SAME-side slices while keeping the standard
+  `SliceCatalog`/`slices` structure
 - `fit` exposes `fit.coulomb_mode = "none"|"gamow"|"finite_source"` and keeps
   legacy `fit.use_coulomb` compatibility for unambiguous none/Gamow configs
 - `fit.finite_source_mode = "fixed_1d"|"iterative_1d"` controls whether the
@@ -259,6 +317,8 @@ Reason:
 
 - `project-state/` is the active adopted coordination ledger for
   `Exp_femto_3d`
-- this sync records the finite-source Coulomb implementation, CATS/no-CATS
-  validation matrix, the hardened `scripts/cmake.sh` build helper, and the
-  remaining real-data physics-regression gap
+- this sync records the Wenya qn-all plus qn1/qn2/qn3 config/interface
+  update, production build/fit validation, the prior finite-source Coulomb
+  implementation, CATS/no-CATS validation matrix, the hardened
+  `scripts/cmake.sh` build helper, and the remaining real-data
+  equivalence-regression gap

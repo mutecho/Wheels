@@ -95,21 +95,31 @@ Mixed-event denominator control:
   slice; the phi-integrated slice still uses the full phi range
 - this switch is independent of `map_pair_phi_to_symmetric_range`, which only
   controls stored/displayed phi coordinates for downstream summaries
+- `[build].split_same_event_by_qn` defaults to `false`
+- `true` requires `[[bins.qn]]` entries and writes the legacy qn-integrated
+  slices plus one additional SAME-side qn slice set per configured qn label
+- qn-specific groups append the qn label to `group_id`; the qn-integrated
+  group keeps the historical cent/mT `group_id` so existing paths remain valid
+- mixed-event qn is kept integrated; only the SAME-side qn axis is split
 
 ## Output Contract
 
 - `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`; the
   catalog records both `build_uses_symmetric_phi_range` and
-  `split_mixed_event_by_phi`, with older catalogs defaulting the latter to
-  `false`
+  `split_mixed_event_by_phi`, plus qn metadata
+  `qn_index/qn_low/qn_high/qn_label/is_qn_integrated`; older catalogs default
+  the qn metadata to `qn_all`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
   `meta/CoulombKernelCatalog`, `fits/<slice_id>/...`, `summary/R2_vs_phi/...`,
-  and `fit_summary.tsv`
+  and `fit_summary.tsv`; `FitCatalog`, `CoulombKernelCatalog`, and TSV rows
+  carry the same qn metadata
 - `fit` also writes the standalone report ROOT file configured by
   `fit_report_directory` and `fit_report_root_name`; this report mirrors
   `meta/FitCatalog` and `summary/R2_vs_phi/...`, adds
   `source_parameters/<cent>/<mt>/source_parameters_overview_canvas`, and adds
-  `eps_vs_mt/<cent>/epsf_vs_mt(_canvas)` summaries
+  `eps_vs_mt/<cent>/epsf_vs_mt(_canvas)` summaries. qn-specific report
+  summaries are written below an extra `<qn_label>` directory, while qn-all
+  summaries keep the historical paths.
 
 ## Test Notes
 

@@ -1,5 +1,120 @@
 # Tests
 
+## T-013: Wenya PbPb LHC23 qn-All Plus qn1/qn2/qn3 Production Build/Fit
+
+- date: 2026-06-30
+- environment: O2Physics ROOT executor, `PRIMARY_OK` for ROOT-backed commands
+- command:
+
+```bash
+./scripts/cmake.sh
+ctest --test-dir build --output-on-failure
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/slice_catalog_roundtrip_test'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/workflow_smoke_test'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/exp_femto_3d build-cf --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml'
+```
+
+- result: passed
+- evidence:
+  - `scripts/cmake.sh` configured with CATS finite-source support enabled and
+    rebuilt all targets successfully
+  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
+    the two ROOT-backed tests were skipped by the ctest environment rule, then
+    were run directly through the O2Physics executor
+  - `bin/slice_catalog_roundtrip_test` returned `PRIMARY_OK` and covered qn
+    metadata defaults, legacy catalog compatibility, and qn-all/qn1/qn2/qn3
+    toy build output
+  - `bin/workflow_smoke_test` returned `PRIMARY_OK` and covered qn metadata in
+    `FitCatalog` and `CoulombKernelCatalog`
+  - production `build-cf` returned `PRIMARY_OK` and printed
+    `stored_slices=1040`, `skipped_zero_me_groups=0`,
+    `skipped_zero_mixed_event_slices=0`, and `skipped_zero_se_slices=0`
+  - production `fit` returned `PRIMARY_OK` and printed `fitted_slices=468`,
+    `selected_slices=468`, `missing_objects=0`, and
+    `missing_raw_histograms=0`
+  - ROOT inspection returned `PRIMARY_OK`: `meta/SliceCatalog` has `1040`
+    entries; qn_all/qn1/qn2/qn3 each have `260` build slices and `20`
+    phi-all build slices; qn-all paths retain the legacy no-qn suffix
+  - detailed fit `meta/FitCatalog` has `468` entries; qn_all/qn1/qn2/qn3 each
+    have `117` fitted slices and `9` phi-all fitted slices; representative
+    qn-all and qn1/qn2/qn3 `summary/R2_vs_phi` objects exist
+  - report ROOT contains representative qn-all and qn1 `summary/R2_vs_phi`,
+    `source_parameters`, and `eps_vs_mt` objects
+  - `fit_summary_wenya_lhc23_merge_qn_split_plus_integrated.tsv` has `469`
+    lines, matching one header plus `468` fitted rows
+- significance: validates that the Wenya LHC23 config now preserves the
+  original qn-integrated result while adding reference-style qn1/qn2/qn3 CF
+  and fit outputs in the standard `Exp_femto_3d` structure
+
+## T-012: Wenya PbPb LHC23 qn-Integrated Production Build/Fit
+
+- date: 2026-06-30
+- environment: O2Physics ROOT executor, `PRIMARY_OK`
+- command:
+
+```bash
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bash scripts/cmake.sh'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'ctest --test-dir build --output-on-failure'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/exp_femto_3d build-cf --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml'
+
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml'
+```
+
+- result: passed
+- evidence:
+  - `scripts/cmake.sh` returned `PRIMARY_OK`; the active build kept CATS support
+    enabled and rebuilt `config_parse_validation_test`
+  - `ctest --test-dir build --output-on-failure` returned `PRIMARY_OK` and
+    passed all five registered tests:
+    `coulomb_kernel_validation_test`, `config_parse_validation_test`,
+    `progress_render_test`, `slice_catalog_roundtrip_test`, and
+    `workflow_smoke_test`
+  - `config_parse_validation_test` now parses
+    `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` and checks its
+    target input path, PbPb-style bin selections, qn-integrated output names,
+    raw phi mapping, integrated-ME denominator, full fit model, Gamow legacy
+    Coulomb setting, q2 baseline, PML, and follow-input fit phi metadata
+  - production `build-cf` returned `PRIMARY_OK` and printed
+    `stored_slices=260`, `skipped_zero_me_groups=0`,
+    `skipped_zero_mixed_event_slices=0`, and `skipped_zero_se_slices=0`
+  - production `fit` returned `PRIMARY_OK` and printed `fitted_slices=117`,
+    `selected_slices=117`, `missing_objects=0`, and
+    `missing_raw_histograms=0`
+  - ROOT inspection returned `PRIMARY_OK`: `meta/SliceCatalog` has `260`
+    entries, no `qn_index` branch, no `slice_id` containing `qn`, and `20`
+    phi-integrated slices; detailed fit `meta/FitCatalog` has `117` entries
+  - detailed and report ROOT outputs contain representative `summary/R2_vs_phi`
+    objects, and report ROOT contains `meta/FitCatalog` plus a representative
+    `source_parameters` overview canvas
+  - `fit_summary_wenya_lhc23_merge_qn_integrated.tsv` has `118` lines,
+    matching one header plus `117` fitted rows
+- significance: validates that the Wenya LHC23 input can be processed through
+  the original `Exp_femto_3d` catalog/slice structure with qn integrated, not
+  through the flat reference-macro object layout
+
 ## T-011: Incremental Build Helper Refreshes ROOT Links Only When Needed
 
 - date: 2026-06-23

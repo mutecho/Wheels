@@ -3,6 +3,54 @@
 ## Latest Durable Handoff
 
 - completed:
+  - extended
+    `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` for the Wenya
+    PbPb LHC23 input so it preserves qn-all and adds qn1/qn2/qn3 SAME-side
+    slices
+  - kept the original `Exp_femto_3d` output structure:
+    `meta/SliceCatalog`, `slices/<slice_id>/...`, detailed fit ROOT, TSV
+    summary, `summary/R2_vs_phi`, and standalone report ROOT
+  - added `[build].split_same_event_by_qn` and `[[bins.qn]]`; qn-specific
+    group ids append `__qn1`, `__qn2`, or `__qn3`, while qn-all keeps the
+    historical cent/mT group id
+  - kept MIXED qn integrated; qn splitting applies to SAME only
+  - used the existing PbPb fit settings: full model, legacy Gamow Coulomb via
+    `use_coulomb = true`, core-halo lambda, q2 baseline, PML, and
+    `fit_q_max = 0.15`
+  - added config-parse coverage, qn catalog roundtrip coverage, and qn metadata
+    smoke coverage for the new output schema
+  - ran `scripts/cmake.sh`; it configured CATS support and rebuilt all targets
+  - ran `ctest --test-dir build --output-on-failure`; it reported `100% tests
+    passed`, with ROOT-backed tests then run directly through the O2Physics
+    executor
+  - ran `bin/slice_catalog_roundtrip_test` and `bin/workflow_smoke_test`
+    through the O2Physics executor; both returned `PRIMARY_OK`
+  - ran production `build-cf`; it returned `PRIMARY_OK` and stored `1040`
+    slices with no skipped groups or slices
+  - ran production `fit`; it returned `PRIMARY_OK` and fitted `468/468`
+    selected slices with no missing objects or raw histograms
+  - inspected produced ROOT files: `SliceCatalog=1040`, qn_all/qn1/qn2/qn3
+    each `260` build slices, `FitCatalog=468`, qn_all/qn1/qn2/qn3 each `117`
+    fitted slices, report/catalog/summary objects present, TSV line count
+    `469`
+
+## Next Recommended Owner Action
+
+- use the updated config directly for this Wenya qn-all plus qn1/qn2/qn3
+  production path:
+
+```bash
+bin/exp_femto_3d build-cf --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml
+bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml
+```
+
+- when future work changes sparse axes, CF normalization, phi mapping,
+  `SliceCatalog`, Levy/Coulomb formulas, fit metadata, or summary-output
+  semantics, update `docs/数学物理公式流程说明.md` in the same pass
+
+## Previous Durable Handoff
+
+- completed:
   - added `docs/数学物理公式流程说明.md` as the current formula workflow
     reference for `Exp_femto_3d`
   - documented the sparse-axis contract, build-side SE/ME normalization,
@@ -16,16 +64,7 @@
   - verified by reading the current implementation and docs; no analysis code,
     configs, build files, or runtime outputs were changed
 
-## Next Recommended Owner Action
-
-- when future work changes sparse axes, CF normalization, phi mapping,
-  `SliceCatalog`, Levy/Coulomb formulas, fit metadata, or summary-output
-  semantics, update `docs/数学物理公式流程说明.md` in the same pass
-- no runtime validation is required for this documentation-only handoff, but
-  the existing O2Physics ROOT executor validation path remains the authoritative
-  route for behavior changes
-
-## Previous Durable Handoff
+## Older Durable Handoff
 
 - completed:
   - implemented the `docs/plan/fit_finite_coul.md` finite-source Coulomb fit

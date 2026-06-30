@@ -138,6 +138,9 @@ namespace {
            "FitCatalog finite_source_radius_fm branch missing");
     Expect(tree->GetBranch("finiteSourceRadiusFm") != nullptr,
            "FitCatalog finiteSourceRadiusFm branch missing");
+    Expect(tree->GetBranch("qn_index") != nullptr, "FitCatalog qn_index branch missing");
+    Expect(tree->GetBranch("qn_label") != nullptr, "FitCatalog qn_label branch missing");
+    Expect(tree->GetBranch("is_qn_integrated") != nullptr, "FitCatalog is_qn_integrated branch missing");
 
     TTreeReader reader(tree);
     TTreeReaderValue<double> phi(reader, "phi");
@@ -145,6 +148,9 @@ namespace {
     TTreeReaderValue<std::string> coulomb_mode(reader, "coulomb_mode");
     TTreeReaderValue<std::string> finite_source_mode(reader, "finite_source_mode");
     TTreeReaderValue<double> finite_source_radius_fm(reader, "finite_source_radius_fm");
+    TTreeReaderValue<int> qn_index(reader, "qn_index");
+    TTreeReaderValue<std::string> qn_label(reader, "qn_label");
+    TTreeReaderValue<int> is_qn_integrated(reader, "is_qn_integrated");
     TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
     TTreeReaderValue<int> fit_uses_symmetric_phi_range(reader, "fit_uses_symmetric_phi_range");
 
@@ -152,6 +158,8 @@ namespace {
     while (reader.Next()) {
       Expect(*coulomb_mode == expected_coulomb_mode, "FitCatalog Coulomb mode mismatch");
       Expect((*uses_coulomb != 0) == (expected_coulomb_mode != "none"), "FitCatalog uses_coulomb mismatch");
+      Expect(*qn_index == -1 && *qn_label == "qn_all" && *is_qn_integrated != 0,
+             "default smoke FitCatalog should remain qn-integrated");
       if (expected_coulomb_mode == "finite_source") {
         Expect(!finite_source_mode->empty(), "finite-source mode should be recorded");
         Expect(std::isfinite(*finite_source_radius_fm) && *finite_source_radius_fm > 0.0,
@@ -195,6 +203,9 @@ namespace {
     Expect(tree->GetBranch("seed_radius_fm") != nullptr, "kernel catalog seed radius branch missing");
     Expect(tree->GetBranch("final_radius_fm") != nullptr, "kernel catalog final radius branch missing");
     Expect(tree->GetBranch("kstar_bin_count") != nullptr, "kernel catalog kstar bin branch missing");
+    Expect(tree->GetBranch("qn_index") != nullptr, "kernel catalog qn_index branch missing");
+    Expect(tree->GetBranch("qn_label") != nullptr, "kernel catalog qn_label branch missing");
+    Expect(tree->GetBranch("is_qn_integrated") != nullptr, "kernel catalog is_qn_integrated branch missing");
     if (expect_rows) {
       Expect(tree->GetEntries() > 0, "finite-source kernel catalog should contain rows");
     }

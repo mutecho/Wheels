@@ -152,6 +152,8 @@ max = 0.6
   Expect(overlapping_config.output.fit_report_root_name == "fit_report.root",
          "fit report root name should default");
   Expect(!overlapping_config.build.split_mixed_event_by_phi, "ME phi split should default to false");
+  Expect(!overlapping_config.build.split_same_event_by_qn, "same-event qn split should default to false");
+  Expect(overlapping_config.qn_bins.empty(), "qn bins should default to empty");
   Expect(overlapping_config.build.progress == ProgressMode::kAuto, "build progress should default to auto");
   Expect(overlapping_config.fit.progress == ProgressMode::kAuto, "fit progress should default to auto");
   Expect(!overlapping_config.fit.map_pair_phi_to_symmetric_range.has_value(),
@@ -237,6 +239,70 @@ max = 0.4
   Expect(pbpb_example.fit.progress == ProgressMode::kAuto, "pbpb fit progress should parse");
   Expect(pbpb_example.fit.options.coulomb_mode == CoulombMode::kGamow,
          "legacy use_coulomb=true should map to gamow");
+
+  // Keep the Wenya production config on the original structure while adding qn-split slices.
+  const ApplicationConfig wenya_qn_integrated =
+      LoadApplicationConfig((project_root / "config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml").string());
+  Expect(wenya_qn_integrated.input.input_root
+             == "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya/3Dfemto_cent_mt_q2_phi_LHC23_merge.root",
+         "wenya qn-integrated input path mismatch");
+  Expect(wenya_qn_integrated.input.task_name == "femto-dream-pair-task-track-track",
+         "wenya qn-integrated task name mismatch");
+  Expect(wenya_qn_integrated.input.same_event_subtask == "SameEvent_3Dqn",
+         "wenya qn-integrated same-event subtask mismatch");
+  Expect(wenya_qn_integrated.input.mixed_event_subtask == "MixedEvent_3Dqn",
+         "wenya qn-integrated mixed-event subtask mismatch");
+  Expect(wenya_qn_integrated.input.sparse_object_name == "relPair3dRmTMultPercentileQnPairphi",
+         "wenya qn-integrated sparse name mismatch");
+  Expect(wenya_qn_integrated.output.output_directory == "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya",
+         "wenya qn-integrated output directory mismatch");
+  Expect(wenya_qn_integrated.output.cf_root_name
+             == "EP_dependence_CF_wenya_lhc23_merge_qn_split_plus_integrated.root",
+         "wenya qn-split CF output name mismatch");
+  Expect(wenya_qn_integrated.output.fit_root_name
+             == "EP_dependence_CF_full_fit_wenya_lhc23_merge_qn_split_plus_integrated.root",
+         "wenya qn-split fit output name mismatch");
+  Expect(wenya_qn_integrated.output.fit_summary_name
+             == "fit_summary_wenya_lhc23_merge_qn_split_plus_integrated.tsv",
+         "wenya qn-split fit summary name mismatch");
+  Expect(wenya_qn_integrated.output.fit_report_root_name
+             == "EP_dependence_CF_full_fit_report_wenya_lhc23_merge_qn_split_plus_integrated.root",
+         "wenya qn-split fit report name mismatch");
+  Expect(wenya_qn_integrated.centrality_bins.size() == 4,
+         "wenya qn-integrated centrality bins should stop at 80 percent");
+  Expect(wenya_qn_integrated.centrality_bins.back().min == 50.0
+             && wenya_qn_integrated.centrality_bins.back().max == 80.0,
+         "wenya qn-integrated final centrality bin should be 50-80");
+  Expect(wenya_qn_integrated.mt_bins.size() == 5, "wenya qn-integrated mT bins should include merged full mT");
+  Expect(wenya_qn_integrated.fit_centrality_bins.size() == 3,
+         "wenya qn-integrated fit centrality selection should follow PbPb subset");
+  Expect(wenya_qn_integrated.fit_mt_bins.size() == 3,
+         "wenya qn-integrated fit mT selection should follow PbPb subset");
+  Expect(wenya_qn_integrated.build.split_same_event_by_qn, "wenya config should enable same-event qn splitting");
+  Expect(wenya_qn_integrated.qn_bins.size() == 3, "wenya config should define qn1/qn2/qn3 bins");
+  Expect(wenya_qn_integrated.qn_bins[0].label == "qn1" && wenya_qn_integrated.qn_bins[0].min == 0.0
+             && wenya_qn_integrated.qn_bins[0].max == 3.0,
+         "wenya qn1 bin mismatch");
+  Expect(wenya_qn_integrated.qn_bins[1].label == "qn2" && wenya_qn_integrated.qn_bins[1].min == 3.0
+             && wenya_qn_integrated.qn_bins[1].max == 7.0,
+         "wenya qn2 bin mismatch");
+  Expect(wenya_qn_integrated.qn_bins[2].label == "qn3" && wenya_qn_integrated.qn_bins[2].min == 7.0
+             && wenya_qn_integrated.qn_bins[2].max == 10.0,
+         "wenya qn3 bin mismatch");
+  Expect(!wenya_qn_integrated.build.map_pair_phi_to_symmetric_range,
+         "wenya qn-integrated build should keep raw phi mapping");
+  Expect(!wenya_qn_integrated.build.split_mixed_event_by_phi,
+         "wenya qn-integrated build should keep integrated ME denominator");
+  Expect(wenya_qn_integrated.fit.model == FitModel::kFull, "wenya qn-integrated fit should use full model");
+  Expect(wenya_qn_integrated.fit.options.coulomb_mode == CoulombMode::kGamow,
+         "wenya qn-integrated fit should keep legacy PbPb Coulomb setting");
+  Expect(wenya_qn_integrated.fit.options.use_core_halo_lambda,
+         "wenya qn-integrated fit should keep core-halo lambda");
+  Expect(wenya_qn_integrated.fit.options.use_q2_baseline,
+         "wenya qn-integrated fit should keep q2 baseline");
+  Expect(wenya_qn_integrated.fit.options.use_pml, "wenya qn-integrated fit should keep PML");
+  Expect(!wenya_qn_integrated.fit.map_pair_phi_to_symmetric_range.has_value(),
+         "wenya qn-integrated fit should follow input CF phi metadata");
 
   const auto mode_config = [](const std::string &fit_coulomb_lines) {
     return R"toml(
@@ -434,6 +500,44 @@ max = 0.5
     saw_invalid_fit_selection = true;
   }
   Expect(saw_invalid_fit_selection, "fit_selection bins must exactly match build bins");
+
+  const std::string invalid_qn_split_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = true
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+split_same_event_by_qn = true
+
+[fit]
+model = "full"
+fit_q_max = 0.2
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+
+  bool saw_invalid_qn_split = false;
+  try {
+    (void)LoadApplicationConfig(WriteFile(temp_dir / "invalid_qn_split.toml", invalid_qn_split_config));
+  } catch (const ConfigError &) {
+    saw_invalid_qn_split = true;
+  }
+  Expect(saw_invalid_qn_split, "qn split without qn bins should fail");
 
   const std::string invalid_range_config = R"toml(
 [input]

@@ -210,6 +210,8 @@ namespace exp_femto_3d {
         ReadOptionalBool(build, "reopen_output_file_per_slice", config.build.reopen_output_file_per_slice);
     config.build.split_mixed_event_by_phi =
         ReadOptionalBool(build, "split_mixed_event_by_phi", config.build.split_mixed_event_by_phi);
+    config.build.split_same_event_by_qn =
+        ReadOptionalBool(build, "split_same_event_by_qn", config.build.split_same_event_by_qn);
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
@@ -247,6 +249,7 @@ namespace exp_femto_3d {
     if (const auto *bins = root["bins"].as_table(); bins != nullptr) {
       config.centrality_bins = ParseRangeBinArray(GetOptionalArray(*bins, "centrality"), "bins.centrality");
       config.mt_bins = ParseRangeBinArray(GetOptionalArray(*bins, "mt"), "bins.mt");
+      config.qn_bins = ParseRangeBinArray(GetOptionalArray(*bins, "qn"), "bins.qn");
     }
 
     if (const auto *fit_selection = root["fit_selection"].as_table(); fit_selection != nullptr) {
@@ -291,6 +294,17 @@ namespace exp_femto_3d {
 
     ValidateRangeCollection("centrality", config.centrality_bins, true);
     ValidateRangeCollection("mt", config.mt_bins, true);
+    if (config.build.split_same_event_by_qn && config.qn_bins.empty()) {
+      throw ConfigError("build.split_same_event_by_qn requires at least one [[bins.qn]] bin.");
+    }
+    for (std::size_t index = 0; index < config.qn_bins.size(); ++index) {
+      if (config.qn_bins[index].label.empty()) {
+        config.qn_bins[index].label = "qn" + std::to_string(index + 1U);
+      }
+    }
+    if (!config.qn_bins.empty()) {
+      ValidateRangeCollection("qn", config.qn_bins, false);
+    }
 
     if (config.fit_centrality_bins.empty()) {
       config.fit_centrality_bins = config.centrality_bins;

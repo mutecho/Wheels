@@ -90,6 +90,7 @@ namespace exp_femto_3d {
     bool write_normalized_se_me_1d_projections = false;
     bool reopen_output_file_per_slice = true;
     bool split_mixed_event_by_phi = false;
+    bool split_same_event_by_qn = false;
     ProgressMode progress = ProgressMode::kAuto;
   };
 
@@ -117,6 +118,7 @@ namespace exp_femto_3d {
     FitConfig fit;
     std::vector<RangeBin> centrality_bins;
     std::vector<RangeBin> mt_bins;
+    std::vector<RangeBin> qn_bins;
     std::vector<RangeBin> fit_centrality_bins;
     std::vector<RangeBin> fit_mt_bins;
   };
@@ -133,11 +135,15 @@ namespace exp_femto_3d {
     std::string projection_z_path;
     int centrality_index = -1;
     int mt_index = -1;
+    int qn_index = -1;
     int phi_index = -1;
     double cent_low = 0.0;
     double cent_high = 0.0;
     double mt_low = 0.0;
     double mt_high = 0.0;
+    double qn_low = std::numeric_limits<double>::quiet_NaN();
+    double qn_high = std::numeric_limits<double>::quiet_NaN();
+    std::string qn_label = "qn_all";
     double raw_phi_low = 0.0;
     double raw_phi_high = 0.0;
     double raw_phi_center = 0.0;
@@ -146,6 +152,7 @@ namespace exp_femto_3d {
     double display_phi_center = 0.0;
     bool build_uses_symmetric_phi_range = false;
     bool split_mixed_event_by_phi = false;
+    bool is_qn_integrated = true;
     bool is_phi_integrated = false;
   };
 
@@ -156,13 +163,18 @@ namespace exp_femto_3d {
     std::string slice_directory;
     int centrality_index = -1;
     int mt_index = -1;
+    int qn_index = -1;
     int phi_index = -1;
     double cent_low = 0.0;
     double cent_high = 0.0;
     double mt_low = 0.0;
     double mt_high = 0.0;
+    double qn_low = std::numeric_limits<double>::quiet_NaN();
+    double qn_high = std::numeric_limits<double>::quiet_NaN();
+    std::string qn_label = "qn_all";
     double phi = std::numeric_limits<double>::quiet_NaN();
     bool fit_uses_symmetric_phi_range = false;
+    bool is_qn_integrated = true;
     bool is_phi_integrated = false;
     double norm = std::numeric_limits<double>::quiet_NaN();
     double norm_err = std::numeric_limits<double>::quiet_NaN();
@@ -203,10 +215,15 @@ namespace exp_femto_3d {
     std::string group_id;
     int centrality_index = -1;
     int mt_index = -1;
+    int qn_index = -1;
     double cent_low = 0.0;
     double cent_high = 0.0;
     double mt_low = 0.0;
     double mt_high = 0.0;
+    double qn_low = std::numeric_limits<double>::quiet_NaN();
+    double qn_high = std::numeric_limits<double>::quiet_NaN();
+    std::string qn_label = "qn_all";
+    bool is_qn_integrated = true;
     std::string finite_source_mode;
     double seed_radius_fm = std::numeric_limits<double>::quiet_NaN();
     double final_radius_fm = std::numeric_limits<double>::quiet_NaN();
