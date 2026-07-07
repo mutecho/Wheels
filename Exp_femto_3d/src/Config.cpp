@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -130,6 +131,18 @@ namespace exp_femto_3d {
       return fallback;
     }
 
+    std::optional<double> ReadOptionalFiniteDouble(const toml::table &table,
+                                                   const std::string &key,
+                                                   const std::string &context) {
+      if (!table.contains(key)) {
+        return std::nullopt;
+      }
+      if (const auto value = table[key].value<double>(); value.has_value() && std::isfinite(*value)) {
+        return *value;
+      }
+      throw ConfigError("Expected finite numeric field '" + key + "' in " + context + ".");
+    }
+
     RangeBin ParseRangeBin(const toml::table &table, const std::string &context) {
       RangeBin bin;
       if (const auto value = table["min"].value<double>(); value.has_value()) {
@@ -168,6 +181,122 @@ namespace exp_femto_3d {
         bins.push_back(ParseRangeBin(*table, context));
       }
       return bins;
+    }
+
+    bool IsAllowedParameterField(const std::string &field) {
+      return field == "initial" || field == "min" || field == "max" || field == "fixed_value";
+    }
+
+    bool IsFixableLevyParameter(const std::string &parameter_name) {
+      return parameter_name == "lambda" || parameter_name == "alpha";
+    }
+
+    bool HasAnyOverride(const LevyFitParameterOverride &parameter) {
+      return parameter.initial.has_value() || parameter.min.has_value() || parameter.max.has_value()
+             || parameter.fixed_value.has_value();
+    }
+
+    void ValidateFixedValueInsideEffectiveBounds(const std::string &context,
+                                                 const LevyFitParameterOverride &parameter,
+                                                 const double default_min,
+                                                 const double default_max) {
+      if (!parameter.fixed_value.has_value()) {
+        return;
+      }
+      const double effective_min = parameter.min.value_or(default_min);
+      const double effective_max = parameter.max.value_or(default_max);
+      if (*parameter.fixed_value < effective_min || *parameter.fixed_value > effective_max) {
+        throw ConfigError(context + ".fixed_value must be inside the effective min/max range.");
+      }
+    }
+
+    LevyFitParameterOverride *FindParameterOverride(LevyFitParameterOverrides &parameters,
+                                                    const std::string &parameter_name) {
+      if (parameter_name == "norm") {
+        return &parameters.norm;
+      }
+      if (parameter_name == "lambda") {
+        return &parameters.lambda;
+      }
+      if (parameter_name == "rout2") {
+        return &parameters.rout2;
+      }
+      if (parameter_name == "rside2") {
+        return &parameters.rside2;
+      }
+      if (parameter_name == "rlong2") {
+        return &parameters.rlong2;
+      }
+      if (parameter_name == "routside2") {
+        return &parameters.routside2;
+      }
+      if (parameter_name == "routlong2") {
+        return &parameters.routlong2;
+      }
+      if (parameter_name == "rsidelong2") {
+        return &parameters.rsidelong2;
+      }
+      if (parameter_name == "alpha") {
+        return &parameters.alpha;
+      }
+      if (parameter_name == "baseline_q2") {
+        return &parameters.baseline_q2;
+      }
+      return nullptr;
+    }
+
+    LevyFitParameterOverride ParseLevyFitParameterOverride(const toml::table &table,
+                                                           const std::string &parameter_name) {
+      const std::string context = "fit.parameters." + parameter_name;
+      for (const auto &[raw_key, node] : table) {
+        (void)node;
+        const std::string key(raw_key.str());
+        if (!IsAllowedParameterField(key)) {
+          throw ConfigError("Unsupported field '" + key + "' in " + context + ".");
+        }
+      }
+
+      LevyFitParameterOverride parameter;
+      parameter.initial = ReadOptionalFiniteDouble(table, "initial", context);
+      parameter.min = ReadOptionalFiniteDouble(table, "min", context);
+      parameter.max = ReadOptionalFiniteDouble(table, "max", context);
+      parameter.fixed_value = ReadOptionalFiniteDouble(table, "fixed_value", context);
+
+      if (parameter.min.has_value() != parameter.max.has_value()) {
+        throw ConfigError(context + " must define both min and max when overriding parameter limits.");
+      }
+      if (parameter.min.has_value() && *parameter.min >= *parameter.max) {
+        throw ConfigError(context + " must satisfy min < max.");
+      }
+      if (parameter.fixed_value.has_value() && !IsFixableLevyParameter(parameter_name)) {
+        throw ConfigError(context + ".fixed_value is only supported for lambda and alpha.");
+      }
+      if (parameter.fixed_value.has_value() && parameter.min.has_value()
+          && (*parameter.fixed_value < *parameter.min || *parameter.fixed_value > *parameter.max)) {
+        throw ConfigError(context + ".fixed_value must be inside the configured min/max range.");
+      }
+      return parameter;
+    }
+
+    LevyFitParameterOverrides ParseLevyFitParameterOverrides(const toml::table *parameters_table) {
+      LevyFitParameterOverrides parameters;
+      if (parameters_table == nullptr) {
+        return parameters;
+      }
+
+      for (const auto &[raw_key, node] : *parameters_table) {
+        const std::string parameter_name(raw_key.str());
+        LevyFitParameterOverride *target = FindParameterOverride(parameters, parameter_name);
+        if (target == nullptr) {
+          throw ConfigError("Unsupported Levy fit parameter: fit.parameters." + parameter_name + ".");
+        }
+        const auto *parameter_table = node.as_table();
+        if (parameter_table == nullptr) {
+          throw ConfigError("Expected table for fit.parameters." + parameter_name + ".");
+        }
+        *target = ParseLevyFitParameterOverride(*parameter_table, parameter_name);
+      }
+      return parameters;
     }
 
   }  // namespace
@@ -212,6 +341,8 @@ namespace exp_femto_3d {
         ReadOptionalBool(build, "split_mixed_event_by_phi", config.build.split_mixed_event_by_phi);
     config.build.split_same_event_by_qn =
         ReadOptionalBool(build, "split_same_event_by_qn", config.build.split_same_event_by_qn);
+    config.build.split_mixed_event_by_qn =
+        ReadOptionalBool(build, "split_mixed_event_by_qn", config.build.split_mixed_event_by_qn);
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
@@ -241,6 +372,11 @@ namespace exp_femto_3d {
     config.fit.options.use_q2_baseline = ReadOptionalBool(fit, "use_q2_baseline", config.fit.options.use_q2_baseline);
     config.fit.options.use_pml = ReadOptionalBool(fit, "use_pml", config.fit.options.use_pml);
     config.fit.options.fit_q_max = ReadOptionalDouble(fit, "fit_q_max", config.fit.options.fit_q_max);
+    const toml::table *fit_parameters = fit["parameters"].as_table();
+    if (fit.contains("parameters") && fit_parameters == nullptr) {
+      throw ConfigError("fit.parameters must be a table.");
+    }
+    config.fit.options.parameters = ParseLevyFitParameterOverrides(fit_parameters);
     config.fit.map_pair_phi_to_symmetric_range = ReadOptionalNullableBool(fit, "map_pair_phi_to_symmetric_range");
     config.fit.reopen_output_file_per_slice =
         ReadOptionalBool(fit, "reopen_output_file_per_slice", config.fit.reopen_output_file_per_slice);
@@ -291,9 +427,20 @@ namespace exp_femto_3d {
     if (config.fit.options.fit_q_max <= 0.0 || !std::isfinite(config.fit.options.fit_q_max)) {
       throw ConfigError("fit.fit_q_max must be finite and positive.");
     }
+    if (!config.fit.options.use_core_halo_lambda && HasAnyOverride(config.fit.options.parameters.lambda)) {
+      throw ConfigError("fit.parameters.lambda requires fit.use_core_halo_lambda = true.");
+    }
+    if (!config.fit.options.use_q2_baseline && HasAnyOverride(config.fit.options.parameters.baseline_q2)) {
+      throw ConfigError("fit.parameters.baseline_q2 requires fit.use_q2_baseline = true.");
+    }
+    ValidateFixedValueInsideEffectiveBounds("fit.parameters.lambda", config.fit.options.parameters.lambda, 0.0, 1.0);
+    ValidateFixedValueInsideEffectiveBounds("fit.parameters.alpha", config.fit.options.parameters.alpha, 0.5, 2.0);
 
     ValidateRangeCollection("centrality", config.centrality_bins, true);
     ValidateRangeCollection("mt", config.mt_bins, true);
+    if (config.build.split_mixed_event_by_qn && !config.build.split_same_event_by_qn) {
+      throw ConfigError("build.split_mixed_event_by_qn requires build.split_same_event_by_qn = true.");
+    }
     if (config.build.split_same_event_by_qn && config.qn_bins.empty()) {
       throw ConfigError("build.split_same_event_by_qn requires at least one [[bins.qn]] bin.");
     }

@@ -56,6 +56,31 @@ Coulomb fit modes:
   `/Users/allenzhou/Research_software/CATS/install` and Homebrew GSL; builds
   without CATS still support `none` and `gamow`
 
+Main Levy fit-parameter overrides:
+
+- optional `[fit.parameters.<name>]` subtables can override `initial`, `min`,
+  and `max`; omitted fields keep the legacy defaults
+- supported names: `norm`, `lambda`, `rout2`, `rside2`, `rlong2`,
+  `routside2`, `routlong2`, `rsidelong2`, `alpha`, and `baseline_q2`
+- `lambda` and `alpha` additionally support `fixed_value`; other parameters
+  reject `fixed_value`
+- `[fit.parameters.lambda]` requires `use_core_halo_lambda = true`; otherwise
+  lambda is fixed by the core-halo switch
+- `[fit.parameters.baseline_q2]` requires `use_q2_baseline = true`
+
+```toml
+[fit.parameters.lambda]
+initial = 0.5
+min = 0.0
+max = 1.0
+fixed_value = 0.65
+
+[fit.parameters.alpha]
+initial = 1.5
+min = 0.5
+max = 2.0
+```
+
 Independent fit-report output:
 
 - `[output].fit_report_directory`
@@ -100,15 +125,20 @@ Mixed-event denominator control:
   slices plus one additional SAME-side qn slice set per configured qn label
 - qn-specific groups append the qn label to `group_id`; the qn-integrated
   group keeps the historical cent/mT `group_id` so existing paths remain valid
-- mixed-event qn is kept integrated; only the SAME-side qn axis is split
+- `[build].split_mixed_event_by_qn` defaults to `false`, preserving the current
+  behavior where qn-specific SAME slices still use a qn-integrated ME
+  denominator
+- `true` requires `split_same_event_by_qn = true`; ME is then projected with the
+  same qn interval as the current qn-specific SAME slice, while the qn-all slice
+  remains integrated over the full qn axis
 
 ## Output Contract
 
 - `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`; the
   catalog records both `build_uses_symmetric_phi_range` and
-  `split_mixed_event_by_phi`, plus qn metadata
+  `split_mixed_event_by_phi`, `split_mixed_event_by_qn`, plus qn metadata
   `qn_index/qn_low/qn_high/qn_label/is_qn_integrated`; older catalogs default
-  the qn metadata to `qn_all`
+  the qn metadata to `qn_all` and `split_mixed_event_by_qn` to `false`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
   `meta/CoulombKernelCatalog`, `fits/<slice_id>/...`, `summary/R2_vs_phi/...`,
   and `fit_summary.tsv`; `FitCatalog`, `CoulombKernelCatalog`, and TSV rows

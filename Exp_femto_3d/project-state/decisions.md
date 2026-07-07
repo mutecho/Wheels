@@ -55,3 +55,18 @@
     mT without depending on the full per-slice fit object tree
   - the report path can be redirected independently from the CF/fit output
     directory while older configs keep working through defaults
+
+## DEC-006: Keep Qn-Integrated ME As Default And Make Qn-Following ME Opt-In
+
+- date: 2026-07-01
+- decision: `build.split_mixed_event_by_qn = false` remains the default so
+  qn-specific SAME slices continue to use qn-integrated mixed-event
+  denominators unless explicitly requested
+- rationale:
+  - preserving the default keeps the existing qn-split production CFs
+    numerically backward compatible
+  - requiring `build.split_same_event_by_qn = true` prevents a configuration
+    from claiming qn-specific ME denominators when no qn-specific SE slices are
+    written
+  - the opt-in mode supports direct checks of qn-matched SE/ME denominators
+    without changing qn labels, group IDs, or fit selection semantics

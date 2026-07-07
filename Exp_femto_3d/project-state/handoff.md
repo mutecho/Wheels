@@ -3,6 +3,96 @@
 ## Latest Durable Handoff
 
 - completed:
+  - added optional `[build].split_mixed_event_by_qn`; default `false` preserves
+    existing qn-specific SAME slices with qn-integrated ME denominators
+  - required `split_same_event_by_qn = true` before
+    `split_mixed_event_by_qn = true` is accepted, so ME qn splitting only
+    applies when qn-specific SE slices are written
+  - updated `RunBuildCf()` so ME projections apply the current qn selection only
+    when the new switch is enabled; qn-all slices remain integrated over the
+    full qn axis
+  - persisted `split_mixed_event_by_qn` in `meta/SliceCatalog`, with legacy
+    catalog reads defaulting the missing branch to `false`
+  - added config validation coverage and extended `slice_catalog_roundtrip_test`
+    so toy qn1 `ME_raw3d` under the new switch is compared against the old
+    qn-integrated denominator
+  - documented the new switch in README, example TOMLs,
+    `docs/数学物理公式流程说明.md`, and `project-state/`
+  - restored
+    `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` to explicit
+    `split_same_event_by_qn = true` because the current test contract and qn
+    production baseline expect that setting enabled
+  - ran `scripts/cmake.sh`; it configured CATS support and rebuilt changed
+    targets successfully
+  - ran `ctest --test-dir build --output-on-failure`; it reported `100% tests
+    passed`, with ROOT-backed tests skipped by the local guard
+  - ran `git diff --check`; it passed
+  - attempted direct O2Physics ROOT executor validation of
+    `bin/slice_catalog_roundtrip_test`; sandbox execution returned
+    `STATUS: ESCALATION_REQUIRED`, and the required escalated rerun was
+    auto-rejected by the platform usage limit
+
+## Next Recommended Owner Action
+
+- to enable qn-matched ME denominators in a qn-split build, use:
+
+```toml
+[build]
+split_same_event_by_qn = true
+split_mixed_event_by_qn = true
+```
+
+- rerun `bin/slice_catalog_roundtrip_test` through a usable O2Physics ROOT
+  runtime to execute the new qn1 `ME_raw3d` integral assertion
+
+## Previous Durable Handoff
+
+- completed:
+  - added optional `[fit.parameters.<name>]` TOML subtables for the main 3D
+    Levy fit parameters: `norm`, `lambda`, `rout2`, `rside2`, `rlong2`,
+    `routside2`, `routlong2`, `rsidelong2`, `alpha`, and `baseline_q2`
+  - each supported parameter can override `initial`, `min`, and `max`; only
+    `lambda` and `alpha` support `fixed_value`
+  - kept all legacy defaults when the new subtables are omitted, including the
+    existing q2-baseline default bounds derived from `fit_q_max`
+  - rejected ambiguous or ignored configurations: unknown names/fields,
+    non-finite values, one-sided or invalid limits, unsupported fixed values,
+    out-of-bounds fixed values, `lambda` overrides with
+    `use_core_halo_lambda=false`, and `baseline_q2` overrides with
+    `use_q2_baseline=false`
+  - routed both diag/full `TF3` builders and the PML `TMinuit` setup through the
+    same effective parameter configuration so fixed `lambda`/`alpha` work in
+    both chi2 and PML paths
+  - updated README, example TOMLs, the formula workflow document, tests, and
+    `project-state/`
+  - ran `scripts/cmake.sh`; it configured CATS support and rebuilt changed
+    targets successfully
+  - ran `ctest --test-dir build --output-on-failure`; it reported `100% tests
+    passed`, with ROOT-backed tests skipped by the local guard
+  - reran ROOT-backed tests in a clean non-sandboxed O2Physics runtime:
+    `bin/slice_catalog_roundtrip_test` and `bin/workflow_smoke_test` both
+    passed
+
+## Previous Recommended Owner Action
+
+- use `[fit.parameters.<name>]` only for intentional fit-control changes; leave
+  it omitted to preserve the old production defaults
+- for fixed source-shape scans, prefer:
+
+```toml
+[fit.parameters.lambda]
+fixed_value = 0.65
+
+[fit.parameters.alpha]
+fixed_value = 1.20
+```
+
+- keep running ROOT-backed validation through a clean O2Physics runtime when
+  changing fit math, parameter limits, or ROOT output semantics
+
+## Previous Durable Handoff
+
+- completed:
   - extended
     `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` for the Wenya
     PbPb LHC23 input so it preserves qn-all and adds qn1/qn2/qn3 SAME-side
@@ -34,7 +124,7 @@
     fitted slices, report/catalog/summary objects present, TSV line count
     `469`
 
-## Next Recommended Owner Action
+## Previous Recommended Owner Action
 
 - use the updated config directly for this Wenya qn-all plus qn1/qn2/qn3
   production path:
@@ -48,7 +138,7 @@ bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fi
   `SliceCatalog`, Levy/Coulomb formulas, fit metadata, or summary-output
   semantics, update `docs/数学物理公式流程说明.md` in the same pass
 
-## Previous Durable Handoff
+## Older Formula Handoff
 
 - completed:
   - added `docs/数学物理公式流程说明.md` as the current formula workflow
@@ -64,7 +154,7 @@ bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fi
   - verified by reading the current implementation and docs; no analysis code,
     configs, build files, or runtime outputs were changed
 
-## Older Durable Handoff
+## Older Finite-Source Handoff
 
 - completed:
   - implemented the `docs/plan/fit_finite_coul.md` finite-source Coulomb fit
@@ -109,7 +199,7 @@ bin/exp_femto_3d fit --config config/pbpb_wenya_lhc23_qn_integrated_build_and_fi
     five registered tests passed with `PRIMARY_OK`
   - reran `git diff --check`; it passed
 
-## Previous Recommended Owner Action
+## Older Recommended Owner Action
 
 - run a real-data regression on a known-good OO/PbPb input set with
   `fit.coulomb_mode = "finite_source"`

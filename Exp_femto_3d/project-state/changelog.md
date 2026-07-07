@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-07-01
+
+- Added optional `[build].split_mixed_event_by_qn` support so qn-specific
+  build-cf slices can use ME denominators projected over the same qn interval as
+  the SAME slice.
+- Preserved backward-compatible defaults: the new switch defaults to `false`,
+  requires `split_same_event_by_qn = true`, and legacy `SliceCatalog` files
+  missing `split_mixed_event_by_qn` read as qn-integrated ME.
+- Persisted `split_mixed_event_by_qn` in `meta/SliceCatalog` and extended
+  config/catalog roundtrip coverage to verify the narrower qn-specific
+  `ME_raw3d` denominator on toy ROOT input.
+- Verified compile/config coverage with `scripts/cmake.sh`,
+  `ctest --test-dir build --output-on-failure`, and `git diff --check`; direct
+  O2Physics execution of `bin/slice_catalog_roundtrip_test` was blocked after
+  `STATUS: ESCALATION_REQUIRED` because the required escalated rerun was
+  auto-rejected by the platform usage limit.
+
+- Added optional `[fit.parameters.<name>]` TOML subtables for main 3D Levy fit
+  parameter `initial`, `min`, and `max` overrides.
+- Supported `fixed_value` for `lambda` and `alpha` only; both ROOT `TH3::Fit`
+  and PML/TMinuit paths now treat those parameters as fixed when configured.
+- Preserved legacy defaults when `[fit.parameters]` is omitted, including
+  default bounds, q2-baseline bounds derived from `fit_q_max`, and output
+  ROOT/TSV schema.
+- Added strict config validation for unsupported parameter names/fields,
+  non-finite values, incomplete or invalid limits, unsupported fixed values,
+  fixed values outside effective bounds, and switch conflicts with
+  `use_core_halo_lambda=false` or `use_q2_baseline=false`.
+- Updated README, example TOMLs, `docs/数学物理公式流程说明.md`, and
+  `project-state/` with the new interface and validation evidence.
+- Verified with `scripts/cmake.sh`, `ctest --test-dir build --output-on-failure`,
+  and non-sandboxed O2Physics runs of `bin/slice_catalog_roundtrip_test` and
+  `bin/workflow_smoke_test`.
+
 ## 2026-06-30
 
 - Added `[build].split_same_event_by_qn` and `[[bins.qn]]` support so

@@ -19,6 +19,8 @@ map_pair_phi_to_symmetric_range = false
 write_normalized_se_me_1d_projections = false
 reopen_output_file_per_slice = true
 split_mixed_event_by_phi = false
+# split_same_event_by_qn = true
+# split_mixed_event_by_qn = true  # requires split_same_event_by_qn and [[bins.qn]]
 progress = "auto"   # 也可写 true / false
 
 [fit]
@@ -33,6 +35,18 @@ fit_q_max = 0.15
 # map_pair_phi_to_symmetric_range = false
 reopen_output_file_per_slice = true
 progress = "auto"   # 也可写 "enabled" / "disabled"
+
+# Optional main Levy fit-parameter overrides. Omitted fields keep legacy defaults.
+# [fit.parameters.lambda]
+# initial = 0.5
+# min = 0.0
+# max = 1.0
+# fixed_value = 0.65  # only lambda and alpha support fixed_value
+#
+# [fit.parameters.alpha]
+# initial = 1.5
+# min = 0.5
+# max = 2.0
 
 [[bins.centrality]]
 min = 0.0

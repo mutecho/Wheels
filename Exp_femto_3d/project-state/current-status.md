@@ -2,6 +2,67 @@
 
 ## Task Snapshot
 
+- scope: add an opt-in ME qn denominator split for qn-specific build-cf slices
+- current conclusion:
+  `build.split_mixed_event_by_qn = true` now makes ME projections follow the
+  current qn selection when `split_same_event_by_qn = true`; the default remains
+  qn-integrated ME so existing configs preserve their old CF content
+- primary evidence:
+  - `BuildCfConfig`, TOML parsing, and validation now include
+    `split_mixed_event_by_qn`
+  - validation rejects `split_mixed_event_by_qn = true` unless
+    `split_same_event_by_qn = true`
+  - `RunBuildCf()` applies the current qn selection to ME projections only when
+    the new switch is enabled; qn-all slices still use the full qn axis
+  - `meta/SliceCatalog` writes `split_mixed_event_by_qn`, and legacy catalogs
+    without that branch read it as `false`
+  - `SliceCatalogRoundTripTest` now compares toy qn1 `ME_raw3d` integrals and
+    checks that the qn-split ME denominator is narrower than the old qn-all ME
+- verification:
+  `scripts/cmake.sh`, `ctest --test-dir build --output-on-failure`, and
+  `git diff --check` passed; ctest skipped the ROOT-backed tests by guard, and
+  direct O2Physics executor validation of `bin/slice_catalog_roundtrip_test`
+  returned `STATUS: ESCALATION_REQUIRED` before ROOT was usable; the required
+  escalated rerun was auto-rejected by the platform usage limit, so the new
+  ROOT-backed qn integral assertion is compiled but not executed in this run
+
+## Previous Snapshot
+
+- scope: expose main 3D Levy fit parameter seeds, limits, and selected fixed
+  values through TOML
+- current conclusion:
+  `fit` now accepts optional `[fit.parameters.<name>]` subtables for the main
+  Levy parameters while preserving every legacy default when the table is
+  omitted
+- primary evidence:
+  - supported parameter names are `norm`, `lambda`, `rout2`, `rside2`,
+    `rlong2`, `routside2`, `routlong2`, `rsidelong2`, `alpha`, and
+    `baseline_q2`
+  - each subtable can override `initial`, `min`, and `max`; `lambda` and
+    `alpha` also support `fixed_value`
+  - config validation rejects unknown parameter names, unknown fields,
+    non-finite numeric values, one-sided limits, `min >= max`, non-fixable
+    `fixed_value`, fixed values outside effective bounds, `lambda` overrides
+    with `use_core_halo_lambda = false`, and `baseline_q2` overrides with
+    `use_q2_baseline = false`
+  - both diag and full `TF3` builders apply the same effective parameter
+    defaults/overrides, and the PML `TMinuit` path uses the same fixed-parameter
+    decision for `lambda` and `alpha`
+  - README, example TOMLs, and `docs/数学物理公式流程说明.md` document the new
+    operator-facing interface and default compatibility behavior
+  - `scripts/cmake.sh` rebuilt the project successfully with CATS support
+  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
+    the ROOT-backed tests were skipped by the local ctest guard
+  - after the sandboxed O2Physics ROOT executor reported `ESCALATION_REQUIRED`
+    for the known `/dev/fd` runtime-entry failure, non-sandboxed executor runs
+    returned `PRIMARY_OK` for `bin/slice_catalog_roundtrip_test` and
+    `bin/workflow_smoke_test`; `workflow_smoke_test` now checks fixed
+    `lambda=0.65` and `alpha=1.20` in both chi2 and PML fit paths
+- verification: local build/config tests passed, and ROOT-backed smoke coverage
+  passed in a clean O2Physics runtime
+
+## Earlier Snapshot
+
 - scope: add and validate Wenya PbPb LHC23 qn-all plus qn1/qn2/qn3
   build/fit support
 - current conclusion:
@@ -44,7 +105,7 @@
 - verification: production Wenya build/fit completed and outputs were inspected
   successfully
 
-## Previous Snapshot
+## Earlier Snapshot
 
 - scope: add the required math/physics formula workflow document for
   `Exp_femto_3d`
@@ -67,7 +128,7 @@
 - verification: docs-only update; verified by source/code-reference review and
   Markdown inspection, with no runtime analysis code changed
 
-## Earlier Snapshot
+## Older Snapshot
 
 - scope: implement finite-source Coulomb fit support from
   `docs/plan/fit_finite_coul.md`
@@ -107,7 +168,7 @@
     `libCATS` and GSL on `bin/exp_femto_3d`, and `ctest --output-on-failure`
     passed all five registered tests
 
-## Older Snapshot
+## Older Run-Script Snapshot
 
 - scope: add a project-local run script for the OO 3D build/fit workflow
 - current conclusion: `scripts/run_exp_femto_3d.sh` is now the default

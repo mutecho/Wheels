@@ -62,6 +62,7 @@ namespace exp_femto_3d {
     constexpr double kFitPenaltyValue = 1e30;
     constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
     constexpr const char *kSliceCatalogSplitMixedEventBranch = "split_mixed_event_by_phi";
+    constexpr const char *kSliceCatalogSplitMixedEventQnBranch = "split_mixed_event_by_qn";
     constexpr const char *kQnIntegratedLabel = "qn_all";
 
     double ComputeKStarMeV(const double q_out, const double q_side, const double q_long) {
@@ -965,6 +966,7 @@ namespace exp_femto_3d {
                                             const double display_phi_center,
                                             const bool build_uses_symmetric_phi_range,
                                             const bool split_mixed_event_by_phi,
+                                            const bool split_mixed_event_by_qn,
                                             const bool is_phi_integrated) {
       SliceCatalogEntry entry;
       entry.group_id = BuildGroupId(centrality_bin, mt_bin, qn_selection);
@@ -995,6 +997,7 @@ namespace exp_femto_3d {
       entry.display_phi_center = display_phi_center;
       entry.build_uses_symmetric_phi_range = build_uses_symmetric_phi_range;
       entry.split_mixed_event_by_phi = split_mixed_event_by_phi;
+      entry.split_mixed_event_by_qn = split_mixed_event_by_qn;
       entry.is_qn_integrated = qn_selection.is_qn_integrated;
       entry.is_phi_integrated = is_phi_integrated;
       return entry;
@@ -1033,6 +1036,7 @@ namespace exp_femto_3d {
       double display_phi_center = 0.0;
       int build_uses_symmetric_phi_range = 0;
       int split_mixed_event_by_phi = 0;
+      int split_mixed_event_by_qn = 0;
       int is_qn_integrated = 1;
       int is_phi_integrated = 0;
 
@@ -1064,6 +1068,7 @@ namespace exp_femto_3d {
       tree->Branch("display_phi_center", &display_phi_center);
       tree->Branch(kSliceCatalogBuildPhiMappingBranch, &build_uses_symmetric_phi_range);
       tree->Branch(kSliceCatalogSplitMixedEventBranch, &split_mixed_event_by_phi);
+      tree->Branch(kSliceCatalogSplitMixedEventQnBranch, &split_mixed_event_by_qn);
       tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
@@ -1096,6 +1101,7 @@ namespace exp_femto_3d {
         display_phi_center = entry.display_phi_center;
         build_uses_symmetric_phi_range = entry.build_uses_symmetric_phi_range ? 1 : 0;
         split_mixed_event_by_phi = entry.split_mixed_event_by_phi ? 1 : 0;
+        split_mixed_event_by_qn = entry.split_mixed_event_by_qn ? 1 : 0;
         is_qn_integrated = entry.is_qn_integrated ? 1 : 0;
         is_phi_integrated = entry.is_phi_integrated ? 1 : 0;
         tree->Fill();
@@ -1160,6 +1166,11 @@ namespace exp_femto_3d {
         split_mixed_event_by_phi =
             std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogSplitMixedEventBranch);
       }
+      std::unique_ptr<TTreeReaderValue<int>> split_mixed_event_by_qn;
+      if (tree->GetBranch(kSliceCatalogSplitMixedEventQnBranch) != nullptr) {
+        split_mixed_event_by_qn =
+            std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogSplitMixedEventQnBranch);
+      }
       std::unique_ptr<TTreeReaderValue<int>> is_qn_integrated;
       if (tree->GetBranch("is_qn_integrated") != nullptr) {
         is_qn_integrated = std::make_unique<TTreeReaderValue<int>>(reader, "is_qn_integrated");
@@ -1199,6 +1210,7 @@ namespace exp_femto_3d {
             build_uses_symmetric_phi_range ? (**build_uses_symmetric_phi_range != 0) : false;
         entry.split_mixed_event_by_phi =
             split_mixed_event_by_phi ? (**split_mixed_event_by_phi != 0) : false;
+        entry.split_mixed_event_by_qn = split_mixed_event_by_qn ? (**split_mixed_event_by_qn != 0) : false;
         entry.is_qn_integrated = is_qn_integrated ? (**is_qn_integrated != 0) : true;
         entry.is_phi_integrated = (*is_phi_integrated != 0);
         entries.push_back(entry);
@@ -1521,6 +1533,59 @@ namespace exp_femto_3d {
                                 fit_options);
     }
 
+    struct EffectiveLevyFitParameter {
+      double initial = 0.0;
+      double lower = 0.0;
+      double upper = 0.0;
+      bool has_limits = false;
+      std::optional<double> fixed_value;
+    };
+
+    // Merge sparse TOML overrides with the legacy defaults at the last moment so
+    // omitted fields keep the historical fit seed, bounds, and fixed-parameter policy.
+    EffectiveLevyFitParameter MakeLevyFitParameter(const double default_initial,
+                                                   const std::optional<std::pair<double, double>> default_limits,
+                                                   const LevyFitParameterOverride &parameter) {
+      EffectiveLevyFitParameter effective;
+      effective.initial = parameter.fixed_value.value_or(parameter.initial.value_or(default_initial));
+      effective.fixed_value = parameter.fixed_value;
+      if (parameter.min.has_value() && parameter.max.has_value()) {
+        effective.lower = *parameter.min;
+        effective.upper = *parameter.max;
+        effective.has_limits = true;
+      } else if (default_limits.has_value()) {
+        effective.lower = default_limits->first;
+        effective.upper = default_limits->second;
+        effective.has_limits = true;
+      }
+      return effective;
+    }
+
+    void ApplyLevyFitParameter(TF3 *fit_function, const int index, const EffectiveLevyFitParameter &parameter) {
+      fit_function->SetParameter(index, parameter.initial);
+      if (parameter.has_limits) {
+        fit_function->SetParLimits(index, parameter.lower, parameter.upper);
+      }
+      if (parameter.fixed_value.has_value()) {
+        fit_function->FixParameter(index, *parameter.fixed_value);
+      }
+    }
+
+    bool IsUserFixedLevyFitParameter(const int parameter_index,
+                                     const bool use_full_model,
+                                     const LevyFitOptions &fit_options) {
+      if (parameter_index == 1) {
+        return fit_options.parameters.lambda.fixed_value.has_value();
+      }
+      if (!use_full_model && parameter_index == 5) {
+        return fit_options.parameters.alpha.fixed_value.has_value();
+      }
+      if (use_full_model && parameter_index == 8) {
+        return fit_options.parameters.alpha.fixed_value.has_value();
+      }
+      return false;
+    }
+
     TF3 *BuildLevyFitFunction(const std::string &function_name, const LevyFitOptions &fit_options) {
       const double q2_max = 3.0 * fit_options.fit_q_max * fit_options.fit_q_max;
       const double baseline_min = q2_max > 0.0 ? -0.9 / q2_max : -10.0;
@@ -1544,14 +1609,25 @@ namespace exp_femto_3d {
       fit_function->SetParName(7, "UseQ2Baseline");
       fit_function->SetParName(8, "CoulombModeCode");
       fit_function->SetParName(9, "UseCoreHaloLambda");
-      fit_function->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 1.5, 0.0, 0.0, 0.0, 1.0);
-      fit_function->SetParLimits(0, 0.5, 1.5);
-      fit_function->SetParLimits(1, 0.0, 1.0);
-      fit_function->SetParLimits(2, 0.01, 400.0);
-      fit_function->SetParLimits(3, 0.01, 400.0);
-      fit_function->SetParLimits(4, 0.01, 400.0);
-      fit_function->SetParLimits(5, 0.5, 2.0);
-      fit_function->SetParLimits(6, baseline_min, baseline_max);
+      ApplyLevyFitParameter(
+          fit_function, 0, MakeLevyFitParameter(1.0, std::make_pair(0.5, 1.5), fit_options.parameters.norm));
+      ApplyLevyFitParameter(
+          fit_function, 1, MakeLevyFitParameter(0.5, std::make_pair(0.0, 1.0), fit_options.parameters.lambda));
+      ApplyLevyFitParameter(
+          fit_function, 2, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rout2));
+      ApplyLevyFitParameter(
+          fit_function, 3, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rside2));
+      ApplyLevyFitParameter(
+          fit_function, 4, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rlong2));
+      ApplyLevyFitParameter(
+          fit_function, 5, MakeLevyFitParameter(1.5, std::make_pair(0.5, 2.0), fit_options.parameters.alpha));
+      ApplyLevyFitParameter(fit_function,
+                            6,
+                            MakeLevyFitParameter(
+                                0.0, std::make_pair(baseline_min, baseline_max), fit_options.parameters.baseline_q2));
+      fit_function->SetParameter(7, 0.0);
+      fit_function->SetParameter(8, 0.0);
+      fit_function->SetParameter(9, 1.0);
       fit_function->FixParameter(7, fit_options.use_q2_baseline ? 1.0 : 0.0);
       fit_function->FixParameter(8, static_cast<double>(CoulombModeCode(fit_options.coulomb_mode)));
       fit_function->FixParameter(9, fit_options.use_core_halo_lambda ? 1.0 : 0.0);
@@ -1593,15 +1669,28 @@ namespace exp_femto_3d {
       fit_function->SetParName(10, "UseQ2Baseline");
       fit_function->SetParName(11, "CoulombModeCode");
       fit_function->SetParName(12, "UseCoreHaloLambda");
-      const double initial_parameters[13] = {1.0, 0.5, 25.0, 25.0, 25.0, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 1.0};
-      fit_function->SetParameters(initial_parameters);
-      fit_function->SetParLimits(0, 0.5, 1.5);
-      fit_function->SetParLimits(1, 0.0, 1.0);
-      fit_function->SetParLimits(2, 0.01, 400.0);
-      fit_function->SetParLimits(3, 0.01, 400.0);
-      fit_function->SetParLimits(4, 0.01, 400.0);
-      fit_function->SetParLimits(8, 0.5, 2.0);
-      fit_function->SetParLimits(9, baseline_min, baseline_max);
+      ApplyLevyFitParameter(
+          fit_function, 0, MakeLevyFitParameter(1.0, std::make_pair(0.5, 1.5), fit_options.parameters.norm));
+      ApplyLevyFitParameter(
+          fit_function, 1, MakeLevyFitParameter(0.5, std::make_pair(0.0, 1.0), fit_options.parameters.lambda));
+      ApplyLevyFitParameter(
+          fit_function, 2, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rout2));
+      ApplyLevyFitParameter(
+          fit_function, 3, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rside2));
+      ApplyLevyFitParameter(
+          fit_function, 4, MakeLevyFitParameter(25.0, std::make_pair(0.01, 400.0), fit_options.parameters.rlong2));
+      ApplyLevyFitParameter(fit_function, 5, MakeLevyFitParameter(0.0, std::nullopt, fit_options.parameters.routside2));
+      ApplyLevyFitParameter(fit_function, 6, MakeLevyFitParameter(0.0, std::nullopt, fit_options.parameters.routlong2));
+      ApplyLevyFitParameter(fit_function, 7, MakeLevyFitParameter(0.0, std::nullopt, fit_options.parameters.rsidelong2));
+      ApplyLevyFitParameter(
+          fit_function, 8, MakeLevyFitParameter(1.5, std::make_pair(0.5, 2.0), fit_options.parameters.alpha));
+      ApplyLevyFitParameter(fit_function,
+                            9,
+                            MakeLevyFitParameter(
+                                0.0, std::make_pair(baseline_min, baseline_max), fit_options.parameters.baseline_q2));
+      fit_function->SetParameter(10, 0.0);
+      fit_function->SetParameter(11, 0.0);
+      fit_function->SetParameter(12, 1.0);
       fit_function->FixParameter(10, fit_options.use_q2_baseline ? 1.0 : 0.0);
       fit_function->FixParameter(11, static_cast<double>(CoulombModeCode(fit_options.coulomb_mode)));
       fit_function->FixParameter(12, fit_options.use_core_halo_lambda ? 1.0 : 0.0);
@@ -1760,6 +1849,9 @@ namespace exp_femto_3d {
         if (parameter_index >= 7) {
           return true;
         }
+        if (IsUserFixedLevyFitParameter(parameter_index, use_full_model, fit_options)) {
+          return true;
+        }
         if (parameter_index == 1 && !fit_options.use_core_halo_lambda) {
           return true;
         }
@@ -1770,6 +1862,9 @@ namespace exp_femto_3d {
       }
 
       if (parameter_index >= 10) {
+        return true;
+      }
+      if (IsUserFixedLevyFitParameter(parameter_index, use_full_model, fit_options)) {
         return true;
       }
       if (parameter_index == 1 && !fit_options.use_core_halo_lambda) {
@@ -3100,12 +3195,18 @@ namespace exp_femto_3d {
         h_me_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
         ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
 
-        // Build either one group-integrated ME denominator or a denominator that follows the current SE phi range.
+        // ME denominator splitting is independently opt-in in phi and qn, so the projection helper applies
+        // the requested qn policy before each raw 3D projection.
         auto build_me_projection = [&](const int first_phi_bin,
                                        const int last_phi_bin,
+                                       const QnSliceSelection &qn_selection,
                                        const std::string &norm_name) -> std::unique_ptr<MixedEventProjection> {
           h_me_origin->GetAxis(6)->SetRange(first_phi_bin, last_phi_bin);
-          ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
+          if (config.build.split_mixed_event_by_qn) {
+            ApplyQnSelection(*h_me_origin, qn_selection);
+          } else {
+            ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
+          }
           auto raw = std::unique_ptr<TH3D>(static_cast<TH3D *>(h_me_origin->Projection(0, 1, 2)));
           raw->SetDirectory(nullptr);
           auto norm = std::unique_ptr<TH3D>(static_cast<TH3D *>(raw->Clone(norm_name.c_str())));
@@ -3122,8 +3223,9 @@ namespace exp_femto_3d {
         };
 
         std::unique_ptr<MixedEventProjection> integrated_me_projection;
-        if (!config.build.split_mixed_event_by_phi) {
-          integrated_me_projection = build_me_projection(1, n_phi_bins, base_group_id + "_ME_norm");
+        if (!config.build.split_mixed_event_by_phi && !config.build.split_mixed_event_by_qn) {
+          integrated_me_projection =
+              build_me_projection(1, n_phi_bins, qn_slice_selections.front(), base_group_id + "_ME_norm");
           if (integrated_me_projection == nullptr) {
             logger.Warn("Zero mixed-event integral for " + base_group_id + "; skipping group.");
             statistics.skipped_zero_mixed_event_groups += qn_slice_selections.size();
@@ -3181,6 +3283,20 @@ namespace exp_femto_3d {
           logger.Debug("Building group " + group_id);
           ApplyQnSelection(*h_se_origin, qn_selection);
 
+          std::unique_ptr<MixedEventProjection> qn_integrated_me_projection;
+          const MixedEventProjection *integrated_me_for_selection = integrated_me_projection.get();
+          if (!config.build.split_mixed_event_by_phi && config.build.split_mixed_event_by_qn) {
+            qn_integrated_me_projection = build_me_projection(1, n_phi_bins, qn_selection, group_id + "_ME_norm");
+            if (qn_integrated_me_projection == nullptr) {
+              logger.Warn("Zero mixed-event integral for " + group_id + "; skipping group.");
+              ++statistics.skipped_zero_mixed_event_groups;
+              processed_slices += slices_per_group;
+              progress.Update(processed_slices);
+              return;
+            }
+            integrated_me_for_selection = qn_integrated_me_projection.get();
+          }
+
           h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
           auto *h_se_all_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
           h_se_all_raw->SetDirectory(nullptr);
@@ -3195,9 +3311,9 @@ namespace exp_femto_3d {
           } else {
             h_se_all_norm->Scale(1.0 / int_se_all);
             std::unique_ptr<MixedEventProjection> split_me_projection;
-            const MixedEventProjection *me_projection = integrated_me_projection.get();
+            const MixedEventProjection *me_projection = integrated_me_for_selection;
             if (config.build.split_mixed_event_by_phi) {
-              split_me_projection = build_me_projection(1, n_phi_bins, group_id + "_ME_all_norm");
+              split_me_projection = build_me_projection(1, n_phi_bins, qn_selection, group_id + "_ME_all_norm");
               if (split_me_projection == nullptr) {
                 logger.Warn("Zero mixed-event integral for " + group_id + " phi=all.");
                 ++statistics.skipped_zero_mixed_event_slices;
@@ -3225,6 +3341,7 @@ namespace exp_femto_3d {
                                                        std::numeric_limits<double>::quiet_NaN(),
                                                        config.build.map_pair_phi_to_symmetric_range,
                                                        config.build.split_mixed_event_by_phi,
+                                                       config.build.split_mixed_event_by_qn,
                                                        true);
               write_slice(h_se_all_raw, h_se_all_norm, *me_projection, entry);
             }
@@ -3252,10 +3369,12 @@ namespace exp_femto_3d {
             h_se_norm->Scale(1.0 / int_se);
 
             std::unique_ptr<MixedEventProjection> split_me_projection;
-            const MixedEventProjection *me_projection = integrated_me_projection.get();
+            const MixedEventProjection *me_projection = integrated_me_for_selection;
             if (config.build.split_mixed_event_by_phi) {
-              split_me_projection =
-                  build_me_projection(phi_index, phi_index, group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
+              split_me_projection = build_me_projection(phi_index,
+                                                        phi_index,
+                                                        qn_selection,
+                                                        group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
               if (split_me_projection == nullptr) {
                 logger.Warn("Zero mixed-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
                             + "; skipping slice.");
@@ -3291,6 +3410,7 @@ namespace exp_femto_3d {
                                                      display_phi_coordinates.center,
                                                      config.build.map_pair_phi_to_symmetric_range,
                                                      config.build.split_mixed_event_by_phi,
+                                                     config.build.split_mixed_event_by_qn,
                                                      false);
             write_slice(h_se_raw, h_se_norm, *me_projection, entry);
             delete h_se_raw;

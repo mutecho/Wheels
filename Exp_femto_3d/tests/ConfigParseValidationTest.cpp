@@ -1,6 +1,8 @@
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -12,6 +14,23 @@ namespace {
     if (!condition) {
       throw std::runtime_error(message);
     }
+  }
+
+  void ExpectOptionalDouble(const std::optional<double> &value,
+                            const double expected,
+                            const std::string &message) {
+    Expect(value.has_value(), message + " should be configured");
+    Expect(std::abs(*value - expected) < 1.0e-12, message + " mismatch");
+  }
+
+  void ExpectParameterTriple(const exp_femto_3d::LevyFitParameterOverride &parameter,
+                             const double initial,
+                             const double min,
+                             const double max,
+                             const std::string &name) {
+    ExpectOptionalDouble(parameter.initial, initial, name + " initial");
+    ExpectOptionalDouble(parameter.min, min, name + " min");
+    ExpectOptionalDouble(parameter.max, max, name + " max");
   }
 
   std::string WriteFile(const std::filesystem::path &path, const std::string &contents) {
@@ -153,6 +172,7 @@ max = 0.6
          "fit report root name should default");
   Expect(!overlapping_config.build.split_mixed_event_by_phi, "ME phi split should default to false");
   Expect(!overlapping_config.build.split_same_event_by_qn, "same-event qn split should default to false");
+  Expect(!overlapping_config.build.split_mixed_event_by_qn, "ME qn split should default to false");
   Expect(overlapping_config.qn_bins.empty(), "qn bins should default to empty");
   Expect(overlapping_config.build.progress == ProgressMode::kAuto, "build progress should default to auto");
   Expect(overlapping_config.fit.progress == ProgressMode::kAuto, "fit progress should default to auto");
@@ -293,6 +313,8 @@ max = 0.4
          "wenya qn-integrated build should keep raw phi mapping");
   Expect(!wenya_qn_integrated.build.split_mixed_event_by_phi,
          "wenya qn-integrated build should keep integrated ME denominator");
+  Expect(!wenya_qn_integrated.build.split_mixed_event_by_qn,
+         "wenya qn-integrated build should keep qn-integrated ME denominator");
   Expect(wenya_qn_integrated.fit.model == FitModel::kFull, "wenya qn-integrated fit should use full model");
   Expect(wenya_qn_integrated.fit.options.coulomb_mode == CoulombMode::kGamow,
          "wenya qn-integrated fit should keep legacy PbPb Coulomb setting");
@@ -381,6 +403,198 @@ max = 0.4
                       mode_config("coulomb_mode = \"gamow\"\nfinite_source_mode = \"fixed_1d\"\n"));
   expect_config_error("finite_mode_invalid.toml",
                       mode_config("coulomb_mode = \"finite_source\"\nfinite_source_mode = \"bogus\"\n"));
+
+  const std::string parameter_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "full"
+use_core_halo_lambda = true
+use_q2_baseline = true
+use_pml = false
+fit_q_max = 0.15
+
+[fit.parameters.norm]
+initial = 1.02
+min = 0.8
+max = 1.2
+
+[fit.parameters.lambda]
+initial = 0.55
+min = 0.1
+max = 0.9
+fixed_value = 0.65
+
+[fit.parameters.rout2]
+initial = 30.0
+min = 0.5
+max = 500.0
+
+[fit.parameters.rside2]
+initial = 31.0
+min = 0.5
+max = 500.0
+
+[fit.parameters.rlong2]
+initial = 32.0
+min = 0.5
+max = 500.0
+
+[fit.parameters.routside2]
+initial = 1.0
+min = -100.0
+max = 100.0
+
+[fit.parameters.routlong2]
+initial = -2.0
+min = -100.0
+max = 100.0
+
+[fit.parameters.rsidelong2]
+initial = 3.0
+min = -100.0
+max = 100.0
+
+[fit.parameters.alpha]
+initial = 1.4
+min = 0.8
+max = 1.8
+fixed_value = 1.2
+
+[fit.parameters.baseline_q2]
+initial = 0.5
+min = -10.0
+max = 20.0
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+
+  const ApplicationConfig parameter_overrides =
+      LoadApplicationConfig(WriteFile(temp_dir / "parameter_overrides.toml", parameter_config));
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.norm, 1.02, 0.8, 1.2, "norm");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.lambda, 0.55, 0.1, 0.9, "lambda");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.rout2, 30.0, 0.5, 500.0, "rout2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.rside2, 31.0, 0.5, 500.0, "rside2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.rlong2, 32.0, 0.5, 500.0, "rlong2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.routside2, 1.0, -100.0, 100.0, "routside2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.routlong2, -2.0, -100.0, 100.0, "routlong2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.rsidelong2, 3.0, -100.0, 100.0, "rsidelong2");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.alpha, 1.4, 0.8, 1.8, "alpha");
+  ExpectParameterTriple(parameter_overrides.fit.options.parameters.baseline_q2, 0.5, -10.0, 20.0, "baseline_q2");
+  ExpectOptionalDouble(parameter_overrides.fit.options.parameters.lambda.fixed_value, 0.65, "lambda fixed value");
+  ExpectOptionalDouble(parameter_overrides.fit.options.parameters.alpha.fixed_value, 1.2, "alpha fixed value");
+
+  const auto parameter_error_config = [](const std::string &parameter_lines) {
+    return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "full"
+use_core_halo_lambda = true
+use_q2_baseline = true
+use_pml = false
+fit_q_max = 0.15
+
+)toml" + parameter_lines + R"toml(
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  };
+
+  expect_config_error("parameter_unknown_name.toml",
+                      parameter_error_config("[fit.parameters.bogus]\ninitial = 1.0\n"));
+  expect_config_error("parameter_unknown_field.toml",
+                      parameter_error_config("[fit.parameters.lambda]\nstart = 0.5\n"));
+  expect_config_error("parameter_non_finite.toml",
+                      parameter_error_config("[fit.parameters.lambda]\ninitial = inf\n"));
+  expect_config_error("parameter_single_limit.toml",
+                      parameter_error_config("[fit.parameters.lambda]\nmin = 0.0\n"));
+  expect_config_error("parameter_invalid_limit.toml",
+                      parameter_error_config("[fit.parameters.lambda]\nmin = 1.0\nmax = 0.0\n"));
+  expect_config_error("parameter_fixed_non_fixable.toml",
+                      parameter_error_config("[fit.parameters.norm]\nfixed_value = 1.0\n"));
+  expect_config_error("parameter_fixed_out_of_default_bounds.toml",
+                      parameter_error_config("[fit.parameters.lambda]\nfixed_value = 1.2\n"));
+
+  const auto parameter_error_config_with_switches =
+      [](const bool use_core_halo_lambda, const bool use_q2_baseline, const std::string &parameter_lines) {
+        return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "full"
+use_core_halo_lambda = )toml"
+               + std::string(use_core_halo_lambda ? "true\n" : "false\n") + "use_q2_baseline = "
+               + std::string(use_q2_baseline ? "true\n" : "false\n") + R"toml(
+use_pml = false
+fit_q_max = 0.15
+
+)toml" + parameter_lines + R"toml(
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+      };
+
+  expect_config_error("parameter_lambda_disabled.toml",
+                      parameter_error_config_with_switches(false, true, "[fit.parameters.lambda]\ninitial = 0.6\n"));
+  expect_config_error(
+      "parameter_baseline_disabled.toml",
+      parameter_error_config_with_switches(true, false, "[fit.parameters.baseline_q2]\ninitial = 1.0\n"));
 
   const std::string invalid_config = R"toml(
 [input]
@@ -538,6 +752,49 @@ max = 0.4
     saw_invalid_qn_split = true;
   }
   Expect(saw_invalid_qn_split, "qn split without qn bins should fail");
+
+  const std::string invalid_mixed_qn_split_config = R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = true
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+split_mixed_event_by_qn = true
+
+[fit]
+model = "full"
+fit_q_max = 0.2
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+
+[[bins.qn]]
+label = "qn1"
+min = 0
+max = 3
+)toml";
+
+  bool saw_invalid_mixed_qn_split = false;
+  try {
+    (void)LoadApplicationConfig(WriteFile(temp_dir / "invalid_mixed_qn_split.toml", invalid_mixed_qn_split_config));
+  } catch (const ConfigError &) {
+    saw_invalid_mixed_qn_split = true;
+  }
+  Expect(saw_invalid_mixed_qn_split, "ME qn split without same-event qn split should fail");
 
   const std::string invalid_range_config = R"toml(
 [input]

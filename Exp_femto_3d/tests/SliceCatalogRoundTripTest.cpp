@@ -78,7 +78,8 @@ namespace {
                           const std::string &output_dir,
                           const std::string &cf_root_name = "catalog_test.root",
                           const bool split_mixed_event_by_phi = false,
-                          const bool split_same_event_by_qn = false) {
+                          const bool split_same_event_by_qn = false,
+                          const bool split_mixed_event_by_qn = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -98,6 +99,7 @@ namespace {
     output << "reopen_output_file_per_slice = true\n";
     output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
     output << "split_same_event_by_qn = " << (split_same_event_by_qn ? "true" : "false") << "\n";
+    output << "split_mixed_event_by_qn = " << (split_mixed_event_by_qn ? "true" : "false") << "\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "model = \"diag\"\n";
@@ -236,6 +238,7 @@ int main() {
   Expect(legacy_entries[1].build_uses_symmetric_phi_range,
          "legacy catalog reader should infer mapped build phi metadata");
   Expect(!legacy_entries[1].split_mixed_event_by_phi, "legacy catalog should default to integrated ME metadata");
+  Expect(!legacy_entries[1].split_mixed_event_by_qn, "legacy catalog should default to qn-integrated ME metadata");
   Expect(legacy_entries[1].is_qn_integrated && legacy_entries[1].qn_label == "qn_all",
          "legacy catalog should default to qn-integrated metadata");
   Expect(legacy_entries[3].display_phi_center < 0.0, "legacy catalog should preserve stored display phi values");
@@ -270,16 +273,58 @@ int main() {
     } else if (entry.qn_label == "qn1") {
       ++qn1_count;
       Expect(entry.qn_index == 0 && entry.group_id.find("__qn1") != std::string::npos, "qn1 metadata mismatch");
+      Expect(!entry.split_mixed_event_by_qn, "same-event-only qn split should keep qn-integrated ME metadata");
     } else if (entry.qn_label == "qn2") {
       ++qn2_count;
       Expect(entry.qn_index == 1 && entry.group_id.find("__qn2") != std::string::npos, "qn2 metadata mismatch");
+      Expect(!entry.split_mixed_event_by_qn, "same-event-only qn split should keep qn-integrated ME metadata");
     } else if (entry.qn_label == "qn3") {
       ++qn3_count;
       Expect(entry.qn_index == 2 && entry.group_id.find("__qn3") != std::string::npos, "qn3 metadata mismatch");
+      Expect(!entry.split_mixed_event_by_qn, "same-event-only qn split should keep qn-integrated ME metadata");
     }
   }
   Expect(qn_all_count == 4 && qn1_count == 4 && qn2_count == 4 && qn3_count == 4,
          "qn-split catalog should contain four phi slices for each qn state");
+
+  const std::string qn_me_config_path =
+      WriteConfig(temp_dir / "config_qn_me.toml",
+                  input_root,
+                  temp_dir.string(),
+                  "catalog_qn_me.root",
+                  false,
+                  true,
+                  true);
+  const ApplicationConfig qn_me_config = LoadApplicationConfig(qn_me_config_path);
+  Expect(qn_me_config.build.split_mixed_event_by_qn, "ME qn split switch should parse");
+  const BuildCfRunStatistics qn_me_build_stats = RunBuildCf(qn_me_config, logger);
+  Expect(qn_me_build_stats.stored_slices == 16, "ME qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
+  const auto qn_me_entries = LoadSliceCatalog((temp_dir / "catalog_qn_me.root").string());
+  Expect(qn_me_entries.size() == 16, "ME qn-split catalog size mismatch");
+  for (const SliceCatalogEntry &entry : qn_me_entries) {
+    Expect(entry.split_mixed_event_by_qn, "catalog should persist ME qn split metadata");
+  }
+
+  const auto find_qn_phi_entry = [](const std::vector<SliceCatalogEntry> &source_entries,
+                                    const std::string &qn_label) -> const SliceCatalogEntry * {
+    for (const SliceCatalogEntry &entry : source_entries) {
+      if (entry.qn_label == qn_label && !entry.is_phi_integrated) {
+        return &entry;
+      }
+    }
+    return nullptr;
+  };
+  const SliceCatalogEntry *qn1_phi_entry = find_qn_phi_entry(qn_entries, "qn1");
+  const SliceCatalogEntry *qn1_me_phi_entry = find_qn_phi_entry(qn_me_entries, "qn1");
+  Expect(qn1_phi_entry != nullptr && qn1_me_phi_entry != nullptr, "qn1 phi entries missing");
+
+  TFile qn_file((temp_dir / "catalog_qn.root").string().c_str(), "READ");
+  TFile qn_me_file((temp_dir / "catalog_qn_me.root").string().c_str(), "READ");
+  auto *qn_integrated_me = dynamic_cast<TH3D *>(qn_file.Get(qn1_phi_entry->me_object_path.c_str()));
+  auto *qn_split_me = dynamic_cast<TH3D *>(qn_me_file.Get(qn1_me_phi_entry->me_object_path.c_str()));
+  Expect(qn_integrated_me != nullptr && qn_split_me != nullptr, "ME qn comparison histograms missing");
+  Expect(HistogramIntegral(*qn_split_me) < HistogramIntegral(*qn_integrated_me),
+         "split-ME qn denominator should use a narrower qn range than integrated ME");
 
   TFile integrated_file((temp_dir / "catalog_test.root").string().c_str(), "READ");
   TFile split_file((temp_dir / "catalog_split.root").string().c_str(), "READ");

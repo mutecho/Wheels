@@ -91,7 +91,28 @@ namespace exp_femto_3d {
     bool reopen_output_file_per_slice = true;
     bool split_mixed_event_by_phi = false;
     bool split_same_event_by_qn = false;
+    bool split_mixed_event_by_qn = false;
     ProgressMode progress = ProgressMode::kAuto;
+  };
+
+  struct LevyFitParameterOverride {
+    std::optional<double> initial;
+    std::optional<double> min;
+    std::optional<double> max;
+    std::optional<double> fixed_value;
+  };
+
+  struct LevyFitParameterOverrides {
+    LevyFitParameterOverride norm;
+    LevyFitParameterOverride lambda;
+    LevyFitParameterOverride rout2;
+    LevyFitParameterOverride rside2;
+    LevyFitParameterOverride rlong2;
+    LevyFitParameterOverride routside2;
+    LevyFitParameterOverride routlong2;
+    LevyFitParameterOverride rsidelong2;
+    LevyFitParameterOverride alpha;
+    LevyFitParameterOverride baseline_q2;
   };
 
   struct LevyFitOptions {
@@ -101,6 +122,7 @@ namespace exp_femto_3d {
     bool use_q2_baseline = false;
     bool use_pml = false;
     double fit_q_max = 0.15;
+    LevyFitParameterOverrides parameters;
   };
 
   struct FitConfig {
@@ -152,6 +174,7 @@ namespace exp_femto_3d {
     double display_phi_center = 0.0;
     bool build_uses_symmetric_phi_range = false;
     bool split_mixed_event_by_phi = false;
+    bool split_mixed_event_by_qn = false;
     bool is_qn_integrated = true;
     bool is_phi_integrated = false;
   };

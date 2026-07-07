@@ -102,13 +102,34 @@
 - `[[bins.mt]]`
 - `[[fit_selection.centrality]]`
 - `[[fit_selection.mt]]`
+- 可选 `[fit.parameters.<name>]`
 
 示例配置可参考：
 
 - `config/examples/exp_femto_3d.example.toml`
 - `config/pbpb_build_and_fit.toml`
 
-其中这一轮更新新增了两类关键配置语义：
+关键配置语义包括：
+
+- `[fit.parameters.<name>]`
+
+  控制主 3D Levy fit 参数的初值和上下限。支持的参数名为：
+
+  - `norm`
+  - `lambda`
+  - `rout2`
+  - `rside2`
+  - `rlong2`
+  - `routside2`
+  - `routlong2`
+  - `rsidelong2`
+  - `alpha`
+  - `baseline_q2`
+
+  每个子表可写 `initial`、`min`、`max`；省略字段保持旧默认值。
+  `lambda` 和 `alpha` 额外支持 `fixed_value`。`lambda` 覆盖要求
+  `use_core_halo_lambda = true`，`baseline_q2` 覆盖要求
+  `use_q2_baseline = true`。
 
 - `[build].progress` / `[fit].progress`
 
@@ -143,6 +164,17 @@
   - 该开关不改变 `raw_phi_*` / `display_phi_*` 的坐标映射语义；
     `map_pair_phi_to_symmetric_range` 只控制展示和 fit summary 的 phi 坐标解释
 
+- `[build].split_mixed_event_by_qn`
+
+  这是 build-cf 阶段的 ME qn 分母切分开关，默认值为 `false`。
+
+  - `false`：保持旧行为，`split_same_event_by_qn = true` 写出的
+    qn-specific SAME 切片仍使用 qn-integrated ME 分母
+  - `true`：要求 `split_same_event_by_qn = true`，并让 ME 分母跟随当前
+    qn-specific SAME 切片的 qn 区间；qn-all 切片仍使用完整 qn 轴
+  - 该开关只改变 build-cf 写出的 raw ME / CF 内容，不改变 qn label、
+    `group_id` 或 fit selection 规则
+
 ## 输出约定
 
 ### build-cf 输出
@@ -158,8 +190,9 @@ CF ROOT 文件中使用显式目录结构，而不是依赖 histogram 名称反�
 此外，`SliceCatalog` 现在不仅保存 `raw_phi_*` 与 `display_phi_*`，还会保存
 本次 build 是否使用对称区间映射的文件级 metadata
 `build_uses_symmetric_phi_range`，以及本次 build 是否让 ME 分母跟随 SE phi
-切片的 `split_mixed_event_by_phi`。旧 catalog 缺少
-`split_mixed_event_by_phi` 时按 `false` 读取。
+切片的 `split_mixed_event_by_phi`、是否让 ME 分母跟随 qn 切片的
+`split_mixed_event_by_qn`。旧 catalog 缺少任一 split metadata 时按
+`false` 读取。
 
 ### fit 输出
 

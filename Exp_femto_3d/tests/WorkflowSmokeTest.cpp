@@ -79,7 +79,8 @@ namespace {
                           const bool build_map_pair_phi_to_symmetric_range,
                           const std::optional<bool> fit_map_pair_phi_to_symmetric_range,
                           const std::string &fit_coulomb_lines = "use_coulomb = false\n",
-                          const bool use_pml = false) {
+                          const bool use_pml = false,
+                          const std::string &fit_parameter_lines = "") {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -113,6 +114,7 @@ namespace {
     }
     output << "reopen_output_file_per_slice = false\n";
     output << "progress = false\n\n";
+    output << fit_parameter_lines;
     output << "[[bins.centrality]]\nmin = 0\nmax = 10\n\n";
     output << "[[bins.mt]]\nmin = 0.2\nmax = 0.4\n";
     return path.string();
@@ -126,7 +128,9 @@ namespace {
   };
 
   FitCatalogInspection InspectFitCatalog(const std::filesystem::path &fit_root_path,
-                                         const std::string &expected_coulomb_mode = "none") {
+                                         const std::string &expected_coulomb_mode = "none",
+                                         const std::optional<double> expected_lambda = std::nullopt,
+                                         const std::optional<double> expected_alpha = std::nullopt) {
     TFile fit_file(fit_root_path.string().c_str(), "READ");
     auto *tree = dynamic_cast<TTree *>(fit_file.Get("meta/FitCatalog"));
     Expect(tree != nullptr, "FitCatalog missing");
@@ -153,6 +157,10 @@ namespace {
     TTreeReaderValue<int> is_qn_integrated(reader, "is_qn_integrated");
     TTreeReaderValue<int> is_phi_integrated(reader, "is_phi_integrated");
     TTreeReaderValue<int> fit_uses_symmetric_phi_range(reader, "fit_uses_symmetric_phi_range");
+    TTreeReaderValue<double> lambda(reader, "lambda");
+    TTreeReaderValue<double> lambda_err(reader, "lambda_err");
+    TTreeReaderValue<double> alpha(reader, "alpha");
+    TTreeReaderValue<double> alpha_err(reader, "alpha_err");
 
     FitCatalogInspection inspection;
     while (reader.Next()) {
@@ -160,6 +168,14 @@ namespace {
       Expect((*uses_coulomb != 0) == (expected_coulomb_mode != "none"), "FitCatalog uses_coulomb mismatch");
       Expect(*qn_index == -1 && *qn_label == "qn_all" && *is_qn_integrated != 0,
              "default smoke FitCatalog should remain qn-integrated");
+      if (expected_lambda.has_value()) {
+        Expect(std::abs(*lambda - *expected_lambda) < 1.0e-9, "fixed lambda value mismatch");
+        Expect(std::abs(*lambda_err) < 1.0e-9, "fixed lambda error should be zero");
+      }
+      if (expected_alpha.has_value()) {
+        Expect(std::abs(*alpha - *expected_alpha) < 1.0e-9, "fixed alpha value mismatch");
+        Expect(std::abs(*alpha_err) < 1.0e-9, "fixed alpha error should be zero");
+      }
       if (expected_coulomb_mode == "finite_source") {
         Expect(!finite_source_mode->empty(), "finite-source mode should be recorded");
         Expect(std::isfinite(*finite_source_radius_fm) && *finite_source_radius_fm > 0.0,
@@ -286,6 +302,49 @@ int main() {
   Expect(std::abs(mapped_follow_phi_range.second - TMath::Pi() / 2.0) < 1.0e-6,
          "mapped follow phi fit maximum should be pi/2");
   ExpectReportOutputs(temp_dir / "mapped_follow_report.root");
+
+  const std::string fixed_parameter_lines = R"toml(
+[fit.parameters.lambda]
+fixed_value = 0.65
+
+[fit.parameters.alpha]
+fixed_value = 1.20
+
+)toml";
+
+  const std::string fixed_non_pml_config_path = WriteConfig(temp_dir / "fixed_non_pml.toml",
+                                                            input_root,
+                                                            temp_dir.string(),
+                                                            "mapped_cf.root",
+                                                            "fixed_non_pml_fit.root",
+                                                            "fixed_non_pml.tsv",
+                                                            "fixed_non_pml_report.root",
+                                                            true,
+                                                            std::nullopt,
+                                                            "use_coulomb = false\n",
+                                                            false,
+                                                            fixed_parameter_lines);
+  const ApplicationConfig fixed_non_pml_config = LoadApplicationConfig(fixed_non_pml_config_path);
+  const FitRunStatistics fixed_non_pml_stats = RunFit(fixed_non_pml_config, logger);
+  Expect(fixed_non_pml_stats.fitted_slices == 4, "fixed-parameter chi2 fit should fit every selected slice");
+  (void)InspectFitCatalog(temp_dir / "fixed_non_pml_fit.root", "none", 0.65, 1.20);
+
+  const std::string fixed_pml_config_path = WriteConfig(temp_dir / "fixed_pml.toml",
+                                                        input_root,
+                                                        temp_dir.string(),
+                                                        "mapped_cf.root",
+                                                        "fixed_pml_fit.root",
+                                                        "fixed_pml.tsv",
+                                                        "fixed_pml_report.root",
+                                                        true,
+                                                        std::nullopt,
+                                                        "use_coulomb = false\n",
+                                                        true,
+                                                        fixed_parameter_lines);
+  const ApplicationConfig fixed_pml_config = LoadApplicationConfig(fixed_pml_config_path);
+  const FitRunStatistics fixed_pml_stats = RunFit(fixed_pml_config, logger);
+  Expect(fixed_pml_stats.fitted_slices == 4, "fixed-parameter PML fit should fit every selected slice");
+  (void)InspectFitCatalog(temp_dir / "fixed_pml_fit.root", "none", 0.65, 1.20);
 
   const std::string mapped_override_raw_config_path = WriteConfig(temp_dir / "mapped_override_raw.toml",
                                                                   input_root,
