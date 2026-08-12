@@ -46,6 +46,9 @@ factor = 3
 [build.rebin.mt]
 enabled = true
 
+[fit.parameters.alpha]
+fixed_value = 2.0
+
 
 [fit]
 model = "full"
