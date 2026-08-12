@@ -81,6 +81,12 @@ int main(int argc, char **argv) {
     if (args.command == "build-cf") {
       const BuildCfRunStatistics statistics = RunBuildCf(config, logger);
       std::cout << "build-cf stored_slices=" << statistics.stored_slices
+                << " mt_rebin=" << (statistics.mt_rebin_enabled ? "enabled" : "disabled")
+                << " mt_rebin_mode=" << ToString(statistics.mt_rebin_mode)
+                << " mt_bins=" << statistics.mt_input_bins << "->" << statistics.mt_output_bins
+                << " phi_rebin=" << (statistics.phi_rebin_enabled ? "enabled" : "disabled")
+                << " phi_rebin_mode=" << ToString(statistics.phi_rebin_mode)
+                << " phi_bins=" << statistics.phi_input_bins << "->" << statistics.phi_output_bins
                 << " skipped_zero_me_groups=" << statistics.skipped_zero_mixed_event_groups
                 << " skipped_zero_mixed_event_slices=" << statistics.skipped_zero_mixed_event_slices
                 << " skipped_zero_se_slices=" << statistics.skipped_zero_same_event_slices << "\n";

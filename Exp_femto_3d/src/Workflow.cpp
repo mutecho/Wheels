@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -63,6 +64,10 @@ namespace exp_femto_3d {
     constexpr const char *kSliceCatalogBuildPhiMappingBranch = "build_uses_symmetric_phi_range";
     constexpr const char *kSliceCatalogSplitMixedEventBranch = "split_mixed_event_by_phi";
     constexpr const char *kSliceCatalogSplitMixedEventQnBranch = "split_mixed_event_by_qn";
+    constexpr const char *kSliceCatalogMtRebinEnabledBranch = "mt_rebin_enabled";
+    constexpr const char *kSliceCatalogMtRebinModeBranch = "mt_rebin_mode";
+    constexpr const char *kSliceCatalogPhiRebinEnabledBranch = "phi_rebin_enabled";
+    constexpr const char *kSliceCatalogPhiRebinModeBranch = "phi_rebin_mode";
     constexpr const char *kQnIntegratedLabel = "qn_all";
 
     double ComputeKStarMeV(const double q_out, const double q_side, const double q_long) {
@@ -121,6 +126,17 @@ namespace exp_femto_3d {
 
      private:
       bool previous_ = false;
+    };
+
+    class HistAddDirectoryGuard {
+     public:
+      explicit HistAddDirectoryGuard(const bool enabled) : previous_(TH1::AddDirectoryStatus()) {
+        TH1::AddDirectory(enabled);
+      }
+      ~HistAddDirectoryGuard() { TH1::AddDirectory(previous_); }
+
+     private:
+      bool previous_ = true;
     };
 
     struct Levy3DPMLContext {
@@ -188,6 +204,14 @@ namespace exp_femto_3d {
       bool is_qn_integrated = true;
     };
 
+    // Closed normal-bin bounds carry the exact sparse-axis selection for one output interval.
+    struct AxisSliceSelection {
+      RangeBin range;
+      int first_bin = 1;
+      int last_bin = 1;
+      int output_index = 0;
+    };
+
     std::string FormatDouble(const double value, const int precision = 2) {
       std::ostringstream stream;
       stream << std::fixed << std::setprecision(precision) << value;
@@ -221,16 +245,31 @@ namespace exp_femto_3d {
       return result.is_qn_integrated ? "" : result.qn_label;
     }
 
-    std::string BuildBaseGroupId(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
-      return "cent_" + FormatDirectoryValue(centrality_bin.min, 2) + "-"
-             + FormatDirectoryValue(centrality_bin.max, 2) + "__mt_" + FormatDirectoryValue(mt_bin.min, 2) + "-"
+    std::string FormatOutputIndex(const int index) {
+      std::ostringstream stream;
+      stream << std::setw(4) << std::setfill('0') << index;
+      return stream.str();
+    }
+
+    std::string BuildBaseGroupId(const RangeBin &centrality_bin,
+                                 const RangeBin &mt_bin,
+                                 const int mt_index,
+                                 const bool mt_rebin_enabled) {
+      std::string group_id = "cent_" + FormatDirectoryValue(centrality_bin.min, 2) + "-"
+                             + FormatDirectoryValue(centrality_bin.max, 2);
+      if (mt_rebin_enabled) {
+        group_id += "__mtbin_" + FormatOutputIndex(mt_index);
+      }
+      return group_id + "__mt_" + FormatDirectoryValue(mt_bin.min, 2) + "-"
              + FormatDirectoryValue(mt_bin.max, 2);
     }
 
     std::string BuildGroupId(const RangeBin &centrality_bin,
                              const RangeBin &mt_bin,
-                             const QnSliceSelection &qn_selection) {
-      std::string group_id = BuildBaseGroupId(centrality_bin, mt_bin);
+                             const QnSliceSelection &qn_selection,
+                             const int mt_index,
+                             const bool mt_rebin_enabled) {
+      std::string group_id = BuildBaseGroupId(centrality_bin, mt_bin, mt_index, mt_rebin_enabled);
       if (!qn_selection.is_qn_integrated) {
         group_id += "__" + qn_selection.qn_label;
       }
@@ -239,11 +278,15 @@ namespace exp_femto_3d {
 
     std::string BuildSliceId(const std::string &group_id,
                              const bool is_phi_integrated,
-                             const double display_phi_center) {
+                             const double display_phi_center,
+                             const int phi_index,
+                             const bool phi_rebin_enabled) {
       if (is_phi_integrated) {
         return group_id + "__phi_all";
       }
-      return group_id + "__phi_" + FormatDirectoryValue(display_phi_center, 2);
+      const std::string index_token =
+          phi_rebin_enabled ? "__phibin_" + FormatOutputIndex(phi_index) : std::string();
+      return group_id + index_token + "__phi_" + FormatDirectoryValue(display_phi_center, 2);
     }
 
     std::string BuildSliceDirectory(const std::string &slice_id) {
@@ -922,8 +965,161 @@ namespace exp_femto_3d {
       return selections;
     }
 
+    // Detect naming collisions before any ROOT objects are written, including legacy two-decimal paths.
+    void ValidateUniqueSliceIdentifiers(const ApplicationConfig &config,
+                                        const std::vector<AxisSliceSelection> &mt_selections,
+                                        const std::vector<AxisSliceSelection> &phi_selections,
+                                        const std::vector<QnSliceSelection> &qn_selections) {
+      std::set<std::string> slice_ids;
+      for (const RangeBin &centrality : config.centrality_bins) {
+        for (const AxisSliceSelection &mt_selection : mt_selections) {
+          for (const QnSliceSelection &qn_selection : qn_selections) {
+            const std::string group_id = BuildGroupId(centrality,
+                                                      mt_selection.range,
+                                                      qn_selection,
+                                                      mt_selection.output_index,
+                                                      config.build.mt_rebin.enabled);
+            const std::string integrated_id = BuildSliceId(group_id, true, 0.0, -1, config.build.phi_rebin.enabled);
+            if (!slice_ids.insert(integrated_id).second) {
+              throw std::runtime_error("Generated duplicate slice path: " + BuildSliceDirectory(integrated_id));
+            }
+            for (const AxisSliceSelection &phi_selection : phi_selections) {
+              const double raw_center = 0.5 * (phi_selection.range.min + phi_selection.range.max);
+              const PhiSliceCoordinates display = BuildPhiSliceCoordinatesFromRaw(phi_selection.range.min,
+                                                                                   phi_selection.range.max,
+                                                                                   raw_center,
+                                                                                   config.build.map_pair_phi_to_symmetric_range);
+              const std::string slice_id = BuildSliceId(group_id,
+                                                        false,
+                                                        display.center,
+                                                        phi_selection.output_index,
+                                                        config.build.phi_rebin.enabled);
+              if (!slice_ids.insert(slice_id).second) {
+                throw std::runtime_error("Generated duplicate slice path: " + BuildSliceDirectory(slice_id));
+              }
+            }
+          }
+        }
+      }
+    }
+
     void ResetAxisVisibleRange(TAxis &axis) {
       axis.SetRange(1, axis.GetNbins());
+    }
+
+    bool AxisBoundaryMatches(const double lhs, const double rhs) {
+      const double scale = std::max({1.0, std::abs(lhs), std::abs(rhs)});
+      return std::abs(lhs - rhs) <= 1.0e-9 * scale;
+    }
+
+    // SE and ME selections reuse bin indices, so their physical axis contracts must agree exactly.
+    void ValidateCompatibleAxes(const TAxis &se_axis, const TAxis &me_axis, const std::string &axis_name) {
+      if (se_axis.GetNbins() != me_axis.GetNbins()) {
+        throw std::runtime_error("SE/ME " + axis_name + " axes have different normal-bin counts.");
+      }
+      for (int bin = 1; bin <= se_axis.GetNbins(); ++bin) {
+        if (!AxisBoundaryMatches(se_axis.GetBinLowEdge(bin), me_axis.GetBinLowEdge(bin))
+            || !AxisBoundaryMatches(se_axis.GetBinUpEdge(bin), me_axis.GetBinUpEdge(bin))) {
+          throw std::runtime_error("SE/ME " + axis_name + " axes have different physical bin edges.");
+        }
+      }
+    }
+
+    // Convert a half-open physical interval to closed ROOT normal-bin indices without under/overflow.
+    AxisSliceSelection ResolvePhysicalAxisRange(const TAxis &axis,
+                                                const RangeBin &requested,
+                                                const std::string &axis_name,
+                                                const int output_index) {
+      int first_bin = -1;
+      int last_bin = -1;
+      for (int bin = 1; bin <= axis.GetNbins(); ++bin) {
+        if (AxisBoundaryMatches(requested.min, axis.GetBinLowEdge(bin))) {
+          first_bin = bin;
+        }
+        if (AxisBoundaryMatches(requested.max, axis.GetBinUpEdge(bin))) {
+          last_bin = bin;
+        }
+      }
+      if (first_bin < 1 || last_bin < first_bin) {
+        throw std::runtime_error("Configured " + axis_name + " range [" + FormatDouble(requested.min, 9) + ", "
+                                 + FormatDouble(requested.max, 9)
+                                 + ") must align with normal-bin boundaries of the input sparse axis.");
+      }
+
+      AxisSliceSelection selection;
+      selection.range = requested;
+      selection.range.min = axis.GetBinLowEdge(first_bin);
+      selection.range.max = axis.GetBinUpEdge(last_bin);
+      selection.first_bin = first_bin;
+      selection.last_bin = last_bin;
+      selection.output_index = output_index;
+      return selection;
+    }
+
+    // Resolve native, factor, and explicit-range modes only after the input ROOT axis is known.
+    std::vector<AxisSliceSelection> ResolveAxisSliceSelections(const TAxis &axis,
+                                                               const AxisRebinConfig &rebin,
+                                                               const std::vector<RangeBin> &ranges,
+                                                               const std::string &axis_name) {
+      std::vector<AxisSliceSelection> selections;
+      if (rebin.mode == RebinMode::kNative) {
+        selections.reserve(static_cast<std::size_t>(axis.GetNbins()));
+        for (int bin = 1; bin <= axis.GetNbins(); ++bin) {
+          RangeBin range{axis.GetBinLowEdge(bin), axis.GetBinUpEdge(bin), axis_name + "_native_" + std::to_string(bin)};
+          selections.push_back(ResolvePhysicalAxisRange(axis, range, axis_name, bin - 1));
+        }
+      } else if (rebin.mode == RebinMode::kRanges || rebin.mode == RebinMode::kLegacyRanges) {
+        selections.reserve(ranges.size());
+        for (std::size_t index = 0; index < ranges.size(); ++index) {
+          selections.push_back(
+              ResolvePhysicalAxisRange(axis, ranges[index], axis_name, static_cast<int>(index)));
+        }
+      } else if (rebin.mode == RebinMode::kFactor) {
+        RangeBin window{axis.GetBinLowEdge(1), axis.GetBinUpEdge(axis.GetNbins()), axis_name + "_factor_window"};
+        if (rebin.min.has_value()) {
+          window.min = *rebin.min;
+          window.max = *rebin.max;
+        }
+        const AxisSliceSelection resolved_window = ResolvePhysicalAxisRange(axis, window, axis_name, 0);
+        const int input_bin_count = resolved_window.last_bin - resolved_window.first_bin + 1;
+        const int factor = *rebin.factor;
+        if (input_bin_count % factor != 0) {
+          throw std::runtime_error("build.rebin." + axis_name + " factor " + std::to_string(factor) + " does not divide "
+                                   + std::to_string(input_bin_count) + " selected normal bins.");
+        }
+        const int output_bin_count = input_bin_count / factor;
+        selections.reserve(static_cast<std::size_t>(output_bin_count));
+        for (int output_index = 0; output_index < output_bin_count; ++output_index) {
+          const int first_bin = resolved_window.first_bin + output_index * factor;
+          const int last_bin = first_bin + factor - 1;
+          RangeBin range{axis.GetBinLowEdge(first_bin),
+                         axis.GetBinUpEdge(last_bin),
+                         axis_name + "_factor_" + std::to_string(output_index)};
+          selections.push_back(ResolvePhysicalAxisRange(axis, range, axis_name, output_index));
+        }
+      }
+
+      if (selections.empty()) {
+        throw std::runtime_error("Rebin selection for " + axis_name + " generated zero output bins.");
+      }
+      return selections;
+    }
+
+    // Symmetric display mapping has a discontinuity at pi/2; merged intervals may not straddle it.
+    void ValidatePhiMappingSeam(const std::vector<AxisSliceSelection> &phi_selections,
+                                const bool map_to_symmetric_range) {
+      if (!map_to_symmetric_range) {
+        return;
+      }
+      const double seam = TMath::Pi() / 2.0;
+      for (const AxisSliceSelection &selection : phi_selections) {
+        if (selection.range.min < seam && !AxisBoundaryMatches(selection.range.min, seam)
+            && selection.range.max > seam && !AxisBoundaryMatches(selection.range.max, seam)) {
+          throw std::runtime_error("A configured phi rebin interval crosses the pi/2 symmetric-mapping seam: ["
+                                   + FormatDouble(selection.range.min, 9) + ", "
+                                   + FormatDouble(selection.range.max, 9) + ").");
+        }
+      }
     }
 
     // qn bins are configured as half-open physical ranges and mapped to exact THnSparse axis bins.
@@ -952,6 +1148,7 @@ namespace exp_femto_3d {
       axis->SetRange(first_bin, last_bin);
     }
 
+    // Persist the physical selection together with both denominator-split and axis-rebin provenance.
     SliceCatalogEntry MakeSliceCatalogEntry(const RangeBin &centrality_bin,
                                             const RangeBin &mt_bin,
                                             const QnSliceSelection &qn_selection,
@@ -967,10 +1164,14 @@ namespace exp_femto_3d {
                                             const bool build_uses_symmetric_phi_range,
                                             const bool split_mixed_event_by_phi,
                                             const bool split_mixed_event_by_qn,
+                                            const AxisRebinConfig &mt_rebin,
+                                            const AxisRebinConfig &phi_rebin,
                                             const bool is_phi_integrated) {
       SliceCatalogEntry entry;
-      entry.group_id = BuildGroupId(centrality_bin, mt_bin, qn_selection);
-      entry.slice_id = BuildSliceId(entry.group_id, is_phi_integrated, display_phi_center);
+      entry.group_id =
+          BuildGroupId(centrality_bin, mt_bin, qn_selection, mt_index, mt_rebin.enabled);
+      entry.slice_id = BuildSliceId(
+          entry.group_id, is_phi_integrated, display_phi_center, phi_index, phi_rebin.enabled);
       entry.slice_directory = BuildSliceDirectory(entry.slice_id);
       entry.se_object_path = entry.slice_directory + "/SE_raw3d";
       entry.me_object_path = entry.slice_directory + "/ME_raw3d";
@@ -998,6 +1199,10 @@ namespace exp_femto_3d {
       entry.build_uses_symmetric_phi_range = build_uses_symmetric_phi_range;
       entry.split_mixed_event_by_phi = split_mixed_event_by_phi;
       entry.split_mixed_event_by_qn = split_mixed_event_by_qn;
+      entry.mt_rebin_enabled = mt_rebin.enabled;
+      entry.mt_rebin_mode = ToString(mt_rebin.mode);
+      entry.phi_rebin_enabled = phi_rebin.enabled;
+      entry.phi_rebin_mode = ToString(phi_rebin.mode);
       entry.is_qn_integrated = qn_selection.is_qn_integrated;
       entry.is_phi_integrated = is_phi_integrated;
       return entry;
@@ -1037,6 +1242,10 @@ namespace exp_femto_3d {
       int build_uses_symmetric_phi_range = 0;
       int split_mixed_event_by_phi = 0;
       int split_mixed_event_by_qn = 0;
+      int mt_rebin_enabled = 0;
+      std::string mt_rebin_mode;
+      int phi_rebin_enabled = 0;
+      std::string phi_rebin_mode;
       int is_qn_integrated = 1;
       int is_phi_integrated = 0;
 
@@ -1069,6 +1278,10 @@ namespace exp_femto_3d {
       tree->Branch(kSliceCatalogBuildPhiMappingBranch, &build_uses_symmetric_phi_range);
       tree->Branch(kSliceCatalogSplitMixedEventBranch, &split_mixed_event_by_phi);
       tree->Branch(kSliceCatalogSplitMixedEventQnBranch, &split_mixed_event_by_qn);
+      tree->Branch(kSliceCatalogMtRebinEnabledBranch, &mt_rebin_enabled);
+      tree->Branch(kSliceCatalogMtRebinModeBranch, &mt_rebin_mode);
+      tree->Branch(kSliceCatalogPhiRebinEnabledBranch, &phi_rebin_enabled);
+      tree->Branch(kSliceCatalogPhiRebinModeBranch, &phi_rebin_mode);
       tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
@@ -1102,6 +1315,10 @@ namespace exp_femto_3d {
         build_uses_symmetric_phi_range = entry.build_uses_symmetric_phi_range ? 1 : 0;
         split_mixed_event_by_phi = entry.split_mixed_event_by_phi ? 1 : 0;
         split_mixed_event_by_qn = entry.split_mixed_event_by_qn ? 1 : 0;
+        mt_rebin_enabled = entry.mt_rebin_enabled ? 1 : 0;
+        mt_rebin_mode = entry.mt_rebin_mode;
+        phi_rebin_enabled = entry.phi_rebin_enabled ? 1 : 0;
+        phi_rebin_mode = entry.phi_rebin_mode;
         is_qn_integrated = entry.is_qn_integrated ? 1 : 0;
         is_phi_integrated = entry.is_phi_integrated ? 1 : 0;
         tree->Fill();
@@ -1171,6 +1388,24 @@ namespace exp_femto_3d {
         split_mixed_event_by_qn =
             std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogSplitMixedEventQnBranch);
       }
+      std::unique_ptr<TTreeReaderValue<int>> mt_rebin_enabled;
+      if (tree->GetBranch(kSliceCatalogMtRebinEnabledBranch) != nullptr) {
+        mt_rebin_enabled = std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogMtRebinEnabledBranch);
+      }
+      std::unique_ptr<TTreeReaderValue<std::string>> mt_rebin_mode;
+      if (tree->GetBranch(kSliceCatalogMtRebinModeBranch) != nullptr) {
+        mt_rebin_mode =
+            std::make_unique<TTreeReaderValue<std::string>>(reader, kSliceCatalogMtRebinModeBranch);
+      }
+      std::unique_ptr<TTreeReaderValue<int>> phi_rebin_enabled;
+      if (tree->GetBranch(kSliceCatalogPhiRebinEnabledBranch) != nullptr) {
+        phi_rebin_enabled = std::make_unique<TTreeReaderValue<int>>(reader, kSliceCatalogPhiRebinEnabledBranch);
+      }
+      std::unique_ptr<TTreeReaderValue<std::string>> phi_rebin_mode;
+      if (tree->GetBranch(kSliceCatalogPhiRebinModeBranch) != nullptr) {
+        phi_rebin_mode =
+            std::make_unique<TTreeReaderValue<std::string>>(reader, kSliceCatalogPhiRebinModeBranch);
+      }
       std::unique_ptr<TTreeReaderValue<int>> is_qn_integrated;
       if (tree->GetBranch("is_qn_integrated") != nullptr) {
         is_qn_integrated = std::make_unique<TTreeReaderValue<int>>(reader, "is_qn_integrated");
@@ -1211,6 +1446,11 @@ namespace exp_femto_3d {
         entry.split_mixed_event_by_phi =
             split_mixed_event_by_phi ? (**split_mixed_event_by_phi != 0) : false;
         entry.split_mixed_event_by_qn = split_mixed_event_by_qn ? (**split_mixed_event_by_qn != 0) : false;
+        // Older catalogs used configured mT ranges and native phi bins without explicit rebin metadata.
+        entry.mt_rebin_enabled = mt_rebin_enabled ? (**mt_rebin_enabled != 0) : false;
+        entry.mt_rebin_mode = mt_rebin_mode ? **mt_rebin_mode : "legacy";
+        entry.phi_rebin_enabled = phi_rebin_enabled ? (**phi_rebin_enabled != 0) : false;
+        entry.phi_rebin_mode = phi_rebin_mode ? **phi_rebin_mode : "native";
         entry.is_qn_integrated = is_qn_integrated ? (**is_qn_integrated != 0) : true;
         entry.is_phi_integrated = (*is_phi_integrated != 0);
         entries.push_back(entry);
@@ -1331,6 +1571,9 @@ namespace exp_femto_3d {
         return false;
       }
 
+      if (mt_bins.empty()) {
+        return true;
+      }
       return std::any_of(mt_bins.begin(), mt_bins.end(), [&](const RangeBin &bin) {
         return NearlyEqual(entry.mt_low, bin.min) && NearlyEqual(entry.mt_high, bin.max);
       });
@@ -2319,10 +2562,18 @@ namespace exp_femto_3d {
       fit_result.qn_high = entry.qn_high;
       fit_result.qn_label = entry.qn_label;
       const PhiSliceCoordinates fit_phi_coordinates = ResolveSlicePhiCoordinates(entry, fit_uses_symmetric_phi_range);
+      fit_result.raw_phi_low = entry.raw_phi_low;
+      fit_result.raw_phi_high = entry.raw_phi_high;
+      fit_result.display_phi_low = fit_phi_coordinates.low;
+      fit_result.display_phi_high = fit_phi_coordinates.high;
       fit_result.is_qn_integrated = entry.is_qn_integrated;
       fit_result.is_phi_integrated = entry.is_phi_integrated;
       fit_result.phi = fit_phi_coordinates.center;
       fit_result.fit_uses_symmetric_phi_range = fit_uses_symmetric_phi_range;
+      fit_result.mt_rebin_enabled = entry.mt_rebin_enabled;
+      fit_result.mt_rebin_mode = entry.mt_rebin_mode;
+      fit_result.phi_rebin_enabled = entry.phi_rebin_enabled;
+      fit_result.phi_rebin_mode = entry.phi_rebin_mode;
       fit_result.has_off_diagonal = model == FitModel::kFull;
       fit_result.uses_coulomb = UsesCoulomb(fit_options.coulomb_mode);
       fit_result.coulomb_mode = ToString(fit_options.coulomb_mode);
@@ -2513,7 +2764,9 @@ namespace exp_femto_3d {
       std::ofstream output(path);
       output << "sliceId\tgroupId\tfitModel\tusesCoulomb\tcoulombMode\tfiniteSourceMode\tfiniteSourceRadiusFm"
                 "\tusesCoreHaloLambda\tusesQ2Baseline\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh"
+                "\tmTRebinEnabled\tmTRebinMode\tphiRebinEnabled\tphiRebinMode"
                 "\tqnIndex\tqnLow\tqnHigh\tqnLabel\tisQnIntegrated\tphi\tisPhiIntegrated"
+                "\trawPhiLow\trawPhiHigh\tdisplayPhiLow\tdisplayPhiHigh"
                 "\tnorm\tnormErr\tlambda\tlambdaErr\tRout2\tRout2Err\tRside2\tRside2Err"
                 "\tRlong2\tRlong2Err\tRoutside2\tRoutside2Err\tRoutlong2\tRoutlong2Err"
                 "\tRsidelong2\tRsidelong2Err\talpha\talphaErr\tbaselineQ2\tbaselineQ2Err"
@@ -2525,9 +2778,13 @@ namespace exp_femto_3d {
                << "\t" << result.finite_source_radius_fm << "\t" << (result.uses_core_halo_lambda ? 1 : 0) << "\t"
                << (result.uses_q2_baseline ? 1 : 0) << "\t" << (result.uses_pml ? 1 : 0) << "\t" << result.cent_low
                << "\t" << result.cent_high << "\t" << result.mt_low << "\t" << result.mt_high << "\t"
+               << (result.mt_rebin_enabled ? 1 : 0) << "\t" << result.mt_rebin_mode << "\t"
+               << (result.phi_rebin_enabled ? 1 : 0) << "\t" << result.phi_rebin_mode << "\t"
                << result.qn_index << "\t" << result.qn_low << "\t" << result.qn_high << "\t" << result.qn_label
                << "\t" << (result.is_qn_integrated ? 1 : 0) << "\t" << result.phi
-               << "\t" << (result.is_phi_integrated ? 1 : 0) << "\t" << result.norm << "\t" << result.norm_err << "\t"
+               << "\t" << (result.is_phi_integrated ? 1 : 0) << "\t" << result.raw_phi_low << "\t"
+               << result.raw_phi_high << "\t" << result.display_phi_low << "\t" << result.display_phi_high << "\t"
+               << result.norm << "\t" << result.norm_err << "\t"
                << result.lambda << "\t" << result.lambda_err << "\t" << result.rout2 << "\t" << result.rout2_err << "\t"
                << result.rside2 << "\t" << result.rside2_err << "\t" << result.rlong2 << "\t" << result.rlong2_err
                << "\t" << result.routside2 << "\t" << result.routside2_err << "\t" << result.routlong2 << "\t"
@@ -2559,7 +2816,15 @@ namespace exp_femto_3d {
       double qn_high = std::numeric_limits<double>::quiet_NaN();
       std::string qn_label;
       double phi = 0.0;
+      double raw_phi_low = 0.0;
+      double raw_phi_high = 0.0;
+      double display_phi_low = 0.0;
+      double display_phi_high = 0.0;
       int fit_uses_symmetric_phi_range = 0;
+      int mt_rebin_enabled = 0;
+      std::string mt_rebin_mode;
+      int phi_rebin_enabled = 0;
+      std::string phi_rebin_mode;
       int is_qn_integrated = 1;
       int is_phi_integrated = 0;
       double norm = 0.0;
@@ -2611,7 +2876,15 @@ namespace exp_femto_3d {
       tree->Branch("qn_high", &qn_high);
       tree->Branch("qn_label", &qn_label);
       tree->Branch("phi", &phi);
+      tree->Branch("raw_phi_low", &raw_phi_low);
+      tree->Branch("raw_phi_high", &raw_phi_high);
+      tree->Branch("display_phi_low", &display_phi_low);
+      tree->Branch("display_phi_high", &display_phi_high);
       tree->Branch("fit_uses_symmetric_phi_range", &fit_uses_symmetric_phi_range);
+      tree->Branch(kSliceCatalogMtRebinEnabledBranch, &mt_rebin_enabled);
+      tree->Branch(kSliceCatalogMtRebinModeBranch, &mt_rebin_mode);
+      tree->Branch(kSliceCatalogPhiRebinEnabledBranch, &phi_rebin_enabled);
+      tree->Branch(kSliceCatalogPhiRebinModeBranch, &phi_rebin_mode);
       tree->Branch("is_qn_integrated", &is_qn_integrated);
       tree->Branch("is_phi_integrated", &is_phi_integrated);
       tree->Branch("norm", &norm);
@@ -2667,7 +2940,15 @@ namespace exp_femto_3d {
         qn_high = result.qn_high;
         qn_label = result.qn_label;
         phi = result.phi;
+        raw_phi_low = result.raw_phi_low;
+        raw_phi_high = result.raw_phi_high;
+        display_phi_low = result.display_phi_low;
+        display_phi_high = result.display_phi_high;
         fit_uses_symmetric_phi_range = result.fit_uses_symmetric_phi_range ? 1 : 0;
+        mt_rebin_enabled = result.mt_rebin_enabled ? 1 : 0;
+        mt_rebin_mode = result.mt_rebin_mode;
+        phi_rebin_enabled = result.phi_rebin_enabled ? 1 : 0;
+        phi_rebin_mode = result.phi_rebin_mode;
         is_qn_integrated = result.is_qn_integrated ? 1 : 0;
         is_phi_integrated = result.is_phi_integrated ? 1 : 0;
         norm = result.norm;
@@ -3135,64 +3416,100 @@ namespace exp_femto_3d {
   BuildCfRunStatistics RunBuildCf(const ApplicationConfig &config, const Logger &logger) {
     EnsureDirectoryExists(config.output.output_directory);
     const std::string cf_root_path = ResolvePath(config.output.output_directory, config.output.cf_root_name);
-    CreateOrResetRootFile(cf_root_path);
 
-    const bool old_add_directory = TH1::AddDirectoryStatus();
-    TH1::AddDirectory(kFALSE);
+    HistAddDirectoryGuard add_directory_guard(false);
 
-    auto input_file = OpenRootFile(config.input.input_root, "READ");
     const std::string se_path = BuildSparseObjectPath(config, config.input.same_event_subtask);
     const std::string me_path = BuildSparseObjectPath(config, config.input.mixed_event_subtask);
 
-    auto *h_se_origin = dynamic_cast<THnSparseF *>(input_file->Get(se_path.c_str()));
-    auto *h_me_origin = dynamic_cast<THnSparseF *>(input_file->Get(me_path.c_str()));
-    if (h_se_origin == nullptr || h_me_origin == nullptr) {
-      TH1::AddDirectory(old_add_directory);
-      throw std::runtime_error("Cannot resolve required THnSparse inputs from ROOT file.");
-    }
+    auto input_file = OpenRootFile(config.input.input_root, "READ");
+    THnSparseF *h_se_origin = nullptr;
+    THnSparseF *h_me_origin = nullptr;
+    auto load_input_sparses = [&]() {
+      h_se_origin = dynamic_cast<THnSparseF *>(input_file->Get(se_path.c_str()));
+      h_me_origin = dynamic_cast<THnSparseF *>(input_file->Get(me_path.c_str()));
+      if (h_se_origin == nullptr || h_me_origin == nullptr) {
+        throw std::runtime_error("Cannot resolve required THnSparse inputs from ROOT file.");
+      }
+      h_se_origin->Sumw2();
+      h_me_origin->Sumw2();
+    };
+    load_input_sparses();
 
-    h_se_origin->Sumw2();
-    h_me_origin->Sumw2();
-
+    TAxis *mt_axis = h_se_origin->GetAxis(3);
     TAxis *phi_axis = h_se_origin->GetAxis(6);
-    const int n_phi_bins = phi_axis->GetNbins();
+    TAxis *me_mt_axis = h_me_origin->GetAxis(3);
+    TAxis *me_phi_axis = h_me_origin->GetAxis(6);
     TAxis *qn_axis = h_se_origin->GetAxis(5);
-    if (qn_axis == nullptr || h_me_origin->GetAxis(5) == nullptr) {
-      TH1::AddDirectory(old_add_directory);
-      throw std::runtime_error("Cannot resolve qn axis 5 from required THnSparse inputs.");
+    if (mt_axis == nullptr || phi_axis == nullptr || me_mt_axis == nullptr || me_phi_axis == nullptr
+        || qn_axis == nullptr || h_me_origin->GetAxis(5) == nullptr) {
+      throw std::runtime_error("Cannot resolve mT/phi/qn axes 3/6/5 from required THnSparse inputs.");
     }
+    ValidateCompatibleAxes(*mt_axis, *me_mt_axis, "mT");
+    ValidateCompatibleAxes(*phi_axis, *me_phi_axis, "phi");
+    const int n_phi_bins = phi_axis->GetNbins();
+    const double full_raw_phi_low = phi_axis->GetBinLowEdge(1);
+    const double full_raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
+
+    // Resolve all target selections before projection so invalid boundaries fail without partial output.
+    const std::vector<AxisSliceSelection> mt_selections =
+        ResolveAxisSliceSelections(*mt_axis, config.build.mt_rebin, config.mt_bins, "mt");
+    const std::vector<AxisSliceSelection> phi_selections =
+        ResolveAxisSliceSelections(*phi_axis, config.build.phi_rebin, config.phi_bins, "phi");
+    ValidatePhiMappingSeam(phi_selections, config.build.map_pair_phi_to_symmetric_range);
     const std::vector<QnSliceSelection> qn_slice_selections = BuildQnSliceSelections(config, *qn_axis);
+    ValidateUniqueSliceIdentifiers(config, mt_selections, phi_selections, qn_slice_selections);
 
     BuildCfRunStatistics statistics;
-    statistics.requested_groups = config.centrality_bins.size() * config.mt_bins.size() * qn_slice_selections.size();
+    statistics.requested_groups = config.centrality_bins.size() * mt_selections.size() * qn_slice_selections.size();
+    statistics.mt_input_bins = static_cast<std::size_t>(mt_axis->GetNbins());
+    statistics.mt_output_bins = mt_selections.size();
+    statistics.phi_input_bins = static_cast<std::size_t>(phi_axis->GetNbins());
+    statistics.phi_output_bins = phi_selections.size();
+    statistics.mt_rebin_enabled = config.build.mt_rebin.enabled;
+    statistics.phi_rebin_enabled = config.build.phi_rebin.enabled;
+    statistics.mt_rebin_mode = config.build.mt_rebin.mode;
+    statistics.phi_rebin_mode = config.build.phi_rebin.mode;
     std::vector<SliceCatalogEntry> catalog_entries;
     // Count planned slices up front so skipped branches still advance the CLI progress bar.
-    const std::size_t slices_per_group = static_cast<std::size_t>(n_phi_bins + 1);
+    const std::size_t slices_per_group = phi_selections.size() + 1U;
     const std::size_t planned_slices = statistics.requested_groups * slices_per_group;
     std::size_t processed_slices = 0;
     ProgressReporter progress(logger, "build-cf", planned_slices, config.build.progress);
+
+    logger.Info("Starting build-cf stage: mt_rebin=" + std::string(config.build.mt_rebin.enabled ? "enabled" : "disabled")
+                + " mode=" + ToString(config.build.mt_rebin.mode) + " input_bins="
+                + std::to_string(statistics.mt_input_bins) + " output_bins="
+                + std::to_string(statistics.mt_output_bins) + ", phi_rebin="
+                + std::string(config.build.phi_rebin.enabled ? "enabled" : "disabled") + " mode="
+                + ToString(config.build.phi_rebin.mode) + " input_bins="
+                + std::to_string(statistics.phi_input_bins) + " output_bins="
+                + std::to_string(statistics.phi_output_bins) + ".");
+    progress.Update(0);
+
+    // Only truncate the CF ROOT file after all read-only input, axis, rebin, seam, and path checks have passed.
+    CreateOrResetRootFile(cf_root_path);
 
     std::unique_ptr<TFile> shared_output_file;
     if (!config.build.reopen_output_file_per_slice) {
       shared_output_file = OpenRootFile(cf_root_path, "UPDATE");
     }
 
-    logger.Info("Starting build-cf stage.");
-    progress.Update(0);
-
     for (std::size_t centrality_index = 0; centrality_index < config.centrality_bins.size(); ++centrality_index) {
       const RangeBin &centrality_bin = config.centrality_bins[centrality_index];
-      for (std::size_t mt_index = 0; mt_index < config.mt_bins.size(); ++mt_index) {
-        const RangeBin &mt_bin = config.mt_bins[mt_index];
-        const std::string base_group_id = BuildBaseGroupId(centrality_bin, mt_bin);
+      for (std::size_t mt_index = 0; mt_index < mt_selections.size(); ++mt_index) {
+        const AxisSliceSelection &mt_selection = mt_selections[mt_index];
+        const RangeBin &mt_bin = mt_selection.range;
+        const std::string base_group_id = BuildBaseGroupId(
+            centrality_bin, mt_bin, mt_selection.output_index, config.build.mt_rebin.enabled);
         logger.Debug("Building base group " + base_group_id);
 
         h_se_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
-        h_se_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
+        h_se_origin->GetAxis(3)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
         h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
         ResetAxisVisibleRange(*h_se_origin->GetAxis(5));
         h_me_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
-        h_me_origin->GetAxis(3)->SetRangeUser(mt_bin.min, mt_bin.max);
+        h_me_origin->GetAxis(3)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
         ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
 
         // ME denominator splitting is independently opt-in in phi and qn, so the projection helper applies
@@ -3279,7 +3596,11 @@ namespace exp_femto_3d {
         };
 
         auto write_qn_selection = [&](const QnSliceSelection &qn_selection) {
-          const std::string group_id = BuildGroupId(centrality_bin, mt_bin, qn_selection);
+          const std::string group_id = BuildGroupId(centrality_bin,
+                                                    mt_bin,
+                                                    qn_selection,
+                                                    mt_selection.output_index,
+                                                    config.build.mt_rebin.enabled);
           logger.Debug("Building group " + group_id);
           ApplyQnSelection(*h_se_origin, qn_selection);
 
@@ -3325,8 +3646,8 @@ namespace exp_femto_3d {
               }
             }
             if (me_projection != nullptr) {
-              const double raw_phi_low = phi_axis->GetBinLowEdge(1);
-              const double raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
+              const double raw_phi_low = full_raw_phi_low;
+              const double raw_phi_high = full_raw_phi_high;
               const auto entry = MakeSliceCatalogEntry(centrality_bin,
                                                        mt_bin,
                                                        qn_selection,
@@ -3342,6 +3663,8 @@ namespace exp_femto_3d {
                                                        config.build.map_pair_phi_to_symmetric_range,
                                                        config.build.split_mixed_event_by_phi,
                                                        config.build.split_mixed_event_by_qn,
+                                                       config.build.mt_rebin,
+                                                       config.build.phi_rebin,
                                                        true);
               write_slice(h_se_all_raw, h_se_all_norm, *me_projection, entry);
             }
@@ -3349,15 +3672,16 @@ namespace exp_femto_3d {
           delete h_se_all_raw;
           delete h_se_all_norm;
 
-          for (int phi_index = 1; phi_index <= n_phi_bins; ++phi_index) {
-            h_se_origin->GetAxis(6)->SetRange(phi_index, phi_index);
+          for (const AxisSliceSelection &phi_selection : phi_selections) {
+            h_se_origin->GetAxis(6)->SetRange(phi_selection.first_bin, phi_selection.last_bin);
             auto *h_se_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
             h_se_raw->SetDirectory(nullptr);
             auto *h_se_norm = static_cast<TH3D *>(h_se_raw->Clone((group_id + "_SE_slice_norm").c_str()));
             h_se_norm->SetDirectory(nullptr);
             const double int_se = IntegralVisibleRange(h_se_norm, true);
             if (int_se == 0.0) {
-              logger.Warn("Zero same-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
+              logger.Warn("Zero same-event integral for " + group_id + " phi output bin "
+                          + std::to_string(phi_selection.output_index)
                           + "; skipping slice.");
               ++statistics.skipped_zero_same_event_slices;
               ++processed_slices;
@@ -3371,12 +3695,14 @@ namespace exp_femto_3d {
             std::unique_ptr<MixedEventProjection> split_me_projection;
             const MixedEventProjection *me_projection = integrated_me_for_selection;
             if (config.build.split_mixed_event_by_phi) {
-              split_me_projection = build_me_projection(phi_index,
-                                                        phi_index,
-                                                        qn_selection,
-                                                        group_id + "_ME_phi" + std::to_string(phi_index) + "_norm");
+              split_me_projection =
+                  build_me_projection(phi_selection.first_bin,
+                                      phi_selection.last_bin,
+                                      qn_selection,
+                                      group_id + "_ME_phi" + std::to_string(phi_selection.output_index) + "_norm");
               if (split_me_projection == nullptr) {
-                logger.Warn("Zero mixed-event integral for " + group_id + " phi bin " + std::to_string(phi_index)
+                logger.Warn("Zero mixed-event integral for " + group_id + " phi output bin "
+                            + std::to_string(phi_selection.output_index)
                             + "; skipping slice.");
                 ++statistics.skipped_zero_mixed_event_slices;
                 ++processed_slices;
@@ -3388,9 +3714,9 @@ namespace exp_femto_3d {
               me_projection = split_me_projection.get();
             }
 
-            const double raw_phi_low = phi_axis->GetBinLowEdge(phi_index);
-            const double raw_phi_high = phi_axis->GetBinUpEdge(phi_index);
-            const double raw_phi_center = phi_axis->GetBinCenter(phi_index);
+            const double raw_phi_low = phi_selection.range.min;
+            const double raw_phi_high = phi_selection.range.max;
+            const double raw_phi_center = 0.5 * (raw_phi_low + raw_phi_high);
             // Build records both raw and display phi so fit can later follow or override
             // the original mapping choice without rebuilding the CF histograms.
             const PhiSliceCoordinates display_phi_coordinates = BuildPhiSliceCoordinatesFromRaw(
@@ -3401,7 +3727,7 @@ namespace exp_femto_3d {
                                                      qn_selection,
                                                      static_cast<int>(centrality_index),
                                                      static_cast<int>(mt_index),
-                                                     phi_index - 1,
+                                                     phi_selection.output_index,
                                                      raw_phi_low,
                                                      raw_phi_high,
                                                      raw_phi_center,
@@ -3411,6 +3737,8 @@ namespace exp_femto_3d {
                                                      config.build.map_pair_phi_to_symmetric_range,
                                                      config.build.split_mixed_event_by_phi,
                                                      config.build.split_mixed_event_by_qn,
+                                                     config.build.mt_rebin,
+                                                     config.build.phi_rebin,
                                                      false);
             write_slice(h_se_raw, h_se_norm, *me_projection, entry);
             delete h_se_raw;
@@ -3431,6 +3759,7 @@ namespace exp_femto_3d {
 
     if (shared_output_file) {
       WriteSliceCatalogTree(*shared_output_file, catalog_entries);
+      shared_output_file->Write("", TObject::kOverwrite);
       shared_output_file->Close();
       shared_output_file.reset();
     } else {
@@ -3440,7 +3769,6 @@ namespace exp_femto_3d {
     }
 
     progress.Finish();
-    TH1::AddDirectory(old_add_directory);
     logger.Info("Completed build-cf stage: stored " + std::to_string(statistics.stored_slices) + " slices.");
     return statistics;
   }
@@ -3468,9 +3796,7 @@ namespace exp_femto_3d {
           "fit.coulomb_mode=\"finite_source\" requires CATS support; reconfigure with EXP_FEMTO_3D_HAS_CATS=1.");
     }
 
-    CreateOrResetRootFile(fit_root_path);
-    const bool old_add_directory = TH1::AddDirectoryStatus();
-    TH1::AddDirectory(kFALSE);
+    HistAddDirectoryGuard add_directory_guard(false);
 
     auto input_file = OpenRootFile(cf_root_path, "READ");
     const std::vector<SliceCatalogEntry> catalog_entries = ReadSliceCatalogTree(*input_file, &logger);
@@ -3482,6 +3808,17 @@ namespace exp_femto_3d {
     }
     const bool fit_uses_symmetric_phi_range =
         config.fit.map_pair_phi_to_symmetric_range.value_or(input_cf_uses_symmetric_phi_range);
+
+    // Native/factor mT groups are discovered from the catalog; explicit fit ranges must match one produced group.
+    for (const RangeBin &requested_mt : config.fit_mt_bins) {
+      const bool found = std::any_of(catalog_entries.begin(), catalog_entries.end(), [&](const SliceCatalogEntry &entry) {
+        return NearlyEqual(entry.mt_low, requested_mt.min) && NearlyEqual(entry.mt_high, requested_mt.max);
+      });
+      if (!found) {
+        throw std::runtime_error("fit_selection.mt range [" + FormatDouble(requested_mt.min, 9) + ", "
+                                 + FormatDouble(requested_mt.max, 9) + ") does not match any mT group in SliceCatalog.");
+      }
+    }
 
     std::vector<const SliceCatalogEntry *> selected_entries;
     selected_entries.reserve(catalog_entries.size());
@@ -3506,6 +3843,9 @@ namespace exp_femto_3d {
                 + ", inputCFPhiMapping=" + std::string(input_cf_uses_symmetric_phi_range ? "symmetric" : "raw")
                 + ", fitPhiMapping=" + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
     progress.Update(0);
+
+    // The detailed fit file is reset only after catalog read and dynamic fit-selection validation succeed.
+    CreateOrResetRootFile(fit_root_path);
 
     std::map<FitResultGroupKey, CoulombKernelTable> finite_source_kernels;
     std::vector<CoulombKernelCatalogEntry> kernel_catalog_entries;
@@ -3671,6 +4011,7 @@ namespace exp_femto_3d {
       WriteR2Graphs(*shared_output_file, fit_results);
       WriteFitCatalogTree(*shared_output_file, fit_results);
       WriteCoulombKernelCatalogTree(*shared_output_file, kernel_catalog_entries);
+      shared_output_file->Write("", TObject::kOverwrite);
       shared_output_file->Close();
       shared_output_file.reset();
     } else {
@@ -3684,7 +4025,6 @@ namespace exp_femto_3d {
     WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries);
 
     progress.Finish();
-    TH1::AddDirectory(old_add_directory);
     logger.Info("Completed fit stage: fitted " + std::to_string(statistics.fitted_slices) + " slices.");
     return statistics;
   }

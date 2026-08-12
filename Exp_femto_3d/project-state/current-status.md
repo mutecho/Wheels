@@ -2,108 +2,63 @@
 
 ## Task Snapshot
 
-- scope: add an opt-in ME qn denominator split for qn-specific build-cf slices
+- scope: resolve the remote/local merge and combine qn-aware ME splitting,
+  configurable Levy parameters, and build-side mT/phi rebin
 - current conclusion:
-  `build.split_mixed_event_by_qn = true` now makes ME projections follow the
-  current qn selection when `split_same_event_by_qn = true`; the default remains
-  qn-integrated ME so existing configs preserve their old CF content
+  the resolved workflow preserves all three feature contracts. mT/phi rebin is
+  performed on sparse selection axes before q projection; ME projections can
+  independently follow the merged phi interval and current qn interval; fit
+  parameter overrides remain shared by chi2 and PML paths
 - primary evidence:
-  - `BuildCfConfig`, TOML parsing, and validation now include
-    `split_mixed_event_by_qn`
-  - validation rejects `split_mixed_event_by_qn = true` unless
-    `split_same_event_by_qn = true`
-  - `RunBuildCf()` applies the current qn selection to ME projections only when
-    the new switch is enabled; qn-all slices still use the full qn axis
-  - `meta/SliceCatalog` writes `split_mixed_event_by_qn`, and legacy catalogs
-    without that branch read it as `false`
-  - `SliceCatalogRoundTripTest` now compares toy qn1 `ME_raw3d` integrals and
-    checks that the qn-split ME denominator is narrower than the old qn-all ME
+  - `BuildCfConfig` and TOML parsing retain `split_mixed_event_by_qn`, both
+    per-axis rebin specifications, `[[bins.phi]]`, and all ten
+    `[fit.parameters.*]` overrides
+  - `RunBuildCf()` applies the selected mT range to SE/ME and composes phi and
+    qn denominator policies for all four split-switch combinations
+  - `SliceCatalog`, `FitCatalog`, and TSV output retain qn policy plus mT/phi
+    rebin provenance; legacy catalogs default to qn-integrated ME, legacy mT
+    ranges, and native phi
+  - the Wenya config keeps qn-all plus qn1/qn2/qn3 SAME slices, phi-matched ME,
+    qn-integrated ME, explicit native phi, range-based mT grouping, and fixed
+    `alpha = 2`
+  - the operator script again defaults to `config/oo_build_and_fit.toml`; NeNe
+    and six-bin OO runs remain available through `--config`
 - verification:
-  `scripts/cmake.sh`, `ctest --test-dir build --output-on-failure`, and
-  `git diff --check` passed; ctest skipped the ROOT-backed tests by guard, and
-  direct O2Physics executor validation of `bin/slice_catalog_roundtrip_test`
-  returned `STATUS: ESCALATION_REQUIRED` before ROOT was usable; the required
-  escalated rerun was auto-rejected by the platform usage limit, so the new
-  ROOT-backed qn integral assertion is compiled but not executed in this run
+  `2026-08-13` O2Physics ROOT executor build and full CTest returned
+  `PRIMARY_OK`; all six tests passed in 32.06 seconds, including ROOT-backed
+  combined qn/phi/mT coverage, catalog compatibility, fit-parameter smoke, and
+  the complete workflow smoke test
 
 ## Previous Snapshot
 
-- scope: expose main 3D Levy fit parameter seeds, limits, and selected fixed
-  values through TOML
+- scope: add and validate configurable build-side mT/phi rebin support with an
+  explicit on/off switch and visible rebin metadata
 - current conclusion:
-  `fit` now accepts optional `[fit.parameters.<name>]` subtables for the main
-  Levy parameters while preserving every legacy default when the table is
-  omitted
+  `Exp_femto_3d` now accepts `[build.rebin.mt]` and `[build.rebin.phi]` with
+  `enabled = false|true`, supports either factor or explicit range modes, keeps
+  phi native when the new switch is omitted, and records the final rebin mode in
+  `SliceCatalog` / `FitCatalog` / TSV metadata
 - primary evidence:
-  - supported parameter names are `norm`, `lambda`, `rout2`, `rside2`,
-    `rlong2`, `routside2`, `routlong2`, `rsidelong2`, `alpha`, and
-    `baseline_q2`
-  - each subtable can override `initial`, `min`, and `max`; `lambda` and
-    `alpha` also support `fixed_value`
-  - config validation rejects unknown parameter names, unknown fields,
-    non-finite numeric values, one-sided limits, `min >= max`, non-fixable
-    `fixed_value`, fixed values outside effective bounds, `lambda` overrides
-    with `use_core_halo_lambda = false`, and `baseline_q2` overrides with
-    `use_q2_baseline = false`
-  - both diag and full `TF3` builders apply the same effective parameter
-    defaults/overrides, and the PML `TMinuit` path uses the same fixed-parameter
-    decision for `lambda` and `alpha`
-  - README, example TOMLs, and `docs/数学物理公式流程说明.md` document the new
-    operator-facing interface and default compatibility behavior
-  - `scripts/cmake.sh` rebuilt the project successfully with CATS support
-  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
-    the ROOT-backed tests were skipped by the local ctest guard
-  - after the sandboxed O2Physics ROOT executor reported `ESCALATION_REQUIRED`
-    for the known `/dev/fd` runtime-entry failure, non-sandboxed executor runs
-    returned `PRIMARY_OK` for `bin/slice_catalog_roundtrip_test` and
-    `bin/workflow_smoke_test`; `workflow_smoke_test` now checks fixed
-    `lambda=0.65` and `alpha=1.20` in both chi2 and PML fit paths
-- verification: local build/config tests passed, and ROOT-backed smoke coverage
-  passed in a clean O2Physics runtime
-
-## Earlier Snapshot
-
-- scope: add and validate Wenya PbPb LHC23 qn-all plus qn1/qn2/qn3
-  build/fit support
-- current conclusion:
-  `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` now runs the
-  target Wenya input through the existing `Exp_femto_3d` `SliceCatalog`/`slices`
-  output structure with qn-all preserved and SAME-side qn split into qn1,
-  qn2, and qn3
-- primary evidence:
-  - the config reads
-    `/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya/3Dfemto_cent_mt_q2_phi_LHC23_merge.root`
-    from `SameEvent_3Dqn` and `MixedEvent_3Dqn`
-  - `[build].split_same_event_by_qn = true` and `[[bins.qn]]` defines
-    `qn1 = 0-3`, `qn2 = 3-7`, and `qn3 = 7-10`; qn-all remains in the output
-    with the historical cent/mT group id
-  - build bins follow the existing PbPb mT setup and stop centrality at
-    `50-80`; fit selection follows the existing PbPb `0-10`, `10-30`,
-    `30-50` centrality subset and three selected mT bins
-  - fit settings remain the existing PbPb Gamow/Coulomb, core-halo lambda,
-    q2-baseline, PML, full-model setup with `fit_q_max = 0.15`
-  - `config_parse_validation_test` now parses and checks the Wenya production
-    config contract
-  - `scripts/cmake.sh` configured with CATS support and rebuilt all targets
-  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
-    the two ROOT-backed tests were then run directly through the O2Physics
-    executor and returned `PRIMARY_OK`
-  - production `build-cf` returned `PRIMARY_OK` and wrote `1040` slices with no
-    skipped zero-content groups or slices
-  - production `fit` returned `PRIMARY_OK` and fitted `468/468` selected slices
-    with no missing CF objects or raw SE/ME histograms
-  - ROOT inspection returned `PRIMARY_OK`: `meta/SliceCatalog` has `1040`
-    entries, qn metadata branches, and qn_all/qn1/qn2/qn3 each have `260`
-    build slices and `20` phi-all slices
-  - detailed fit `meta/FitCatalog` has `468` entries; qn_all/qn1/qn2/qn3 each
-    have `117` fitted slices and `9` phi-all fitted slices
-  - detailed fit ROOT contains representative qn-all and qn1/qn2/qn3
-    `summary/R2_vs_phi` objects
-  - report ROOT contains `meta/FitCatalog`, representative qn-all and qn1
-    `summary/R2_vs_phi`, `source_parameters`, and `eps_vs_mt` objects; TSV has
-    `469` lines including the header
-- verification: production Wenya build/fit completed and outputs were inspected
-  successfully
+  - `build.rebin.phi` now allows overlapping explicit `[[bins.phi]]` ranges and
+    still rejects exact duplicates
+  - build and fit catalog entries carry `mt_rebin_enabled`, `mt_rebin_mode`,
+    `phi_rebin_enabled`, and `phi_rebin_mode`
+  - `build-cf` resolves all target selections before projection, merges native
+    bins in factor mode, and keeps `phi_all` on the full native phi span
+  - invalid axis edges, factor divisibility, symmetric-phi seam crossings,
+    duplicate paths, and dynamic fit mT selections fail before existing CF/fit
+    ROOT outputs are reset
+  - `config_parse_validation_test` covers explicit disabled, factor, range,
+    and invalid rebin contracts
+  - `build_cf_rebin_test` covers factor rebin, metadata persistence, path
+    uniqueness, CF=1 proportional SE/ME closure, finite stored errors/Sumw2,
+    q-axis preservation, and axis/seam failure modes
+  - CMake build ran through the O2Physics ROOT executor with `PRIMARY_OK`
+  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`
+    for all six registered tests in 16.61 seconds with executor status
+    `PRIMARY_OK`
+- verification: locally verified through the O2Physics ROOT executor with
+  passing config, ROOT-backed, and full `ctest` coverage
 
 ## Earlier Snapshot
 
@@ -236,13 +191,21 @@
 
 ## Verification Status
 
-- verification_status: locally verified for config parsing, ROOT-backed smoke
-  coverage, Wenya production build/fit output structure, Coulomb kernel
-  behavior, and docs-only formula workflow sync
+- verification_status: verified for the new rebin config contract, synthetic
+  ROOT projection/normalization behavior, catalog metadata/compatibility,
+  safe-failure ordering, the full six-test suite, previous Wenya production
+  output structure, and Coulomb kernel behavior
 - project_state_sync_status: written
 
 Reason:
 
+- `2026-08-12` O2Physics ROOT executor build plus
+  `ctest --test-dir build --output-on-failure` returned `PRIMARY_OK`; all six
+  registered tests passed in 16.61 seconds
+- the synthetic rebin test verifies SE/ME integral conservation, proportional
+  `CF3D = 1`, finite non-negative errors with Sumw2, unchanged q axes, final
+  physical metadata ranges, dynamic mT fit selection, and output preservation
+  on build/fit validation failures
 - `2026-06-30` added Wenya PbPb LHC23 qn-all plus qn1/qn2/qn3 production
   support and verified it with O2Physics ROOT executor build, `ctest`,
   production `build-cf`, production `fit`, ROOT catalog/report inspection, and

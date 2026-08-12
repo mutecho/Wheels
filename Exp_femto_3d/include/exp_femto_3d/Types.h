@@ -30,6 +30,14 @@ namespace exp_femto_3d {
     kDisabled,
   };
 
+  // Rebin modes describe how one output selection is formed from normal sparse-axis bins.
+  enum class RebinMode {
+    kNative,
+    kFactor,
+    kRanges,
+    kLegacyRanges,
+  };
+
   enum class CoulombMode {
     kNone,
     kGamow,
@@ -67,6 +75,16 @@ namespace exp_femto_3d {
     }
   };
 
+  // Axis rebin settings are resolved against the input ROOT axis at build time.
+  struct AxisRebinConfig {
+    bool configured = false;
+    bool enabled = false;
+    RebinMode mode = RebinMode::kNative;
+    std::optional<int> factor;
+    std::optional<double> min;
+    std::optional<double> max;
+  };
+
   struct InputConfig {
     std::string input_root;
     std::string task_name;
@@ -92,9 +110,12 @@ namespace exp_femto_3d {
     bool split_mixed_event_by_phi = false;
     bool split_same_event_by_qn = false;
     bool split_mixed_event_by_qn = false;
+    AxisRebinConfig phi_rebin;
+    AxisRebinConfig mt_rebin;
     ProgressMode progress = ProgressMode::kAuto;
   };
 
+  // A parameter override changes only explicitly configured fit seeds, bounds, or supported fixed values.
   struct LevyFitParameterOverride {
     std::optional<double> initial;
     std::optional<double> min;
@@ -102,6 +123,7 @@ namespace exp_femto_3d {
     std::optional<double> fixed_value;
   };
 
+  // The typed collection keeps chi-square and PML fit setup on one validated parameter contract.
   struct LevyFitParameterOverrides {
     LevyFitParameterOverride norm;
     LevyFitParameterOverride lambda;
@@ -140,6 +162,7 @@ namespace exp_femto_3d {
     FitConfig fit;
     std::vector<RangeBin> centrality_bins;
     std::vector<RangeBin> mt_bins;
+    std::vector<RangeBin> phi_bins;
     std::vector<RangeBin> qn_bins;
     std::vector<RangeBin> fit_centrality_bins;
     std::vector<RangeBin> fit_mt_bins;
@@ -175,6 +198,10 @@ namespace exp_femto_3d {
     bool build_uses_symmetric_phi_range = false;
     bool split_mixed_event_by_phi = false;
     bool split_mixed_event_by_qn = false;
+    bool mt_rebin_enabled = false;
+    std::string mt_rebin_mode = "legacy";
+    bool phi_rebin_enabled = false;
+    std::string phi_rebin_mode = "native";
     bool is_qn_integrated = true;
     bool is_phi_integrated = false;
   };
@@ -196,7 +223,15 @@ namespace exp_femto_3d {
     double qn_high = std::numeric_limits<double>::quiet_NaN();
     std::string qn_label = "qn_all";
     double phi = std::numeric_limits<double>::quiet_NaN();
+    double raw_phi_low = 0.0;
+    double raw_phi_high = 0.0;
+    double display_phi_low = 0.0;
+    double display_phi_high = 0.0;
     bool fit_uses_symmetric_phi_range = false;
+    bool mt_rebin_enabled = false;
+    std::string mt_rebin_mode = "legacy";
+    bool phi_rebin_enabled = false;
+    std::string phi_rebin_mode = "native";
     bool is_qn_integrated = true;
     bool is_phi_integrated = false;
     double norm = std::numeric_limits<double>::quiet_NaN();
@@ -262,6 +297,14 @@ namespace exp_femto_3d {
     std::size_t skipped_zero_mixed_event_groups = 0;
     std::size_t skipped_zero_mixed_event_slices = 0;
     std::size_t skipped_zero_same_event_slices = 0;
+    std::size_t mt_input_bins = 0;
+    std::size_t mt_output_bins = 0;
+    std::size_t phi_input_bins = 0;
+    std::size_t phi_output_bins = 0;
+    bool mt_rebin_enabled = false;
+    bool phi_rebin_enabled = false;
+    RebinMode mt_rebin_mode = RebinMode::kNative;
+    RebinMode phi_rebin_mode = RebinMode::kNative;
   };
 
   struct FitRunStatistics {

@@ -1,38 +1,37 @@
 # Changelog
 
+## 2026-08-13
+
+- Resolved the remote/local conflict as a semantic union of three independent
+  contracts: qn-aware ME denominators, configurable Levy fit parameters, and
+  build-side mT/phi rebin.
+- Composed phi and qn selections in the ME projection helper so split-ME mode
+  follows the final merged phi interval and, when enabled, the current qn
+  range; `phi_all` and qn-all retain full normal-axis coverage.
+- Kept both qn policy and rebin provenance in SliceCatalog/FitCatalog/TSV and
+  preserved legacy catalog defaults.
+- Reconciled the Wenya config, restored the stable OO default runner, expanded
+  combined qn/phi/mT coverage, and synchronized README, formula docs, and the
+  project ledger.
+- O2Physics ROOT executor build and full CTest returned `PRIMARY_OK`; all six
+  registered tests passed in 32.06 seconds.
+
+## 2026-08-12
+
+- Added `[build.rebin.mt]` and `[build.rebin.phi]` with explicit enable
+  switches, factor/range modes, `[[bins.phi]]`, pre-projection sparse-axis
+  grouping, rebin-aware paths, and catalog/TSV provenance.
+- Added preflight validation for edge alignment, divisibility, phi mapping
+  seams, duplicate paths, and safe output preservation.
+- Added `build_cf_rebin_test` and expanded config/catalog/workflow coverage.
+
 ## 2026-07-01
 
-- Added optional `[build].split_mixed_event_by_qn` support so qn-specific
-  build-cf slices can use ME denominators projected over the same qn interval as
-  the SAME slice.
-- Preserved backward-compatible defaults: the new switch defaults to `false`,
-  requires `split_same_event_by_qn = true`, and legacy `SliceCatalog` files
-  missing `split_mixed_event_by_qn` read as qn-integrated ME.
-- Persisted `split_mixed_event_by_qn` in `meta/SliceCatalog` and extended
-  config/catalog roundtrip coverage to verify the narrower qn-specific
-  `ME_raw3d` denominator on toy ROOT input.
-- Verified compile/config coverage with `scripts/cmake.sh`,
-  `ctest --test-dir build --output-on-failure`, and `git diff --check`; direct
-  O2Physics execution of `bin/slice_catalog_roundtrip_test` was blocked after
-  `STATUS: ESCALATION_REQUIRED` because the required escalated rerun was
-  auto-rejected by the platform usage limit.
-
-- Added optional `[fit.parameters.<name>]` TOML subtables for main 3D Levy fit
-  parameter `initial`, `min`, and `max` overrides.
-- Supported `fixed_value` for `lambda` and `alpha` only; both ROOT `TH3::Fit`
-  and PML/TMinuit paths now treat those parameters as fixed when configured.
-- Preserved legacy defaults when `[fit.parameters]` is omitted, including
-  default bounds, q2-baseline bounds derived from `fit_q_max`, and output
-  ROOT/TSV schema.
-- Added strict config validation for unsupported parameter names/fields,
-  non-finite values, incomplete or invalid limits, unsupported fixed values,
-  fixed values outside effective bounds, and switch conflicts with
-  `use_core_halo_lambda=false` or `use_q2_baseline=false`.
-- Updated README, example TOMLs, `docs/数学物理公式流程说明.md`, and
-  `project-state/` with the new interface and validation evidence.
-- Verified with `scripts/cmake.sh`, `ctest --test-dir build --output-on-failure`,
-  and non-sandboxed O2Physics runs of `bin/slice_catalog_roundtrip_test` and
-  `bin/workflow_smoke_test`.
+- Added optional `[build].split_mixed_event_by_qn`, preserved qn-integrated ME
+  as the default, and recorded the policy in SliceCatalog with legacy fallback.
+- Added optional `[fit.parameters.<name>]` controls for all main Levy
+  parameters, including fixed lambda/alpha support shared by chi2 and PML.
+- Added strict config validation and ROOT-backed fit/qn regression coverage.
 
 ## 2026-06-30
 

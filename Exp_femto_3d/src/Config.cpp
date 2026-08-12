@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -278,6 +280,7 @@ namespace exp_femto_3d {
       return parameter;
     }
 
+    // Map supported Levy parameter tables into one validated contract shared by both fit objectives.
     LevyFitParameterOverrides ParseLevyFitParameterOverrides(const toml::table *parameters_table) {
       LevyFitParameterOverrides parameters;
       if (parameters_table == nullptr) {
@@ -297,6 +300,105 @@ namespace exp_femto_3d {
         *target = ParseLevyFitParameterOverride(*parameter_table, parameter_name);
       }
       return parameters;
+    }
+
+    // Rebin tables are optional for legacy compatibility, but complete and strongly typed when present.
+    AxisRebinConfig ParseAxisRebinConfig(const toml::table *rebin_table, const std::string &axis_name) {
+      AxisRebinConfig config;
+      if (rebin_table == nullptr) {
+        return config;
+      }
+
+      const toml::node *axis_node = rebin_table->get(axis_name);
+      if (axis_node == nullptr) {
+        return config;
+      }
+      const auto *axis_table = axis_node->as_table();
+      if (axis_table == nullptr) {
+        throw ConfigError("build.rebin." + axis_name + " must be a table.");
+      }
+
+      config.configured = true;
+      const auto enabled = (*axis_table)["enabled"].value<bool>();
+      if (!enabled.has_value()) {
+        throw ConfigError("build.rebin." + axis_name + ".enabled must be specified as a boolean.");
+      }
+      config.enabled = *enabled;
+
+      if (axis_table->contains("factor")) {
+        const auto factor = (*axis_table)["factor"].value<std::int64_t>();
+        if (!factor.has_value() || *factor < std::numeric_limits<int>::min()
+            || *factor > std::numeric_limits<int>::max()) {
+          throw ConfigError("build.rebin." + axis_name + ".factor must be an integer.");
+        }
+        config.factor = static_cast<int>(*factor);
+      }
+      if (axis_table->contains("min")) {
+        const auto min = (*axis_table)["min"].value<double>();
+        if (!min.has_value()) {
+          throw ConfigError("build.rebin." + axis_name + ".min must be numeric.");
+        }
+        config.min = *min;
+      }
+      if (axis_table->contains("max")) {
+        const auto max = (*axis_table)["max"].value<double>();
+        if (!max.has_value()) {
+          throw ConfigError("build.rebin." + axis_name + ".max must be numeric.");
+        }
+        config.max = *max;
+      }
+      return config;
+    }
+
+    // Resolve the configuration-only mode; physical edge and factor checks wait for the ROOT axis.
+    void ValidateAxisRebinConfig(const std::string &axis_name,
+                                 AxisRebinConfig &rebin,
+                                 const std::vector<RangeBin> &ranges,
+                                 const bool allow_legacy_ranges) {
+      const std::string context = "build.rebin." + axis_name;
+      if (!rebin.configured) {
+        if (!ranges.empty() && !allow_legacy_ranges) {
+          throw ConfigError("[[bins." + axis_name + "]] requires an explicit " + context + " table.");
+        }
+        rebin.enabled = false;
+        rebin.mode = ranges.empty() ? RebinMode::kNative : RebinMode::kLegacyRanges;
+        return;
+      }
+
+      const bool has_factor = rebin.factor.has_value();
+      const bool has_ranges = !ranges.empty();
+      const bool has_min = rebin.min.has_value();
+      const bool has_max = rebin.max.has_value();
+      if (has_min != has_max) {
+        throw ConfigError(context + ".min and .max must be specified together.");
+      }
+      if (has_min && (!std::isfinite(*rebin.min) || !std::isfinite(*rebin.max) || *rebin.max <= *rebin.min)) {
+        throw ConfigError(context + ".min/.max must define a finite increasing range.");
+      }
+
+      if (!rebin.enabled) {
+        if (has_factor || has_ranges || has_min) {
+          throw ConfigError(context + " is disabled and cannot contain factor, min/max, or [[bins." + axis_name
+                            + "]] ranges.");
+        }
+        rebin.mode = RebinMode::kNative;
+        return;
+      }
+
+      if (has_factor == has_ranges) {
+        throw ConfigError(context + " enabled=true requires exactly one of factor or [[bins." + axis_name + "]].");
+      }
+      if (has_factor) {
+        if (*rebin.factor < 2) {
+          throw ConfigError(context + ".factor must be >= 2.");
+        }
+        rebin.mode = RebinMode::kFactor;
+        return;
+      }
+      if (has_min) {
+        throw ConfigError(context + ".min/.max are only valid in factor mode.");
+      }
+      rebin.mode = RebinMode::kRanges;
     }
 
   }  // namespace
@@ -345,6 +447,13 @@ namespace exp_femto_3d {
         ReadOptionalBool(build, "split_mixed_event_by_qn", config.build.split_mixed_event_by_qn);
     config.build.progress = ReadOptionalProgressMode(build, "progress", config.build.progress);
 
+    const toml::table *rebin = build["rebin"].as_table();
+    if (build.contains("rebin") && rebin == nullptr) {
+      throw ConfigError("build.rebin must be a table.");
+    }
+    config.build.phi_rebin = ParseAxisRebinConfig(rebin, "phi");
+    config.build.mt_rebin = ParseAxisRebinConfig(rebin, "mt");
+
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
     const std::optional<bool> legacy_use_coulomb = ReadOptionalNullableBool(fit, "use_coulomb");
     const auto explicit_coulomb_mode = fit["coulomb_mode"].value<std::string>();
@@ -385,6 +494,7 @@ namespace exp_femto_3d {
     if (const auto *bins = root["bins"].as_table(); bins != nullptr) {
       config.centrality_bins = ParseRangeBinArray(GetOptionalArray(*bins, "centrality"), "bins.centrality");
       config.mt_bins = ParseRangeBinArray(GetOptionalArray(*bins, "mt"), "bins.mt");
+      config.phi_bins = ParseRangeBinArray(GetOptionalArray(*bins, "phi"), "bins.phi");
       config.qn_bins = ParseRangeBinArray(GetOptionalArray(*bins, "qn"), "bins.qn");
     }
 
@@ -437,7 +547,17 @@ namespace exp_femto_3d {
     ValidateFixedValueInsideEffectiveBounds("fit.parameters.alpha", config.fit.options.parameters.alpha, 0.5, 2.0);
 
     ValidateRangeCollection("centrality", config.centrality_bins, true);
-    ValidateRangeCollection("mt", config.mt_bins, true);
+    if (!config.mt_bins.empty()) {
+      ValidateRangeCollection("mt", config.mt_bins, true);
+    }
+    if (!config.phi_bins.empty()) {
+      ValidateRangeCollection("phi", config.phi_bins, true);
+    }
+    ValidateAxisRebinConfig("mt", config.build.mt_rebin, config.mt_bins, true);
+    ValidateAxisRebinConfig("phi", config.build.phi_rebin, config.phi_bins, false);
+    if (!config.build.mt_rebin.configured && config.mt_bins.empty()) {
+      throw ConfigError("Missing [[bins.mt]] for legacy mode; configure build.rebin.mt for native/factor mode.");
+    }
     if (config.build.split_mixed_event_by_qn && !config.build.split_same_event_by_qn) {
       throw ConfigError("build.split_mixed_event_by_qn requires build.split_same_event_by_qn = true.");
     }
@@ -456,21 +576,22 @@ namespace exp_femto_3d {
     if (config.fit_centrality_bins.empty()) {
       config.fit_centrality_bins = config.centrality_bins;
     }
-    if (config.fit_mt_bins.empty()) {
-      config.fit_mt_bins = config.mt_bins;
-    }
-
     ValidateRangeCollection("fit_selection.centrality", config.fit_centrality_bins, true);
-    ValidateRangeCollection("fit_selection.mt", config.fit_mt_bins, true);
+    if (!config.fit_mt_bins.empty()) {
+      ValidateRangeCollection("fit_selection.mt", config.fit_mt_bins, true);
+    }
 
     for (const RangeBin &bin : config.fit_centrality_bins) {
       if (!ContainsExactRange(config.centrality_bins, bin)) {
         throw ConfigError("Each fit_selection.centrality bin must exactly match a build bin.");
       }
     }
-    for (const RangeBin &bin : config.fit_mt_bins) {
-      if (!ContainsExactRange(config.mt_bins, bin)) {
-        throw ConfigError("Each fit_selection.mt bin must exactly match a build bin.");
+    if (config.build.mt_rebin.mode == RebinMode::kRanges
+        || config.build.mt_rebin.mode == RebinMode::kLegacyRanges) {
+      for (const RangeBin &bin : config.fit_mt_bins) {
+        if (!ContainsExactRange(config.mt_bins, bin)) {
+          throw ConfigError("Each fit_selection.mt bin must exactly match a configured build bin.");
+        }
       }
     }
 
@@ -603,6 +724,20 @@ namespace exp_femto_3d {
       return ProgressMode::kDisabled;
     }
     throw ConfigError("Unsupported progress mode: " + token);
+  }
+
+  std::string ToString(const RebinMode mode) {
+    switch (mode) {
+      case RebinMode::kNative:
+        return "native";
+      case RebinMode::kFactor:
+        return "factor";
+      case RebinMode::kRanges:
+        return "ranges";
+      case RebinMode::kLegacyRanges:
+        return "legacy";
+    }
+    return "native";
   }
 
 }  // namespace exp_femto_3d

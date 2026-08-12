@@ -19,5 +19,6 @@ namespace exp_femto_3d {
   [[nodiscard]] FiniteSourceMode ParseFiniteSourceMode(const std::string &token);
   [[nodiscard]] std::string ToString(ProgressMode mode);
   [[nodiscard]] ProgressMode ParseProgressMode(const std::string &token);
+  [[nodiscard]] std::string ToString(RebinMode mode);
 
 }  // namespace exp_femto_3d

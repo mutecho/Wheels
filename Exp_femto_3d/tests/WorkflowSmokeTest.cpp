@@ -46,13 +46,13 @@ namespace {
     auto *same_dir = task->mkdir("Same");
     auto *mixed_dir = task->mkdir("Mixed");
 
-    const int bins[7] = {6, 6, 6, 2, 2, 1, 3};
+    const int bins[7] = {6, 6, 6, 2, 2, 1, 4};
     const double min[7] = {-0.15, -0.15, -0.15, 0.2, 0.0, -0.5, 0.0};
     const double max[7] = {0.15, 0.15, 0.15, 0.4, 10.0, 0.5, 3.14159265358979323846};
 
     auto same = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
-    for (double phi : {0.3, 1.3, 2.5}) {
+    for (double phi : {0.3, 1.1, 2.0, 2.8}) {
       FillSparse(*same, 0.01, 0.00, 0.01, 0.3, 5.0, phi, 50.0);
       FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 42.0);
       FillSparse(*same, 0.02, -0.01, 0.00, 0.3, 5.0, phi, 35.0);
@@ -265,9 +265,9 @@ int main() {
                                                             std::nullopt);
   const ApplicationConfig mapped_follow_config = LoadApplicationConfig(mapped_follow_config_path);
   const BuildCfRunStatistics mapped_build_stats = RunBuildCf(mapped_follow_config, logger);
-  Expect(mapped_build_stats.stored_slices == 4, "mapped build-cf should produce 4 slices");
+  Expect(mapped_build_stats.stored_slices == 5, "mapped build-cf should produce 5 seam-safe slices");
   const FitRunStatistics mapped_follow_fit_stats = RunFit(mapped_follow_config, logger);
-  Expect(mapped_follow_fit_stats.selected_slices == 4, "follow-input fit should select every built slice");
+  Expect(mapped_follow_fit_stats.selected_slices == 5, "follow-input fit should select every built slice");
 
   TFile mapped_cf_file((temp_dir / "mapped_cf.root").string().c_str(), "READ");
   Expect(mapped_cf_file.Get("meta/SliceCatalog") != nullptr, "mapped SliceCatalog missing");
@@ -326,7 +326,7 @@ fixed_value = 1.20
                                                             fixed_parameter_lines);
   const ApplicationConfig fixed_non_pml_config = LoadApplicationConfig(fixed_non_pml_config_path);
   const FitRunStatistics fixed_non_pml_stats = RunFit(fixed_non_pml_config, logger);
-  Expect(fixed_non_pml_stats.fitted_slices == 4, "fixed-parameter chi2 fit should fit every selected slice");
+  Expect(fixed_non_pml_stats.fitted_slices == 5, "fixed-parameter chi2 fit should fit every selected slice");
   (void)InspectFitCatalog(temp_dir / "fixed_non_pml_fit.root", "none", 0.65, 1.20);
 
   const std::string fixed_pml_config_path = WriteConfig(temp_dir / "fixed_pml.toml",
@@ -343,7 +343,7 @@ fixed_value = 1.20
                                                         fixed_parameter_lines);
   const ApplicationConfig fixed_pml_config = LoadApplicationConfig(fixed_pml_config_path);
   const FitRunStatistics fixed_pml_stats = RunFit(fixed_pml_config, logger);
-  Expect(fixed_pml_stats.fitted_slices == 4, "fixed-parameter PML fit should fit every selected slice");
+  Expect(fixed_pml_stats.fitted_slices == 5, "fixed-parameter PML fit should fit every selected slice");
   (void)InspectFitCatalog(temp_dir / "fixed_pml_fit.root", "none", 0.65, 1.20);
 
   const std::string mapped_override_raw_config_path = WriteConfig(temp_dir / "mapped_override_raw.toml",
@@ -357,7 +357,7 @@ fixed_value = 1.20
                                                                   false);
   const ApplicationConfig mapped_override_raw_config = LoadApplicationConfig(mapped_override_raw_config_path);
   const FitRunStatistics mapped_override_raw_fit_stats = RunFit(mapped_override_raw_config, logger);
-  Expect(mapped_override_raw_fit_stats.selected_slices == 4,
+  Expect(mapped_override_raw_fit_stats.selected_slices == 5,
          "raw override fit should select every slice from the mapped CF");
   const FitCatalogInspection mapped_override_raw_inspection =
       InspectFitCatalog(temp_dir / "mapped_override_raw_fit.root");
@@ -383,9 +383,9 @@ fixed_value = 1.20
                                                                   true);
   const ApplicationConfig raw_override_mapped_config = LoadApplicationConfig(raw_override_mapped_config_path);
   const BuildCfRunStatistics raw_build_stats = RunBuildCf(raw_override_mapped_config, logger);
-  Expect(raw_build_stats.stored_slices == 4, "raw build-cf should produce 4 slices");
+  Expect(raw_build_stats.stored_slices == 5, "raw build-cf should produce 5 slices");
   const FitRunStatistics raw_override_mapped_fit_stats = RunFit(raw_override_mapped_config, logger);
-  Expect(raw_override_mapped_fit_stats.selected_slices == 4,
+  Expect(raw_override_mapped_fit_stats.selected_slices == 5,
          "mapped override fit should select every slice from the raw CF");
   const FitCatalogInspection raw_override_mapped_inspection =
       InspectFitCatalog(temp_dir / "raw_override_mapped_fit.root");
@@ -444,8 +444,8 @@ fixed_value = 1.20
                                                            "finite_source_mode = \"fixed_1d\"\n");
   const ApplicationConfig finite_fixed_config = LoadApplicationConfig(finite_fixed_config_path);
   const FitRunStatistics finite_fixed_stats = RunFit(finite_fixed_config, logger);
-  Expect(finite_fixed_stats.selected_slices == 4, "finite-source fit should select every built slice");
-  Expect(finite_fixed_stats.fitted_slices == 4, "finite-source fit should fit every selected slice");
+  Expect(finite_fixed_stats.selected_slices == 5, "finite-source fit should select every built slice");
+  Expect(finite_fixed_stats.fitted_slices == 5, "finite-source fit should fit every selected slice");
   (void)InspectFitCatalog(temp_dir / "finite_fixed_fit.root", "finite_source");
   ExpectCoulombKernelCatalog(temp_dir / "finite_fixed_fit.root", true);
   ExpectCoulombKernelCatalog(temp_dir / "finite_fixed_report.root", true);
@@ -463,8 +463,8 @@ fixed_value = 1.20
                                                                "finite_source_mode = \"iterative_1d\"\n");
   const ApplicationConfig finite_iterative_config = LoadApplicationConfig(finite_iterative_config_path);
   const FitRunStatistics finite_iterative_stats = RunFit(finite_iterative_config, logger);
-  Expect(finite_iterative_stats.selected_slices == 4, "iterative finite-source fit should select every built slice");
-  Expect(finite_iterative_stats.fitted_slices == 4, "iterative finite-source fit should fit every selected slice");
+  Expect(finite_iterative_stats.selected_slices == 5, "iterative finite-source fit should select every built slice");
+  Expect(finite_iterative_stats.fitted_slices == 5, "iterative finite-source fit should fit every selected slice");
   (void)InspectFitCatalog(temp_dir / "finite_iterative_fit.root", "finite_source");
   ExpectCoulombKernelCatalog(temp_dir / "finite_iterative_fit.root", true);
   ExpectCoulombKernelCatalog(temp_dir / "finite_iterative_report.root", true);

@@ -179,6 +179,22 @@ add_test(
           $<TARGET_FILE:slice_catalog_roundtrip_test>
 )
 
+add_executable(build_cf_rebin_test
+  tests/BuildCfRebinTest.cpp
+)
+
+target_link_libraries(build_cf_rebin_test
+  PRIVATE
+    exp_femto_3d_core
+)
+
+add_test(
+  NAME build_cf_rebin_test
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_root_guard.sh
+          $<TARGET_FILE:root_runtime_probe>
+          $<TARGET_FILE:build_cf_rebin_test>
+)
+
 add_executable(workflow_smoke_test
   tests/WorkflowSmokeTest.cpp
 )
@@ -196,6 +212,7 @@ add_test(
 )
 
 set_tests_properties(
+  build_cf_rebin_test
   slice_catalog_roundtrip_test
   workflow_smoke_test
   PROPERTIES

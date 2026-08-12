@@ -1,86 +1,55 @@
 # Tests
 
-## T-015: Optional ME Qn Denominator Split
+## T-016: Resolved Merge Compatibility Matrix
 
-- date: 2026-07-01
-- environment: local CMake build; O2Physics ROOT executor blocked before ROOT
-  became usable in the sandbox
+- date: 2026-08-13
+- environment: O2Physics ROOT executor, CATS finite-source support enabled
 - command:
 
 ```bash
-scripts/cmake.sh
-ctest --test-dir build --output-on-failure
-git diff --check
-
 bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
-  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
-  --command 'bin/slice_catalog_roundtrip_test'
+  --cwd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d \
+  --command 'cmake --build build -j4 && ctest --test-dir build --output-on-failure'
 ```
 
-- result: partially verified; ROOT-backed direct validation blocked
+- result: passed, executor status `PRIMARY_OK`
 - evidence:
-  - `scripts/cmake.sh` configured with CATS finite-source support enabled and
-    rebuilt all targets successfully
-  - first `ctest --test-dir build --output-on-failure` exposed that
-    `config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml` had
-    `split_same_event_by_qn` commented out while the test and production
-    contract expect it enabled; restoring the explicit `true` value made the
-    config, test, and qn-split baseline consistent again
-  - rerun `ctest --test-dir build --output-on-failure` reported `100% tests
-    passed`; `slice_catalog_roundtrip_test` and `workflow_smoke_test` were
-    skipped by the local ROOT guard
-  - `git diff --check` passed
-  - the direct O2Physics ROOT executor command for
-    `bin/slice_catalog_roundtrip_test` returned `STATUS: ESCALATION_REQUIRED`
-    before ROOT was usable; the required escalated rerun was auto-rejected by
-    the platform usage limit, so this run did not execute the new ROOT-backed
-    qn1 `ME_raw3d` integral comparison
+  - all affected production and test targets compiled successfully
+  - full CTest passed 6/6 in 32.06 seconds
+  - `config_parse_validation_test` covers rebin modes, qn-ME dependencies,
+    and all supported Levy parameter override contracts
+  - `slice_catalog_roundtrip_test` covers qn denominator metadata, rebin
+    metadata, and legacy defaults
+  - `build_cf_rebin_test` covers combined qn/phi/mT selections, SE/ME
+    closure, integral behavior, q-axis preservation, paths, physical ranges,
+    seam/alignment/divisibility failures, and safe output ordering
+  - `workflow_smoke_test` covers FitCatalog propagation and fixed
+    lambda/alpha behavior in chi2 and PML
 - significance:
-  verifies compile/config compatibility for `split_mixed_event_by_qn` and
-  records the remaining ROOT-backed execution gap for the toy qn-specific ME
-  denominator assertion
+  validates the resolved semantic union rather than only either pre-merge side
 
-## T-014: TOML Levy Fit Parameter Override Validation
+## T-015: Optional ME Qn Split And Levy Parameter Overrides
 
 - date: 2026-07-01
-- environment: local CMake build plus non-sandboxed O2Physics ROOT runtime for
-  ROOT-backed smoke tests
-- command:
-
-```bash
-scripts/cmake.sh
-ctest --test-dir build --output-on-failure
-
-bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
-  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
-  --command 'bin/slice_catalog_roundtrip_test'
-
-bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
-  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
-  --command 'bin/workflow_smoke_test'
-```
-
-- result: passed
+- result: passed in the original feature validation; superseded for merge
+  confidence by T-016
 - evidence:
-  - `scripts/cmake.sh` configured with CATS finite-source support enabled and
-    rebuilt the changed targets successfully
-  - `ctest --test-dir build --output-on-failure` reported `100% tests passed`;
-    `slice_catalog_roundtrip_test` and `workflow_smoke_test` were skipped by
-    the local ROOT guard
-  - the sandboxed O2Physics ROOT executor reported `ESCALATION_REQUIRED` before
-    ROOT became usable, reproducing the known `/dev/fd` runtime-entry failure
-  - non-sandboxed O2Physics ROOT executor
-    `bin/slice_catalog_roundtrip_test` returned `PRIMARY_OK`
-  - non-sandboxed O2Physics ROOT executor `bin/workflow_smoke_test` returned
-    `PRIMARY_OK` and now checks fixed `lambda=0.65` and `alpha=1.20` in both
-    chi2 and PML fit paths
-  - `config_parse_validation_test` covers all ten supported
-    `[fit.parameters.<name>]` entries plus invalid unknown names, unknown
-    fields, non-finite values, one-sided limits, invalid limits, unsupported
-    fixed parameters, fixed values outside bounds, and switch conflicts
-- significance: validates that TOML-exposed Levy parameter seeds, limits, and
-  `lambda`/`alpha` fixed values are parsed and applied in both fit objectives
-  without changing legacy defaults or output schema
+  - config validation covered the qn split dependency and all ten fit parameter
+    tables
+  - ROOT-backed catalog/workflow checks covered qn-specific ME narrowing and
+    fixed lambda/alpha in chi2 and PML
+
+## T-014: Configurable Build-Side mT/phi Rebin Contract
+
+- date: 2026-08-12
+- result: passed in the original feature validation; superseded for merge
+  confidence by T-016
+- evidence:
+  - O2Physics build and full six-test CTest returned `PRIMARY_OK`
+  - synthetic ROOT coverage checked factor/ranges modes, CF closure, metadata,
+    unique paths, q-axis preservation, invalid-boundary failures, and legacy
+    catalog behavior
+
 
 ## T-013: Wenya PbPb LHC23 qn-All Plus qn1/qn2/qn3 Production Build/Fit
 

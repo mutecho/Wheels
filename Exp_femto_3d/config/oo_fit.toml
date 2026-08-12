@@ -23,6 +23,12 @@ write_normalized_se_me_1d_projections = false
 reopen_output_file_per_slice = false
 split_mixed_event_by_phi = false
 
+[build.rebin.phi]
+enabled = false
+
+[build.rebin.mt]
+enabled = true
+
 [fit]
 model = "full"
 use_coulomb = true

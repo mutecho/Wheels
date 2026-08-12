@@ -40,6 +40,9 @@ directory as `build/compile_commands.json`.
 ./bin/exp_femto_3d fit --config config/pbpb_build_and_fit.toml
 ```
 
+`scripts/run_exp_femto_3d.sh` defaults to `config/oo_build_and_fit.toml` and
+`--stage all`; either value can be overridden with the documented CLI flags.
+
 Optional fit overrides:
 
 - `--model full|diag`
@@ -98,6 +101,43 @@ TOML progress control:
   and an ETA computed from completed slices; a heartbeat refreshes the line once
   per second during long ROOT operations
 
+Axis rebin control:
+
+- `[build.rebin.mt]` and `[build.rebin.phi]` make the selected axis explicit and
+  show at a glance whether rebin is enabled
+- `enabled = false` keeps the native input-axis bins and forbids `factor`,
+  `min`/`max`, or `[[bins.*]]` output ranges
+- `enabled = true` requires exactly one of:
+  - `factor = <integer>` for grouped native bins, with an optional aligned
+    `min`/`max` window
+  - `[[bins.mt]]` or `[[bins.phi]]` for explicit output ranges that align with
+    the input sparse axis
+- factor mode merges contiguous normal bins before projection; the workflow does
+  not call ROOT histogram `Rebin` on the final `TH3D`
+- when symmetric phi mapping is enabled, every non-integrated phi output range
+  must stay on one side of the `pi/2` mapping seam; this applies to native,
+  factor, and explicit-range modes
+- old configs stay valid: phi defaults to native bins when no explicit rebin
+  table is present, and mT keeps the legacy `[[bins.mt]]` contract
+
+For example, phi can use a factor while mT uses explicit physical ranges:
+
+```toml
+[build.rebin.phi]
+enabled = true
+factor = 2
+min = 0.0
+max = 3.141592653589793
+
+[build.rebin.mt]
+enabled = true
+
+[[bins.mt]]
+min = 0.2
+max = 0.6
+label = "mt_020_060"
+```
+
 Phi mapping control:
 
 - `[build].map_pair_phi_to_symmetric_range` controls how build writes `display_phi_*`
@@ -109,6 +149,10 @@ Phi mapping control:
   raw `[0, pi]` range or the symmetric `[-pi/2, pi/2]` range without rebuilding the CF
 - if the current config's `[build]` mapping flag disagrees with the input CF metadata,
   fit warns and trusts the input CF file
+- when mT groups are generated dynamically by native/factor rebin, omitted
+  `[[fit_selection.mt]]` means all catalog mT groups; explicit
+  `[[fit_selection.mt]]` entries are validated against `meta/SliceCatalog`
+  before the fit output ROOT file is reset
 
 Mixed-event denominator control:
 
@@ -135,14 +179,16 @@ Mixed-event denominator control:
 ## Output Contract
 
 - `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`; the
-  catalog records both `build_uses_symmetric_phi_range` and
-  `split_mixed_event_by_phi`, `split_mixed_event_by_qn`, plus qn metadata
+  catalog records `build_uses_symmetric_phi_range`, both
+  `split_mixed_event_by_phi` and `split_mixed_event_by_qn`, the four mT/phi
+  rebin fields, and qn metadata
   `qn_index/qn_low/qn_high/qn_label/is_qn_integrated`; older catalogs default
-  the qn metadata to `qn_all` and `split_mixed_event_by_qn` to `false`
+  to qn-integrated ME, legacy-range mT, native phi, and `qn_all`
 - `fit` reads `meta/SliceCatalog` and writes `meta/FitCatalog`,
   `meta/CoulombKernelCatalog`, `fits/<slice_id>/...`, `summary/R2_vs_phi/...`,
   and `fit_summary.tsv`; `FitCatalog`, `CoulombKernelCatalog`, and TSV rows
-  carry the same qn metadata
+  carry the same qn metadata, and `FitCatalog`/TSV rows carry the same rebin
+  metadata and final physical phi ranges
 - `fit` also writes the standalone report ROOT file configured by
   `fit_report_directory` and `fit_report_root_name`; this report mirrors
   `meta/FitCatalog` and `summary/R2_vs_phi/...`, adds

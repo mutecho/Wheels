@@ -106,6 +106,12 @@ max = 0.4
   Expect(!*config.fit.map_pair_phi_to_symmetric_range, "fit phi mapping override should be false");
   Expect(config.fit.options.coulomb_mode == CoulombMode::kNone, "legacy use_coulomb=false should map to none");
   Expect(ToString(CoulombMode::kGamow) == "gamow", "CoulombMode string helper mismatch");
+  Expect(!config.build.mt_rebin.configured && !config.build.mt_rebin.enabled,
+         "legacy mT configuration should keep the explicit rebin switch absent");
+  Expect(config.build.mt_rebin.mode == RebinMode::kLegacyRanges,
+         "legacy [[bins.mt]] should retain legacy-range behavior");
+  Expect(!config.build.phi_rebin.configured && config.build.phi_rebin.mode == RebinMode::kNative,
+         "legacy phi configuration should use native bins");
 
   const std::string overlapping_bins_config = R"toml(
 [input]
@@ -168,8 +174,7 @@ max = 0.6
   Expect(overlapping_config.fit_mt_bins.size() == 2, "fit selection mt should parse");
   Expect(overlapping_config.output.fit_report_directory == "/tmp/out",
          "fit report directory should default to output directory");
-  Expect(overlapping_config.output.fit_report_root_name == "fit_report.root",
-         "fit report root name should default");
+  Expect(overlapping_config.output.fit_report_root_name == "fit_report.root", "fit report root name should default");
   Expect(!overlapping_config.build.split_mixed_event_by_phi, "ME phi split should default to false");
   Expect(!overlapping_config.build.split_same_event_by_qn, "same-event qn split should default to false");
   Expect(!overlapping_config.build.split_mixed_event_by_qn, "ME qn split should default to false");
@@ -213,8 +218,7 @@ max = 0.4
       LoadApplicationConfig(WriteFile(temp_dir / "fit_phi_mapping_true.toml", fit_phi_mapping_true_config));
   Expect(fit_phi_mapping_true.fit.map_pair_phi_to_symmetric_range.has_value(),
          "fit phi mapping true override should parse");
-  Expect(*fit_phi_mapping_true.fit.map_pair_phi_to_symmetric_range,
-         "fit phi mapping true override should be true");
+  Expect(*fit_phi_mapping_true.fit.map_pair_phi_to_symmetric_range, "fit phi mapping true override should be true");
 
   const std::string explicit_integrated_me_config = R"toml(
 [input]
@@ -251,16 +255,16 @@ max = 0.4
   Expect(!explicit_integrated_me.build.split_mixed_event_by_phi, "explicit integrated ME mode should parse false");
 
   const std::filesystem::path project_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-  const ApplicationConfig pbpb_example = LoadApplicationConfig((project_root / "config/pbpb_build_and_fit.toml").string());
+  const ApplicationConfig pbpb_example =
+      LoadApplicationConfig((project_root / "config/pbpb_build_and_fit.toml").string());
   Expect(pbpb_example.centrality_bins.size() == 5, "pbpb example centrality bins should parse");
   Expect(pbpb_example.mt_bins.size() == 5, "pbpb example merged mt bins should parse");
   Expect(pbpb_example.fit_mt_bins.size() == 3, "pbpb example fit_selection.mt should parse");
   Expect(pbpb_example.build.progress == ProgressMode::kAuto, "pbpb build progress should parse");
   Expect(pbpb_example.fit.progress == ProgressMode::kAuto, "pbpb fit progress should parse");
-  Expect(pbpb_example.fit.options.coulomb_mode == CoulombMode::kGamow,
-         "legacy use_coulomb=true should map to gamow");
+  Expect(pbpb_example.fit.options.coulomb_mode == CoulombMode::kGamow, "legacy use_coulomb=true should map to gamow");
 
-  // Keep the Wenya production config on the original structure while adding qn-split slices.
+  // Keep the Wenya production contract explicit across qn splitting, ME policy, rebin, and fit overrides.
   const ApplicationConfig wenya_qn_integrated =
       LoadApplicationConfig((project_root / "config/pbpb_wenya_lhc23_qn_integrated_build_and_fit.toml").string());
   Expect(wenya_qn_integrated.input.input_root
@@ -276,28 +280,25 @@ max = 0.4
          "wenya qn-integrated sparse name mismatch");
   Expect(wenya_qn_integrated.output.output_directory == "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb/wenya",
          "wenya qn-integrated output directory mismatch");
-  Expect(wenya_qn_integrated.output.cf_root_name
-             == "EP_dependence_CF_wenya_lhc23_merge_qn_split_plus_integrated.root",
+  Expect(wenya_qn_integrated.output.cf_root_name == "EP_dependence_CF_wenya_lhc23_merge_qn_split_plus_integrated.root",
          "wenya qn-split CF output name mismatch");
   Expect(wenya_qn_integrated.output.fit_root_name
              == "EP_dependence_CF_full_fit_wenya_lhc23_merge_qn_split_plus_integrated.root",
          "wenya qn-split fit output name mismatch");
-  Expect(wenya_qn_integrated.output.fit_summary_name
-             == "fit_summary_wenya_lhc23_merge_qn_split_plus_integrated.tsv",
+  Expect(wenya_qn_integrated.output.fit_summary_name == "fit_summary_wenya_lhc23_merge_qn_split_plus_integrated.tsv",
          "wenya qn-split fit summary name mismatch");
   Expect(wenya_qn_integrated.output.fit_report_root_name
              == "EP_dependence_CF_full_fit_report_wenya_lhc23_merge_qn_split_plus_integrated.root",
          "wenya qn-split fit report name mismatch");
   Expect(wenya_qn_integrated.centrality_bins.size() == 4,
          "wenya qn-integrated centrality bins should stop at 80 percent");
-  Expect(wenya_qn_integrated.centrality_bins.back().min == 50.0
-             && wenya_qn_integrated.centrality_bins.back().max == 80.0,
-         "wenya qn-integrated final centrality bin should be 50-80");
+  Expect(
+      wenya_qn_integrated.centrality_bins.back().min == 50.0 && wenya_qn_integrated.centrality_bins.back().max == 80.0,
+      "wenya qn-integrated final centrality bin should be 50-80");
   Expect(wenya_qn_integrated.mt_bins.size() == 5, "wenya qn-integrated mT bins should include merged full mT");
   Expect(wenya_qn_integrated.fit_centrality_bins.size() == 3,
          "wenya qn-integrated fit centrality selection should follow PbPb subset");
-  Expect(wenya_qn_integrated.fit_mt_bins.size() == 3,
-         "wenya qn-integrated fit mT selection should follow PbPb subset");
+  Expect(wenya_qn_integrated.fit_mt_bins.size() == 3, "wenya qn-integrated fit mT selection should follow PbPb subset");
   Expect(wenya_qn_integrated.build.split_same_event_by_qn, "wenya config should enable same-event qn splitting");
   Expect(wenya_qn_integrated.qn_bins.size() == 3, "wenya config should define qn1/qn2/qn3 bins");
   Expect(wenya_qn_integrated.qn_bins[0].label == "qn1" && wenya_qn_integrated.qn_bins[0].min == 0.0
@@ -311,20 +312,28 @@ max = 0.4
          "wenya qn3 bin mismatch");
   Expect(!wenya_qn_integrated.build.map_pair_phi_to_symmetric_range,
          "wenya qn-integrated build should keep raw phi mapping");
-  Expect(!wenya_qn_integrated.build.split_mixed_event_by_phi,
-         "wenya qn-integrated build should keep integrated ME denominator");
+  Expect(wenya_qn_integrated.build.split_mixed_event_by_phi,
+         "wenya qn-integrated build should keep its configured phi-split ME denominator");
   Expect(!wenya_qn_integrated.build.split_mixed_event_by_qn,
          "wenya qn-integrated build should keep qn-integrated ME denominator");
+  Expect(wenya_qn_integrated.build.phi_rebin.configured && !wenya_qn_integrated.build.phi_rebin.enabled
+             && wenya_qn_integrated.build.phi_rebin.mode == RebinMode::kNative,
+         "wenya qn-integrated build should keep native phi bins");
+  Expect(wenya_qn_integrated.build.mt_rebin.configured && wenya_qn_integrated.build.mt_rebin.enabled
+             && wenya_qn_integrated.build.mt_rebin.mode == RebinMode::kRanges,
+         "wenya qn-integrated build should use explicit mT ranges");
   Expect(wenya_qn_integrated.fit.model == FitModel::kFull, "wenya qn-integrated fit should use full model");
   Expect(wenya_qn_integrated.fit.options.coulomb_mode == CoulombMode::kGamow,
          "wenya qn-integrated fit should keep legacy PbPb Coulomb setting");
-  Expect(wenya_qn_integrated.fit.options.use_core_halo_lambda,
-         "wenya qn-integrated fit should keep core-halo lambda");
-  Expect(wenya_qn_integrated.fit.options.use_q2_baseline,
-         "wenya qn-integrated fit should keep q2 baseline");
+  Expect(wenya_qn_integrated.fit.options.use_core_halo_lambda, "wenya qn-integrated fit should keep core-halo lambda");
+  Expect(wenya_qn_integrated.fit.options.use_q2_baseline, "wenya qn-integrated fit should keep q2 baseline");
   Expect(wenya_qn_integrated.fit.options.use_pml, "wenya qn-integrated fit should keep PML");
   Expect(!wenya_qn_integrated.fit.map_pair_phi_to_symmetric_range.has_value(),
          "wenya qn-integrated fit should follow input CF phi metadata");
+  ExpectParameterTriple(wenya_qn_integrated.fit.options.parameters.alpha, 1.5, 0.5, 2.0,
+                        "wenya alpha override");
+  ExpectOptionalDouble(wenya_qn_integrated.fit.options.parameters.alpha.fixed_value, 2.0,
+                       "wenya alpha fixed value");
 
   const auto mode_config = [](const std::string &fit_coulomb_lines) {
     return R"toml(
@@ -345,7 +354,8 @@ reopen_output_file_per_slice = true
 
 [fit]
 model = "diag"
-)toml" + fit_coulomb_lines + R"toml(
+)toml" + fit_coulomb_lines
+           + R"toml(
 use_core_halo_lambda = true
 use_q2_baseline = false
 use_pml = false
@@ -369,16 +379,16 @@ max = 0.4
       LoadApplicationConfig(WriteFile(temp_dir / "coulomb_gamow.toml", mode_config("coulomb_mode = \"gamow\"\n")));
   Expect(explicit_gamow.fit.options.coulomb_mode == CoulombMode::kGamow, "explicit gamow Coulomb mode should parse");
 
-  const ApplicationConfig explicit_finite = LoadApplicationConfig(WriteFile(
-      temp_dir / "coulomb_finite.toml",
-      mode_config("coulomb_mode = \"finite_source\"\nfinite_source_mode = \"iterative_1d\"\n")));
+  const ApplicationConfig explicit_finite = LoadApplicationConfig(
+      WriteFile(temp_dir / "coulomb_finite.toml",
+                mode_config("coulomb_mode = \"finite_source\"\nfinite_source_mode = \"iterative_1d\"\n")));
   Expect(explicit_finite.fit.options.coulomb_mode == CoulombMode::kFiniteSource,
          "explicit finite-source Coulomb mode should parse");
   Expect(explicit_finite.fit.options.finite_source_mode == FiniteSourceMode::kIterative1D,
          "explicit iterative finite-source mode should parse");
 
-  const ApplicationConfig agreeing_legacy = LoadApplicationConfig(WriteFile(
-      temp_dir / "coulomb_agree.toml", mode_config("use_coulomb = true\ncoulomb_mode = \"gamow\"\n")));
+  const ApplicationConfig agreeing_legacy = LoadApplicationConfig(
+      WriteFile(temp_dir / "coulomb_agree.toml", mode_config("use_coulomb = true\ncoulomb_mode = \"gamow\"\n")));
   Expect(agreeing_legacy.fit.options.coulomb_mode == CoulombMode::kGamow,
          "agreeing legacy and explicit Coulomb fields should parse");
 
@@ -392,10 +402,185 @@ max = 0.4
     Expect(saw_error, name + " should fail config validation");
   };
 
+  // Rebin contract fixtures isolate table-level validation from ROOT-axis boundary checks.
+  const auto rebin_config = [](const std::string &rebin_tables, const std::string &bin_tables = std::string()) {
+    return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+)toml" + rebin_tables
+           + R"toml(
+
+[fit]
+model = "diag"
+fit_q_max = 0.15
+
+[[bins.centrality]]
+min = 0
+max = 10
+)toml" + bin_tables;
+  };
+
+  const ApplicationConfig explicit_disabled =
+      LoadApplicationConfig(WriteFile(temp_dir / "rebin_explicit_disabled.toml", rebin_config(R"toml(
+[build.rebin.mt]
+enabled = false
+
+[build.rebin.phi]
+enabled = false
+)toml")));
+  Expect(explicit_disabled.build.mt_rebin.configured && !explicit_disabled.build.mt_rebin.enabled,
+         "explicit disabled mT switch should parse");
+  Expect(explicit_disabled.build.mt_rebin.mode == RebinMode::kNative, "disabled mT rebin should select native mode");
+  Expect(explicit_disabled.build.phi_rebin.configured && !explicit_disabled.build.phi_rebin.enabled,
+         "explicit disabled phi switch should parse");
+  Expect(explicit_disabled.build.phi_rebin.mode == RebinMode::kNative, "disabled phi rebin should select native mode");
+  Expect(explicit_disabled.mt_bins.empty() && explicit_disabled.phi_bins.empty(),
+         "native axes should not require configured physical ranges");
+
+  const ApplicationConfig factor_rebin =
+      LoadApplicationConfig(WriteFile(temp_dir / "rebin_factor.toml", rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+factor = 2
+min = 0.2
+max = 0.6
+
+[build.rebin.phi]
+enabled = true
+factor = 4
+)toml")));
+  Expect(factor_rebin.build.mt_rebin.enabled && factor_rebin.build.mt_rebin.mode == RebinMode::kFactor,
+         "mT factor mode should parse");
+  Expect(factor_rebin.build.mt_rebin.factor == 2 && factor_rebin.build.mt_rebin.min == 0.2
+             && factor_rebin.build.mt_rebin.max == 0.6,
+         "mT factor window should parse");
+  Expect(factor_rebin.build.phi_rebin.enabled && factor_rebin.build.phi_rebin.mode == RebinMode::kFactor
+             && factor_rebin.build.phi_rebin.factor == 4,
+         "phi factor mode should parse");
+
+  const ApplicationConfig range_rebin = LoadApplicationConfig(WriteFile(temp_dir / "rebin_ranges.toml",
+                                                                        rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+
+[build.rebin.phi]
+enabled = true
+)toml",
+                                                                                     R"toml(
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+label = "mt_low"
+
+[[bins.mt]]
+min = 0.2
+max = 0.6
+label = "mt_all"
+
+[[bins.phi]]
+min = 0.0
+max = 1.0
+label = "phi_low"
+
+[[bins.phi]]
+min = 0.0
+max = 2.0
+label = "phi_wide"
+)toml")));
+  Expect(range_rebin.build.mt_rebin.mode == RebinMode::kRanges && range_rebin.mt_bins.size() == 2,
+         "overlapping mT ranges should parse in explicit range mode");
+  Expect(range_rebin.build.phi_rebin.mode == RebinMode::kRanges && range_rebin.phi_bins.size() == 2,
+         "overlapping phi ranges should parse in explicit range mode");
+
+  expect_config_error("rebin_disabled_factor.toml", rebin_config(R"toml(
+[build.rebin.mt]
+enabled = false
+factor = 2
+
+[build.rebin.phi]
+enabled = false
+)toml"));
+  expect_config_error("rebin_disabled_ranges.toml",
+                      rebin_config(R"toml(
+[build.rebin.mt]
+enabled = false
+
+[build.rebin.phi]
+enabled = false
+)toml",
+                                   R"toml(
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml"));
+  expect_config_error("rebin_factor_too_small.toml", rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+factor = 1
+
+[build.rebin.phi]
+enabled = false
+)toml"));
+  expect_config_error("rebin_one_sided_window.toml", rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+factor = 2
+min = 0.2
+
+[build.rebin.phi]
+enabled = false
+)toml"));
+  expect_config_error("rebin_factor_and_ranges.toml",
+                      rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+factor = 2
+
+[build.rebin.phi]
+enabled = false
+)toml",
+                                   R"toml(
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml"));
+  expect_config_error("rebin_duplicate_ranges.toml",
+                      rebin_config(R"toml(
+[build.rebin.mt]
+enabled = true
+
+[build.rebin.phi]
+enabled = false
+)toml",
+                                   R"toml(
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml"));
+
   expect_config_error("coulomb_conflict_false_gamow.toml",
                       mode_config("use_coulomb = false\ncoulomb_mode = \"gamow\"\n"));
-  expect_config_error("coulomb_conflict_true_none.toml",
-                      mode_config("use_coulomb = true\ncoulomb_mode = \"none\"\n"));
+  expect_config_error("coulomb_conflict_true_none.toml", mode_config("use_coulomb = true\ncoulomb_mode = \"none\"\n"));
   expect_config_error("coulomb_conflict_true_finite.toml",
                       mode_config("use_coulomb = true\ncoulomb_mode = \"finite_source\"\n"));
   expect_config_error("coulomb_invalid_mode.toml", mode_config("coulomb_mode = \"bogus\"\n"));

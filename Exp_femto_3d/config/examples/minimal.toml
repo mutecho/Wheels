@@ -23,6 +23,12 @@ split_mixed_event_by_phi = false
 # split_mixed_event_by_qn = true  # requires split_same_event_by_qn and [[bins.qn]]
 progress = "auto"
 
+[build.rebin.phi]
+enabled = false
+
+[build.rebin.mt]
+enabled = true
+
 [fit]
 model = "full"
 coulomb_mode = "gamow"

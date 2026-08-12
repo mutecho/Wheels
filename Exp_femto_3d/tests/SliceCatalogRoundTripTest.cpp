@@ -50,13 +50,13 @@ namespace {
     auto *same_dir = task->mkdir("Same");
     auto *mixed_dir = task->mkdir("Mixed");
 
-    const int bins[7] = {4, 4, 4, 2, 2, 10, 3};
+    const int bins[7] = {4, 4, 4, 2, 2, 10, 4};
     const double min[7] = {-0.2, -0.2, -0.2, 0.2, 0.0, 0.0, 0.0};
     const double max[7] = {0.2, 0.2, 0.2, 0.4, 10.0, 10.0, 3.14159265358979323846};
 
     auto same = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
-    for (double phi : {0.3, 1.3, 2.5}) {
+    for (double phi : {0.3, 1.1, 2.0, 2.8}) {
       for (double qn : {1.0, 5.0, 8.0}) {
         FillSparse(*same, 0.01, 0.01, 0.01, 0.3, 5.0, phi, 10.0 + qn, qn);
         FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 8.0 + qn, qn);
@@ -222,32 +222,38 @@ int main() {
   const ApplicationConfig config = LoadApplicationConfig(config_path);
   const Logger logger(LogLevel::kError);
   const BuildCfRunStatistics build_stats = RunBuildCf(config, logger);
-  Expect(build_stats.stored_slices == 4, "expected phi-all + 3 phi slices");
+  Expect(build_stats.stored_slices == 5, "expected phi-all + 4 seam-safe phi slices");
 
   const auto entries = LoadSliceCatalog((temp_dir / "catalog_test.root").string());
-  Expect(entries.size() == 4, "catalog size mismatch");
+  Expect(entries.size() == 5, "catalog size mismatch");
   Expect(entries.front().slice_directory.rfind("slices/", 0) == 0, "slice directory should live under slices/");
   Expect(entries[0].cf_object_path.find("/CF3D") != std::string::npos, "catalog should store CF object path");
   Expect(entries[0].is_qn_integrated && entries[0].qn_index == -1 && entries[0].qn_label == "qn_all",
          "default catalog entries should be qn-integrated");
   Expect(entries[1].build_uses_symmetric_phi_range, "catalog should persist build phi mapping metadata");
-  Expect(entries[3].display_phi_center < 0.0, "mapped phi slice should keep a negative display center");
+  Expect(entries[4].display_phi_center < 0.0, "mapped phi slice should keep a negative display center");
 
   const auto legacy_entries = LoadSliceCatalog(WriteLegacyCatalog(temp_dir / "legacy_catalog.root", entries));
   Expect(legacy_entries.size() == entries.size(), "legacy catalog size mismatch");
+  // Legacy trees omit the new rebin branches, so the reader must fall back to
+  // the historical native/legacy defaults instead of inventing rebin metadata.
+  Expect(!legacy_entries[1].mt_rebin_enabled, "legacy catalog should default mt rebin to disabled");
+  Expect(legacy_entries[1].mt_rebin_mode == "legacy", "legacy catalog should default mt rebin mode to legacy");
+  Expect(!legacy_entries[1].phi_rebin_enabled, "legacy catalog should default phi rebin to disabled");
+  Expect(legacy_entries[1].phi_rebin_mode == "native", "legacy catalog should default phi rebin mode to native");
   Expect(legacy_entries[1].build_uses_symmetric_phi_range,
          "legacy catalog reader should infer mapped build phi metadata");
   Expect(!legacy_entries[1].split_mixed_event_by_phi, "legacy catalog should default to integrated ME metadata");
   Expect(!legacy_entries[1].split_mixed_event_by_qn, "legacy catalog should default to qn-integrated ME metadata");
   Expect(legacy_entries[1].is_qn_integrated && legacy_entries[1].qn_label == "qn_all",
          "legacy catalog should default to qn-integrated metadata");
-  Expect(legacy_entries[3].display_phi_center < 0.0, "legacy catalog should preserve stored display phi values");
+  Expect(legacy_entries[4].display_phi_center < 0.0, "legacy catalog should preserve stored display phi values");
 
   const std::string split_config_path =
       WriteConfig(temp_dir / "config_split.toml", input_root, temp_dir.string(), "catalog_split.root", true);
   const ApplicationConfig split_config = LoadApplicationConfig(split_config_path);
   const BuildCfRunStatistics split_build_stats = RunBuildCf(split_config, logger);
-  Expect(split_build_stats.stored_slices == 4, "split-ME build-cf should keep phi-all + 3 phi slices");
+  Expect(split_build_stats.stored_slices == 5, "split-ME build-cf should keep phi-all + 4 phi slices");
   Expect(split_build_stats.skipped_zero_mixed_event_slices == 0, "toy split-ME build should not skip ME slices");
   const auto split_entries = LoadSliceCatalog((temp_dir / "catalog_split.root").string());
   Expect(split_entries[1].split_mixed_event_by_phi, "catalog should persist split-ME metadata");
@@ -256,9 +262,9 @@ int main() {
       WriteConfig(temp_dir / "config_qn.toml", input_root, temp_dir.string(), "catalog_qn.root", false, true);
   const ApplicationConfig qn_config = LoadApplicationConfig(qn_config_path);
   const BuildCfRunStatistics qn_build_stats = RunBuildCf(qn_config, logger);
-  Expect(qn_build_stats.stored_slices == 16, "qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
+  Expect(qn_build_stats.stored_slices == 20, "qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
   const auto qn_entries = LoadSliceCatalog((temp_dir / "catalog_qn.root").string());
-  Expect(qn_entries.size() == 16, "qn-split catalog size mismatch");
+  Expect(qn_entries.size() == 20, "qn-split catalog size mismatch");
   int qn_all_count = 0;
   int qn1_count = 0;
   int qn2_count = 0;
@@ -284,8 +290,8 @@ int main() {
       Expect(!entry.split_mixed_event_by_qn, "same-event-only qn split should keep qn-integrated ME metadata");
     }
   }
-  Expect(qn_all_count == 4 && qn1_count == 4 && qn2_count == 4 && qn3_count == 4,
-         "qn-split catalog should contain four phi slices for each qn state");
+  Expect(qn_all_count == 5 && qn1_count == 5 && qn2_count == 5 && qn3_count == 5,
+         "qn-split catalog should contain five phi slices for each qn state");
 
   const std::string qn_me_config_path =
       WriteConfig(temp_dir / "config_qn_me.toml",
@@ -298,9 +304,9 @@ int main() {
   const ApplicationConfig qn_me_config = LoadApplicationConfig(qn_me_config_path);
   Expect(qn_me_config.build.split_mixed_event_by_qn, "ME qn split switch should parse");
   const BuildCfRunStatistics qn_me_build_stats = RunBuildCf(qn_me_config, logger);
-  Expect(qn_me_build_stats.stored_slices == 16, "ME qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
+  Expect(qn_me_build_stats.stored_slices == 20, "ME qn-split build-cf should keep qn-all plus qn1/qn2/qn3 slices");
   const auto qn_me_entries = LoadSliceCatalog((temp_dir / "catalog_qn_me.root").string());
-  Expect(qn_me_entries.size() == 16, "ME qn-split catalog size mismatch");
+  Expect(qn_me_entries.size() == 20, "ME qn-split catalog size mismatch");
   for (const SliceCatalogEntry &entry : qn_me_entries) {
     Expect(entry.split_mixed_event_by_qn, "catalog should persist ME qn split metadata");
   }

@@ -1,5 +1,44 @@
 # Decisions
 
+## DEC-006: Keep Build-Side Rebin Explicit And Default Phi To Native
+
+- date: 2026-08-12
+- decision: require explicit `[build.rebin.mt]` / `[build.rebin.phi]` tables to
+  enable build-side rebin; when the phi table is omitted, phi stays on native
+  bins and the workflow records that fact as `phi_rebin = native`
+- rationale:
+  - the visible `enabled` switch makes build behavior obvious in config reviews
+  - native phi remains the default for old configs, so the new contract does not
+    silently change existing production behavior
+  - the explicit switch keeps future rebin changes in one place instead of
+    encoding them indirectly through bin names alone
+  - old configs without the new tables keep native phi and legacy
+    `[[bins.mt]]` semantics
+
+## DEC-007: Rebin Sparse Selection Axes Before q-Space Projection
+
+- date: 2026-08-12
+- decision: implement mT/phi rebin as closed normal-bin selections on the input
+  sparse axes before projecting q_out/q_side/q_long; do not call ROOT `Rebin`
+  on the output `TH3D`
+- rationale:
+  - this preserves the existing q-axis bins and fit coordinates
+  - `split_mixed_event_by_phi = true` can apply the identical merged phi
+    selection to SE and ME, while `phi_all` remains the complete normal range
+  - explicit ranges may overlap for integral selections, but exact duplicates,
+    non-aligned edges, non-divisible factors, and symmetric-map intervals that
+    cross `pi/2` are rejected
+
+## DEC-008: Validate Before Resetting Existing ROOT Outputs
+
+- date: 2026-08-12
+- decision: resolve input axes, rebin selections, phi seams, output identifiers,
+  SliceCatalog availability, and explicit dynamic mT fit selections before
+  resetting the corresponding CF or fit ROOT output
+- rationale:
+  - a configuration error must not destroy the last valid analysis artifact
+  - sentinel regression tests make this failure-ordering contract durable
+
 ## DEC-001: Treat Sandboxed Alienv Bootstrap Failure As Environment-Entry Failure
 
 - date: 2026-04-11
@@ -56,7 +95,7 @@
   - the report path can be redirected independently from the CF/fit output
     directory while older configs keep working through defaults
 
-## DEC-006: Keep Qn-Integrated ME As Default And Make Qn-Following ME Opt-In
+## DEC-009: Keep Qn-Integrated ME As Default And Make Qn-Following ME Opt-In
 
 - date: 2026-07-01
 - decision: `build.split_mixed_event_by_qn = false` remains the default so
