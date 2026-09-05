@@ -2,33 +2,31 @@
 
 ## Task Snapshot
 
-- scope: make the detailed PML profile-likelihood mode resumable and fast enough
-  for staged diagnosis without changing the PML statistic or physics model
+- scope: support all `fit_selection` slices in process-parallel profile-only
+  execution and provide a strict 10-worker operator configuration
 - current conclusion:
-  `profile_only` now leaves all production outputs untouched, group-level
-  `process` execution isolates legacy TMinuit/ROOT state, matching checkpoints
-  resume safely, and `PMLBinCache` removes repeated histogram traversal while
-  preserving deterministic sequential accumulation
+  `profile_only + process + fit_selection` is supported. The coordinator
+  materializes the full ordered selection, assigns one complete
+  `(centrality,mT,qn)` group per child, and each child is forced to an internal
+  exact `listed` scope so it cannot repeat the global selection
 - primary evidence:
-  - `fit --profile-estimate-only` validates catalog/config/model/output contracts
-    and produces no output; the real scout contract reports 14 slices and 1,386
-    maximum Minuit attempts
-  - process workers are started by `posix_spawn`, receive whole
-    `(centrality,mT,qn)` groups, and keep each scan serial
-  - chunks carry an input-content plus scan/model digest; mismatches and
-    incomplete/duplicate catalogs are rejected before the previous final ROOT
-    can be replaced
-  - HESSE can be disabled for the private nominal and all profile attempts;
-    timing, FCN counts, HESSE execution, and error validity are explicit branches
-  - each new cache is compared once against the old histogram-bin evaluator at
-    `max(1e-10,1e-12*abs(objective))` tolerance
-  - separate scout, focused-1D, and focused-2D configs plus a tiered runner keep
-    the preserved strict configuration unchanged
+  - added `config/oo_build_and_fit_6bins_profile_strict_parallel.toml`, preserving
+    the baseline strict physics/scans while selecting all configured fit slices,
+    using profile-only legacy TMinuit with `workers=10`
+  - child process startup requires the marker, exact slice list, and temporary
+    chunk output together; common numerical-library thread pools are fixed to 1
+  - chunk reuse/merge now requires both readable `ProfilePoints` and
+    `AttemptPoints` for every expected slice/scan
+  - `ProfileExecution` preserves the parent scope and records selected
+    slice/group counts plus configured/effective workers
 - verification:
-  `2026-09-04` O2Physics ROOT executor returned `PRIMARY_OK`; build and full
-  CTest passed 7/7, process/resume/mismatch smoke passed, ROOT inspector returned
-  `STATUS: OK`, and toy 1D canvas was visually checked. No expensive real OO
-  profile scan or scaling benchmark was run
+  `verified`: `2026-09-05` O2Physics ROOT executor returned `PRIMARY_OK`; build
+  and full CTest passed 7/7 in 41.56 s. Two-group fit-selection process/resume,
+  serial/process numerical equivalence, changed-selection digest rejection,
+  missing-tree rejection, and production-output isolation passed. ROOT inspector
+  returned `STATUS: OK`. Real strict estimate-only reported 84 slices, 12 groups,
+  153,468 maximum attempts, and 10/10 workers without creating output. No real
+  strict profile scan was started
 
 ## Previous Task Snapshot
 

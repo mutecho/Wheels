@@ -108,10 +108,13 @@ PML profile-likelihood diagnostics:
   must not resolve to the CF, detailed-fit, or report ROOT path
 - profile contours are labelled `diagnostic only`; they are not confidence
   intervals and are not labelled as 68%/95% CL regions
-- `execution_mode = "profile_only"` requires explicitly listed slices and never
-  creates or modifies the detailed-fit ROOT, report ROOT, TSV, or `FitCatalog`
+- `execution_mode = "profile_only"` accepts either explicitly listed slices or
+  all slices materialized from `fit_selection`; it never creates or modifies
+  the detailed-fit ROOT, report ROOT, TSV, or `FitCatalog`
 - `parallel_backend = "process"` assigns complete `(centrality,mT,qn)` Coulomb
-  groups to isolated legacy-TMinuit workers; scans within one slice remain serial
+  groups to isolated legacy-TMinuit workers; the coordinator expands
+  `fit_selection` once, then each child receives only its exact group slice list,
+  while scans within one slice remain serial
 - process checkpoints are written per completed group and reused only when the
   input-CF content and complete scan/model contract digest match
 - `hesse_strategy = "none"` skips HESSE for the private nominal fit and every
@@ -168,12 +171,20 @@ Use `fit --profile-estimate-only` to perform config, catalog, effective-model,
 slice, range, grid, and output-collision validation and print the upper bounds
 on Minuit attempts and fixed-nuisance evaluations without creating any output.
 The staged runner `scripts/run_exp_femto_3d_PROFILE.sh` provides `scout`,
-`focused-1d`, `focused-2d`, and preserved `strict` tiers. Start with:
+`focused-1d`, `focused-2d`, preserved `strict`, and all-selected-slice
+`strict-parallel` tiers. Start with:
 
 ```bash
 scripts/run_exp_femto_3d_PROFILE.sh --tier scout --profile-estimate-only
 scripts/run_exp_femto_3d_PROFILE.sh --tier scout
+scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel --profile-estimate-only
 ```
+
+`strict-parallel` uses
+`config/oo_build_and_fit_6bins_profile_strict_parallel.toml`: it preserves the
+strict scan grids and finite-source model, runs profile-only over the complete
+configured `fit_selection`, and uses 10 isolated legacy-TMinuit processes at
+most (effective workers are capped by the number of selected groups).
 
 TOML progress control:
 

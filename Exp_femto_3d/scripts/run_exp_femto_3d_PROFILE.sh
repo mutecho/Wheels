@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  run_exp_femto_3d_PROFILE.sh [--tier scout|focused-1d|focused-2d|strict]
+  run_exp_femto_3d_PROFILE.sh [--tier scout|focused-1d|focused-2d|strict|strict-parallel]
                               [--stage all|build-cf|fit]
                               [--profile-estimate-only]
                               [--model full|diag] [--input-cf-root <cf.root>]
@@ -19,8 +19,10 @@ Options:
   --binary <path>            exp_femto_3d executable path.
   -h, --help                 Show this help.
 
-The strict tier is the preserved LIKELYHOODTEST configuration. The other tiers
-are profile_only runs with separate output and checkpoint names.
+The strict tier is the preserved LIKELYHOODTEST configuration. strict-parallel
+runs the same strict scan contract as profile_only over all fit_selection slices
+with isolated legacy-TMinuit processes. The other tiers are reduced-cost
+profile_only runs with separate output and checkpoint names.
 USAGE
 }
 
@@ -132,9 +134,12 @@ case "${tier}" in
   strict)
     config_path="${project_root}/config/oo_build_and_fit_6bins_checklikelihood.toml"
     ;;
+  strict-parallel)
+    config_path="${project_root}/config/oo_build_and_fit_6bins_profile_strict_parallel.toml"
+    ;;
   *)
     echo "[error] Unsupported tier: ${tier}" >&2
-    echo "        Expected scout, focused-1d, focused-2d, or strict." >&2
+    echo "        Expected scout, focused-1d, focused-2d, strict, or strict-parallel." >&2
     exit 1
     ;;
 esac

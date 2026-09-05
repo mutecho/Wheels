@@ -47,12 +47,12 @@ progress = "auto"   # 也可写 "enabled" / "disabled"
 # independent profile ROOT file is neither created nor reset.
 [fit.profile_likelihood]
 enabled = false
-execution_mode = "alongside_fit" # use "profile_only" with listed slices for diagnostics-only runs
+execution_mode = "alongside_fit" # profile_only accepts listed or fit_selection scopes
 parallel_backend = "serial"      # process requires profile_only + legacy_tminuit
 workers = 1
 minimizer_backend = "legacy_tminuit" # thread/minuit2 remains experimental and execution-gated
 hesse_strategy = "all_attempts"  # "all_attempts" | "none"
-slice_scope = "listed" # "listed" | "fit_selection"
+slice_scope = "listed" # "listed" | "fit_selection"; process workers materialize fit_selection by group
 slice_ids = ["replace_with_exact_slice_id"] # forbidden for fit_selection
 retry_strategy = "reference_and_bidirectional_neighbors"   # "reference_and_bidirectional_neighbors" | "reference_only"
 write_likelihood_slice = true

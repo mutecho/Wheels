@@ -140,6 +140,10 @@ target_link_libraries(config_parse_validation_test
     exp_femto_3d_core
 )
 
+target_compile_definitions(config_parse_validation_test
+  PRIVATE EXP_FEMTO_3D_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 add_test(
   NAME config_parse_validation_test
   COMMAND config_parse_validation_test

@@ -543,7 +543,17 @@ namespace exp_femto_3d {
           catalog->GetEntry(row);
           if (slice_id == nullptr || scan_id == nullptr || !actual.emplace(*slice_id, *scan_id).second) return false;
         }
-        return actual == expected;
+        if (actual != expected) return false;
+        for (const auto &[expected_slice, expected_scan] : expected) {
+          const std::string directory = "profiles/" + expected_slice + "/" + expected_scan + "/";
+          auto *profile_points = dynamic_cast<TTree *>(file->Get((directory + "ProfilePoints").c_str()));
+          auto *attempt_points = dynamic_cast<TTree *>(file->Get((directory + "AttemptPoints").c_str()));
+          if (profile_points == nullptr || attempt_points == nullptr
+              || profile_points->GetEntries() <= 0 || attempt_points->GetEntries() <= 0) {
+            return false;
+          }
+        }
+        return true;
       } catch (const std::exception &) {
         return false;
       }
@@ -5136,6 +5146,23 @@ namespace exp_femto_3d {
         }
       }
     }
+    if (config.fit.profile_likelihood.enabled && profile_entries.empty()) {
+      throw std::runtime_error("fit.profile_likelihood selected zero slices from the input SliceCatalog.");
+    }
+    const bool process_worker = std::getenv("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER") != nullptr;
+    if (process_worker) {
+      std::set<std::string> worker_slice_ids;
+      std::set<FitResultGroupKey> worker_groups;
+      for (const SliceCatalogEntry *entry : profile_entries) {
+        if (!worker_slice_ids.insert(entry->slice_id).second) {
+          throw std::runtime_error("Internal profile worker received a duplicate slice assignment.");
+        }
+        worker_groups.emplace(entry->centrality_index, entry->mt_index, entry->qn_index);
+      }
+      if (worker_groups.size() != 1U) {
+        throw std::runtime_error("Internal profile worker assignment must contain exactly one Coulomb group.");
+      }
+    }
     // Dynamic target and effective-bound checks happen after CLI --model resolution and before any output reset.
     const std::vector<ResolvedProfileScan> resolved_profile_scans = ResolveProfileScans(config, model);
 
@@ -5191,7 +5218,6 @@ namespace exp_femto_3d {
     }
     const bool profile_only = config.fit.profile_likelihood.enabled
                               && config.fit.profile_likelihood.execution_mode == ProfileExecutionMode::kProfileOnly;
-    const bool process_worker = std::getenv("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER") != nullptr;
     const bool process_coordinator = profile_only
                                      && config.fit.profile_likelihood.parallel_backend
                                             == ProfileParallelBackend::kProcess
@@ -5322,12 +5348,22 @@ namespace exp_femto_3d {
             const std::string value(*item);
             if (value.rfind("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER=", 0) == 0
                 || value.rfind("EXP_FEMTO_3D_PROFILE_WORKER_SLICES=", 0) == 0
-                || value.rfind("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT=", 0) == 0) continue;
+                || value.rfind("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT=", 0) == 0
+                || value.rfind("OMP_NUM_THREADS=", 0) == 0
+                || value.rfind("OPENBLAS_NUM_THREADS=", 0) == 0
+                || value.rfind("VECLIB_MAXIMUM_THREADS=", 0) == 0
+                || value.rfind("MKL_NUM_THREADS=", 0) == 0) continue;
             environment_storage.push_back(value);
           }
           environment_storage.push_back("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER=1");
           environment_storage.push_back("EXP_FEMTO_3D_PROFILE_WORKER_SLICES=" + encoded_slices);
           environment_storage.push_back("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT=" + jobs[job_index].temporary_chunk_path);
+          // Each process owns one group; prevent numerical libraries from adding
+          // nested thread pools on top of the configured process concurrency.
+          environment_storage.push_back("OMP_NUM_THREADS=1");
+          environment_storage.push_back("OPENBLAS_NUM_THREADS=1");
+          environment_storage.push_back("VECLIB_MAXIMUM_THREADS=1");
+          environment_storage.push_back("MKL_NUM_THREADS=1");
           std::vector<char *> environment;
           for (std::string &value : environment_storage) environment.push_back(value.data());
           environment.push_back(nullptr);
@@ -5410,9 +5446,16 @@ namespace exp_femto_3d {
         auto execution = std::make_unique<TTree>("ProfileExecution", "Profile process execution metadata");
         execution->SetDirectory(nullptr);
         std::string execution_backend = "process";
+        std::string execution_slice_scope =
+            config.fit.profile_likelihood.slice_scope == ProfileSliceScope::kFitSelection
+                ? "fit_selection" : "listed";
         std::string execution_contract_digest = contract_digest;
         std::string checkpoint_run_id = config.fit.profile_likelihood.checkpoint.run_id;
         int configured_workers = config.fit.profile_likelihood.workers;
+        int effective_workers = static_cast<int>(
+            std::min<std::size_t>(static_cast<std::size_t>(configured_workers), jobs.size()));
+        int selected_slices = static_cast<int>(profile_entries.size());
+        int selected_groups = static_cast<int>(jobs.size());
         int resume_requested = config.fit.profile_likelihood.checkpoint.resume ? 1 : 0;
         int reused_chunks = static_cast<int>(std::count_if(jobs.begin(), jobs.end(), [](const ProcessJob &job) {
           return job.reused;
@@ -5422,6 +5465,11 @@ namespace exp_femto_3d {
                              std::chrono::steady_clock::now() - process_start).count();
         execution->Branch("parallel_backend", &execution_backend);
         execution->Branch("workers", &configured_workers);
+        execution->Branch("slice_scope", &execution_slice_scope);
+        execution->Branch("selected_slices", &selected_slices);
+        execution->Branch("selected_groups", &selected_groups);
+        execution->Branch("configured_workers", &configured_workers);
+        execution->Branch("effective_workers", &effective_workers);
         execution->Branch("contract_digest", &execution_contract_digest);
         execution->Branch("checkpoint_run_id", &checkpoint_run_id);
         execution->Branch("resume_requested", &resume_requested);

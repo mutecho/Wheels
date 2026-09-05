@@ -1153,16 +1153,26 @@ id = "rout2"
 parameters = ["rout2"]
 points = [3]
 )toml"), "process backend must not share production-fit outputs");
-  ExpectConfigError(temp_dir / "profile_only_fit_selection.toml", ProfileConfig(R"toml(
+  const ApplicationConfig parsed_profile_only_fit_selection = LoadApplicationConfig(WriteFile(
+      temp_dir / "profile_only_fit_selection.toml", ProfileConfig(R"toml(
 [fit.profile_likelihood]
 enabled = true
 execution_mode = "profile_only"
+parallel_backend = "process"
+workers = 10
+minimizer_backend = "legacy_tminuit"
 slice_scope = "fit_selection"
 [[fit.profile_likelihood.scans]]
 id = "rout2"
 parameters = ["rout2"]
 points = [3]
-)toml"), "profile-only mode requires an explicit listed slice contract");
+)toml")));
+  Expect(parsed_profile_only_fit_selection.fit.profile_likelihood.slice_scope
+                 == ProfileSliceScope::kFitSelection
+             && parsed_profile_only_fit_selection.fit.profile_likelihood.parallel_backend
+                    == ProfileParallelBackend::kProcess
+             && parsed_profile_only_fit_selection.fit.profile_likelihood.workers == 10,
+         "process profile-only mode should accept the materialized fit_selection contract");
   ExpectConfigError(temp_dir / "profile_resume_without_checkpoint.toml", ProfileConfig(R"toml(
 [fit.profile_likelihood]
 enabled = true
@@ -1353,6 +1363,19 @@ refine = true
 refinement_points = [5]
 )toml"),
                     "refinement points must match scan dimensionality");
+
+  const ApplicationConfig strict_parallel = LoadApplicationConfig(
+      std::string(EXP_FEMTO_3D_SOURCE_DIR) + "/config/oo_build_and_fit_6bins_profile_strict_parallel.toml");
+  Expect(strict_parallel.fit.profile_likelihood.enabled
+             && strict_parallel.fit.profile_likelihood.execution_mode == ProfileExecutionMode::kProfileOnly
+             && strict_parallel.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kProcess
+             && strict_parallel.fit.profile_likelihood.minimizer_backend
+                    == ProfileMinimizerBackend::kLegacyTMinuit
+             && strict_parallel.fit.profile_likelihood.slice_scope == ProfileSliceScope::kFitSelection
+             && strict_parallel.fit.profile_likelihood.slice_ids.empty()
+             && strict_parallel.fit.profile_likelihood.workers == 10
+             && strict_parallel.fit.profile_likelihood.scans.size() == 5U,
+         "strict-parallel public configuration must preserve five scans and enable ten process workers");
 
   std::cout << "config_parse_validation_test passed\n";
   return 0;

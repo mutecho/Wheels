@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -85,7 +86,21 @@ int main(int argc, char **argv) {
   try {
     const CliArgs args = ParseCli(argc, argv);
     ApplicationConfig config = LoadApplicationConfig(args.config_path);
-    if (const char *worker_slices = std::getenv("EXP_FEMTO_3D_PROFILE_WORKER_SLICES")) {
+    const char *worker_marker = std::getenv("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER");
+    const char *worker_slices = std::getenv("EXP_FEMTO_3D_PROFILE_WORKER_SLICES");
+    const char *worker_output = std::getenv("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT");
+    const bool any_worker_field = worker_marker != nullptr || worker_slices != nullptr || worker_output != nullptr;
+    const bool complete_worker_contract = worker_marker != nullptr && worker_slices != nullptr && worker_output != nullptr;
+    if (any_worker_field && (!complete_worker_contract || std::string(worker_marker) != "1")) {
+      throw std::runtime_error("Incomplete internal profile worker environment.");
+    }
+    if (complete_worker_contract) {
+      if (!config.fit.profile_likelihood.enabled
+          || config.fit.profile_likelihood.execution_mode != ProfileExecutionMode::kProfileOnly
+          || config.fit.profile_likelihood.parallel_backend != ProfileParallelBackend::kProcess
+          || config.fit.profile_likelihood.minimizer_backend != ProfileMinimizerBackend::kLegacyTMinuit) {
+        throw std::runtime_error("Internal profile worker requires process profile-only legacy-TMinuit configuration.");
+      }
       config.fit.profile_likelihood.slice_ids.clear();
       std::string encoded(worker_slices);
       std::size_t begin = 0;
@@ -97,10 +112,16 @@ int main(int argc, char **argv) {
         if (separator == std::string::npos) break;
         begin = separator + 1U;
       }
-      const char *worker_output = std::getenv("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT");
-      if (worker_output == nullptr || config.fit.profile_likelihood.slice_ids.empty()) {
+      const std::set<std::string> unique_slices(config.fit.profile_likelihood.slice_ids.begin(),
+                                                config.fit.profile_likelihood.slice_ids.end());
+      if (config.fit.profile_likelihood.slice_ids.empty()
+          || unique_slices.size() != config.fit.profile_likelihood.slice_ids.size()
+          || std::string(worker_output).empty()) {
         throw std::runtime_error("Incomplete internal profile worker environment.");
       }
+      // The parent has already materialized fit_selection and assigned one complete
+      // Coulomb group. The child must never expand the source TOML selection again.
+      config.fit.profile_likelihood.slice_scope = ProfileSliceScope::kListed;
       config.output.profile_root_name = worker_output;
       config.fit.profile_likelihood.checkpoint.enabled = false;
       config.fit.profile_likelihood.checkpoint.resume = false;

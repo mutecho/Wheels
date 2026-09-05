@@ -2,24 +2,29 @@
 
 ## Latest Durable Handoff
 
-- completed on 2026-09-04:
-  - added `profile_only`, process workers, explicit worker count, HESSE policy,
-    checkpoints, resume digests, and `fit --profile-estimate-only`
-  - made `profile_only` bypass detailed-fit ROOT, report ROOT, TSV, and
-    `FitCatalog` writes entirely
-  - used `posix_spawn` rather than post-ROOT `fork`; workers own complete
-    Coulomb groups and final merge is catalog-validated and atomic
-  - added ordered `PMLBinCache` plus a once-per-slice old/new objective check
-  - added attempt FCN/timing/HESSE/error-validity metadata and process execution
-    metadata
-  - added scout/focused configs and `scripts/run_exp_femto_3d_PROFILE.sh`
+- completed on 2026-09-05:
+  - enabled `profile_only + process` for parent-side materialized
+    `slice_scope="fit_selection"`; child workers are narrowed to their exact
+    assigned group and cannot expand the source TOML selection again
+  - added strict all-selection config
+    `config/oo_build_and_fit_6bins_profile_strict_parallel.toml` and runner tier
+    `scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel`
+  - fixed common child numerical-library thread counts to 1 and added original
+    scope, selected slice/group counts, and configured/effective workers to
+    `meta/ProfileExecution`
+  - strengthened chunk validation so every expected scan must contain readable,
+    non-empty `ProfilePoints` and `AttemptPoints`
 - verified:
-  - O2Physics executor build and full CTest passed 7/7 with `PRIMARY_OK`
-  - workflow smoke covers output isolation, process chunk merge, matching
-    resume, digest mismatch rejection, and preservation of the last final ROOT
-  - real scout estimate-only passed: 14 slices, 1,386 maximum attempts, no
-    likelihood-slice evaluations
-  - ROOT inspector returned `PRIMARY_OK` / `STATUS: OK`; toy canvas was viewed
+  - O2Physics executor build and full CTest passed 7/7 in 41.56 s with
+    `PRIMARY_OK`
+  - two-group toy covers complete fit-selection expansion, one-group-only child
+    chunks, exact final catalog cardinality, matching resume, changed-selection
+    digest rejection, both missing-tree cases, serial/process numerical
+    equivalence, and production sentinels
+  - ROOT inspector returned `PRIMARY_OK` / `STATUS: OK` for the 10-slice merged
+    process output
+  - real strict-parallel estimate-only passed: 84 slices, 12 groups, 10/10
+    configured/effective workers, 153,468 maximum attempts, and no output file
 - intentionally pending:
   - real OO scan and 1/2/4/6-worker scaling/RSS/swap benchmark
   - Minuit2 thread backend; configuration is recognized but runtime execution is
@@ -86,13 +91,14 @@
 
 ## Recommended Owner Action
 
-- inspect the current real scout estimate without creating output:
+- inspect the all-selection strict contract without creating output:
 
 ```bash
-scripts/run_exp_femto_3d_PROFILE.sh --tier scout --profile-estimate-only
+scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel --profile-estimate-only
 ```
 
-- then run the scout with `workers=2`; keep its output diagnostic-only
+- the strict-parallel estimate is very expensive; normally run scout/focused
+  first and reserve strict-parallel for selected operational needs
 - benchmark workers 1/2/4/6 before raising concurrency, watching RSS and swap
 - promote only anomalous slices to focused-1D/focused-2D and finally strict
 - do not enable the Minuit2 thread backend until its A/B gate is completed

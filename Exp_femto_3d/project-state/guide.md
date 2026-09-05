@@ -365,12 +365,24 @@ bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_co
 
 ### Profile 加速运行约束
 
-- `profile_only` 只允许 `slice_scope="listed"`，不会写 production fit ROOT、
-  report ROOT、TSV 或 `FitCatalog`
+- `profile_only` 支持 `slice_scope="listed"`，也支持由父进程从
+  `SliceCatalog` 展开的 `slice_scope="fit_selection"`；两者都不会写
+  production fit ROOT、report ROOT、TSV 或 `FitCatalog`
 - legacy TMinuit 并行使用 `parallel_backend="process"`；完整 group 分配到
-  独立 worker，scan 内保持串行
+  独立 worker，worker 内部强制使用父进程分配的精确 slice 列表，scan 内
+  保持串行且数值库内部线程数为 1
 - 首次建议 `workers=2`、`hesse_strategy="none"`、`reference_only` 和关闭
   likelihood slice；异常 slice 再进入 focused/strict tier
 - `resume=true` 只接受 CF 内容、模型、scan contract 和 catalog 完全匹配的
   chunk；不匹配会拒绝，不会覆盖上一次完整 final ROOT
 - `thread`/Minuit2 目前只保留配置契约，执行会明确拒绝，不能用于权威结果
+
+完整 strict 网格但不写 production fit 的全 selection 入口是：
+
+```bash
+scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel --profile-estimate-only
+scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel
+```
+
+对应配置固定 `workers=10`；实际有效并发为 `min(10, selected_groups)`，正式
+启动前应先用 estimate-only 核对 slice/group 数并观察机器的 RSS 与 swap。

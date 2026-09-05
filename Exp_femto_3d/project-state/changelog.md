@@ -2,6 +2,14 @@
 
 ## 2026-09-05
 
+- Added all-`fit_selection` process profile-only execution with parent-side
+  materialization and exact one-group child assignments; nested numerical
+  library threads are fixed to one per worker.
+- Added the strict-parallel 10-worker configuration and runner tier while
+  preserving the original strict TOML unchanged.
+- Strengthened chunk tree completeness checks and expanded process metadata;
+  two-group serial/process/resume regression and real 84-slice estimate-only
+  validation passed without starting the strict scan.
 - Reduced profile ROOT display objects to the compact diagnostic set while
   retaining complete point/attempt trees and named `Nuisance_<parameter>`
   trajectories. Removed duplicate `Nuisance_p<N>` aliases and redundant

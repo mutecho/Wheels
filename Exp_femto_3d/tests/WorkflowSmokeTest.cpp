@@ -52,17 +52,19 @@ namespace {
 
     const int bins[7] = {6, 6, 6, 2, 2, 1, 4};
     const double min[7] = {-0.15, -0.15, -0.15, 0.2, 0.0, -0.5, 0.0};
-    const double max[7] = {0.15, 0.15, 0.15, 0.4, 10.0, 0.5, 3.14159265358979323846};
+    const double max[7] = {0.15, 0.15, 0.15, 0.4, 20.0, 0.5, 3.14159265358979323846};
 
     auto same = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
     for (double phi : {0.3, 1.1, 2.0, 2.8}) {
-      FillSparse(*same, 0.01, 0.00, 0.01, 0.3, 5.0, phi, 50.0);
-      FillSparse(*same, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 42.0);
-      FillSparse(*same, 0.02, -0.01, 0.00, 0.3, 5.0, phi, 35.0);
-      FillSparse(*mixed, 0.01, 0.00, 0.01, 0.3, 5.0, phi, 55.0);
-      FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, 5.0, phi, 48.0);
-      FillSparse(*mixed, 0.02, -0.01, 0.00, 0.3, 5.0, phi, 40.0);
+      for (const double centrality : {5.0, 15.0}) {
+        FillSparse(*same, 0.01, 0.00, 0.01, 0.3, centrality, phi, 50.0);
+        FillSparse(*same, -0.01, 0.01, -0.01, 0.3, centrality, phi, 42.0);
+        FillSparse(*same, 0.02, -0.01, 0.00, 0.3, centrality, phi, 35.0);
+        FillSparse(*mixed, 0.01, 0.00, 0.01, 0.3, centrality, phi, 55.0);
+        FillSparse(*mixed, -0.01, 0.01, -0.01, 0.3, centrality, phi, 48.0);
+        FillSparse(*mixed, 0.02, -0.01, 0.00, 0.3, centrality, phi, 40.0);
+      }
     }
 
     same_dir->cd();
@@ -87,7 +89,8 @@ namespace {
                           const std::string &fit_parameter_lines = "",
                           const std::string &profile_likelihood_lines = "",
                           const std::string &profile_root_name = "profile_likelihood.root",
-                          const bool fit_progress = false) {
+                          const bool fit_progress = false,
+                          const std::string &additional_selection_bins = "") {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -126,6 +129,7 @@ namespace {
     output << profile_likelihood_lines;
     output << "[[bins.centrality]]\nmin = 0\nmax = 10\n\n";
     output << "[[bins.mt]]\nmin = 0.2\nmax = 0.4\n";
+    output << additional_selection_bins;
     return path.string();
   }
 
@@ -270,6 +274,96 @@ namespace {
     Expect(tree.GetBranch("hesse_wall_ms") != nullptr, name + " HESSE timing branch missing");
     Expect(tree.GetBranch("hesse_ran") != nullptr, name + " HESSE execution flag missing");
     Expect(tree.GetBranch("parameter_errors_valid") != nullptr, name + " parameter-error validity flag missing");
+  }
+
+  bool EquivalentProfileNumber(const double left, const double right) {
+    if (std::isnan(left) && std::isnan(right)) return true;
+    return std::abs(left - right) <= 1.0e-10 * (1.0 + std::max(std::abs(left), std::abs(right)));
+  }
+
+  void ExpectProfileNumericalEquivalence(const std::filesystem::path &serial_path,
+                                         const std::filesystem::path &process_path) {
+    TFile serial(serial_path.string().c_str(), "READ");
+    TFile process(process_path.string().c_str(), "READ");
+    auto *serial_catalog = dynamic_cast<TTree *>(serial.Get("meta/ProfileLikelihoodCatalog"));
+    auto *process_catalog = dynamic_cast<TTree *>(process.Get("meta/ProfileLikelihoodCatalog"));
+    Expect(!serial.IsZombie() && !process.IsZombie() && serial_catalog != nullptr && process_catalog != nullptr,
+           "serial/process profile catalogs must be readable");
+    Expect(serial_catalog->GetEntries() == process_catalog->GetEntries(),
+           "serial/process profile catalogs must have the same rows");
+    TTreeReader serial_catalog_reader(serial_catalog);
+    TTreeReader process_catalog_reader(process_catalog);
+    TTreeReaderValue<std::string> serial_slice(serial_catalog_reader, "slice_id");
+    TTreeReaderValue<std::string> process_slice(process_catalog_reader, "slice_id");
+    TTreeReaderValue<std::string> serial_scan(serial_catalog_reader, "scan_id");
+    TTreeReaderValue<std::string> process_scan(process_catalog_reader, "scan_id");
+    TTreeReaderValue<std::string> serial_reference_source(serial_catalog_reader, "reference_source");
+    TTreeReaderValue<std::string> process_reference_source(process_catalog_reader, "reference_source");
+    TTreeReaderValue<double> serial_reference(serial_catalog_reader, "reference_objective");
+    TTreeReaderValue<double> process_reference(process_catalog_reader, "reference_objective");
+    while (serial_catalog_reader.Next()) {
+      Expect(process_catalog_reader.Next(), "process profile catalog row missing");
+      Expect(*serial_slice == *process_slice && *serial_scan == *process_scan
+                 && *serial_reference_source == *process_reference_source
+                 && EquivalentProfileNumber(*serial_reference, *process_reference),
+             "serial/process catalog reference mismatch");
+      const std::string directory = "profiles/" + *serial_slice + "/" + *serial_scan + "/";
+      auto *serial_points = dynamic_cast<TTree *>(serial.Get((directory + "ProfilePoints").c_str()));
+      auto *process_points = dynamic_cast<TTree *>(process.Get((directory + "ProfilePoints").c_str()));
+      auto *serial_attempts = dynamic_cast<TTree *>(serial.Get((directory + "AttemptPoints").c_str()));
+      auto *process_attempts = dynamic_cast<TTree *>(process.Get((directory + "AttemptPoints").c_str()));
+      Expect(serial_points != nullptr && process_points != nullptr && serial_attempts != nullptr && process_attempts != nullptr,
+             "serial/process numerical profile trees missing");
+      Expect(serial_points->GetEntries() == process_points->GetEntries()
+                 && serial_attempts->GetEntries() == process_attempts->GetEntries(),
+             "serial/process point or attempt row count mismatch");
+
+      TTreeReader serial_point_reader(serial_points);
+      TTreeReader process_point_reader(process_points);
+      TTreeReaderValue<std::vector<double>> serial_coordinates(serial_point_reader, "coordinates");
+      TTreeReaderValue<std::vector<double>> process_coordinates(process_point_reader, "coordinates");
+      TTreeReaderValue<double> serial_objective(serial_point_reader, "objective");
+      TTreeReaderValue<double> process_objective(process_point_reader, "objective");
+      TTreeReaderValue<double> serial_delta(serial_point_reader, "delta_neg2logl");
+      TTreeReaderValue<double> process_delta(process_point_reader, "delta_neg2logl");
+      TTreeReaderValue<std::string> serial_status(serial_point_reader, "status");
+      TTreeReaderValue<std::string> process_status(process_point_reader, "status");
+      TTreeReaderValue<std::string> serial_winner(serial_point_reader, "winner_seed");
+      TTreeReaderValue<std::string> process_winner(process_point_reader, "winner_seed");
+      while (serial_point_reader.Next()) {
+        Expect(process_point_reader.Next(), "process ProfilePoints row missing");
+        Expect(serial_coordinates->size() == process_coordinates->size(),
+               "serial/process profile coordinate dimensionality mismatch");
+        for (std::size_t coordinate = 0; coordinate < serial_coordinates->size(); ++coordinate) {
+          Expect(EquivalentProfileNumber(serial_coordinates->at(coordinate), process_coordinates->at(coordinate)),
+                 "serial/process profile coordinate mismatch");
+        }
+        Expect(*serial_status == *process_status && *serial_winner == *process_winner
+                   && EquivalentProfileNumber(*serial_objective, *process_objective)
+                   && EquivalentProfileNumber(*serial_delta, *process_delta),
+               "serial/process profile winner, status, objective, or delta mismatch");
+      }
+
+      TTreeReader serial_attempt_reader(serial_attempts);
+      TTreeReader process_attempt_reader(process_attempts);
+      TTreeReaderValue<int> serial_attempt_index(serial_attempt_reader, "attempt_index");
+      TTreeReaderValue<int> process_attempt_index(process_attempt_reader, "attempt_index");
+      TTreeReaderValue<int> serial_point_index(serial_attempt_reader, "point_index");
+      TTreeReaderValue<int> process_point_index(process_attempt_reader, "point_index");
+      TTreeReaderValue<std::string> serial_seed(serial_attempt_reader, "seed_origin");
+      TTreeReaderValue<std::string> process_seed(process_attempt_reader, "seed_origin");
+      TTreeReaderValue<std::string> serial_attempt_status(serial_attempt_reader, "status");
+      TTreeReaderValue<std::string> process_attempt_status(process_attempt_reader, "status");
+      while (serial_attempt_reader.Next()) {
+        Expect(process_attempt_reader.Next(), "process AttemptPoints row missing");
+        Expect(*serial_attempt_index == *process_attempt_index
+                   && *serial_point_index == *process_point_index
+                   && *serial_seed == *process_seed
+                   && *serial_attempt_status == *process_attempt_status,
+               "serial/process attempt order, seed, or status mismatch");
+      }
+    }
+    Expect(!process_catalog_reader.Next(), "process profile catalog has extra rows");
   }
 
   void ExpectProfileOutput(const std::filesystem::path &profile_root_path,
@@ -570,8 +664,7 @@ parallel_backend = "process"
 workers = 2
 minimizer_backend = "legacy_tminuit"
 hesse_strategy = "none"
-slice_scope = "listed"
-slice_ids = [")toml" + profile_slice_id + R"toml("]
+slice_scope = "fit_selection"
 retry_strategy = "reference_only"
 write_likelihood_slice = false
 
@@ -588,22 +681,32 @@ points = [3]
 min = [0.01]
 max = [2.0]
 )toml";
+  const std::string two_group_bins = R"toml(
+
+[[bins.centrality]]
+min = 10
+max = 20
+)toml";
   const std::string process_config_path = WriteConfig(
-      temp_dir / "profile_process.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      temp_dir / "profile_process.toml", input_root, temp_dir.string(), "two_group_cf.root",
       "profile_process_production.root", "profile_process_production.tsv", "profile_process_report.root",
       true, std::nullopt, "use_coulomb = false\n", true, fixed_parameter_lines, process_profile_lines,
-      "profile_process.root", true);
+      "profile_process.root", true, two_group_bins);
   const ApplicationConfig process_config = LoadApplicationConfig(process_config_path);
+  const BuildCfRunStatistics two_group_build_stats = RunBuildCf(process_config, logger);
+  Expect(two_group_build_stats.stored_slices == 10,
+         "two-group build must provide every phi-integrated and differential toy slice");
   std::filesystem::remove(temp_dir / "profile_process.root");
   std::filesystem::remove_all(temp_dir / "toy_process.work" / "toy_process_v1");
   const FitRunStatistics estimate_stats =
       RunFit(process_config, logger, std::nullopt, std::nullopt, true, process_config_path);
-  Expect(estimate_stats.profile_estimate_only && estimate_stats.profile_estimated_attempts == 3,
+  Expect(estimate_stats.profile_estimate_only && estimate_stats.profile_estimated_attempts == 30,
          "estimate-only must report the exact reference-only coarse upper bound");
-  Expect(estimate_stats.profile_estimated_groups == 1
+  Expect(estimate_stats.profile_selected_slices == 10
+             && estimate_stats.profile_estimated_groups == 2
              && estimate_stats.profile_estimated_coarse_points_per_slice == 3
              && estimate_stats.profile_estimated_refined_points_per_slice == 0
-             && estimate_stats.profile_effective_workers == 1,
+             && estimate_stats.profile_effective_workers == 2,
          "estimate-only must report group, grid, refinement, and effective concurrency bounds");
   Expect(!std::filesystem::exists(temp_dir / "profile_process.root"),
          "estimate-only must not create the profile output");
@@ -617,23 +720,44 @@ max = [2.0]
   }
   const FitRunStatistics process_stats =
       RunFit(process_config, logger, std::nullopt, std::nullopt, false, process_config_path);
-  Expect(process_stats.profile_completed_slices == 1, "process profile-only run must complete its listed slice");
+  Expect(process_stats.profile_completed_slices == 10,
+         "process profile-only run must complete every fit_selection slice");
   Expect(process_stats.profile_output_path == (temp_dir / "profile_process.root").string(),
          "profile-only statistics must expose the resolved diagnostic output path");
   {
-    std::ifstream worker_log(temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.worker.log");
-    Expect(worker_log.is_open(), "process worker log must be retained for diagnostics");
-    const std::string worker_output((std::istreambuf_iterator<char>(worker_log)), std::istreambuf_iterator<char>());
-    Expect(worker_output.find("fit [") == std::string::npos,
-           "process workers must not render independent terminal progress lines");
+    for (const std::string &group : {"cent0_mt0_qn-1", "cent1_mt0_qn-1"}) {
+      std::ifstream worker_log(temp_dir / "toy_process.work" / "toy_process_v1" / (group + ".worker.log"));
+      Expect(worker_log.is_open(), "process worker log must be retained for every assigned group");
+      const std::string worker_output((std::istreambuf_iterator<char>(worker_log)), std::istreambuf_iterator<char>());
+      Expect(worker_output.find("fit [") == std::string::npos,
+             "process workers must not render independent terminal progress lines");
+    }
   }
   {
     TFile process_output((temp_dir / "profile_process.root").string().c_str(), "READ");
     Expect(!process_output.IsZombie(), "merged process profile output must be readable");
     auto *execution = dynamic_cast<TTree *>(process_output.Get("meta/ProfileExecution"));
+    auto *profile_catalog_tree = dynamic_cast<TTree *>(process_output.Get("meta/ProfileLikelihoodCatalog"));
     auto *attempts = dynamic_cast<TTree *>(
         process_output.Get(("profiles/" + profile_slice_id + "/rout2/AttemptPoints").c_str()));
     Expect(execution != nullptr && execution->GetEntries() == 1, "process execution metadata missing");
+    Expect(profile_catalog_tree != nullptr && profile_catalog_tree->GetEntries() == 10,
+           "merged fit_selection catalog must contain exactly selected slices times scans");
+    std::string *slice_scope = nullptr;
+    int selected_slices = 0;
+    int selected_groups = 0;
+    int configured_workers = 0;
+    int effective_workers = 0;
+    execution->SetBranchAddress("slice_scope", &slice_scope);
+    execution->SetBranchAddress("selected_slices", &selected_slices);
+    execution->SetBranchAddress("selected_groups", &selected_groups);
+    execution->SetBranchAddress("configured_workers", &configured_workers);
+    execution->SetBranchAddress("effective_workers", &effective_workers);
+    execution->GetEntry(0);
+    Expect(slice_scope != nullptr && *slice_scope == "fit_selection"
+               && selected_slices == 10 && selected_groups == 2
+               && configured_workers == 2 && effective_workers == 2,
+           "process metadata must preserve parent scope and configured/effective concurrency");
     Expect(attempts != nullptr && attempts->GetBranch("fcn_calls") != nullptr
                && attempts->GetBranch("hesse_ran") != nullptr
                && attempts->GetBranch("parameter_errors_valid") != nullptr,
@@ -648,6 +772,50 @@ max = [2.0]
     Expect(contents == sentinel.second,
            std::string("profile_only must not mutate production output ") + sentinel.first);
   }
+  for (const auto &[group, expected_centrality] :
+       {std::pair<std::string, int>{"cent0_mt0_qn-1", 0},
+        std::pair<std::string, int>{"cent1_mt0_qn-1", 1}}) {
+    TFile chunk((temp_dir / "toy_process.work" / "toy_process_v1" / (group + ".root")).string().c_str(), "READ");
+    auto *chunk_catalog = dynamic_cast<TTree *>(chunk.Get("meta/ProfileLikelihoodCatalog"));
+    Expect(!chunk.IsZombie() && chunk_catalog != nullptr && chunk_catalog->GetEntries() == 5,
+           "each process chunk must contain only the five slices in its assigned group");
+    int centrality_index = -1;
+    chunk_catalog->SetBranchAddress("centrality_index", &centrality_index);
+    for (Long64_t row = 0; row < chunk_catalog->GetEntries(); ++row) {
+      chunk_catalog->GetEntry(row);
+      Expect(centrality_index == expected_centrality,
+             "worker chunk must not re-expand fit_selection outside its assigned group");
+    }
+  }
+  const std::string serial_profile_lines = R"toml(
+[fit.profile_likelihood]
+enabled = true
+execution_mode = "profile_only"
+parallel_backend = "serial"
+workers = 1
+minimizer_backend = "legacy_tminuit"
+hesse_strategy = "none"
+slice_scope = "fit_selection"
+retry_strategy = "reference_only"
+write_likelihood_slice = false
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+min = [0.01]
+max = [2.0]
+)toml";
+  const std::string serial_profile_config_path = WriteConfig(
+      temp_dir / "profile_serial_fit_selection.toml", input_root, temp_dir.string(), "two_group_cf.root",
+      "profile_serial_production.root", "profile_serial_production.tsv", "profile_serial_report.root",
+      true, std::nullopt, "use_coulomb = false\n", true, fixed_parameter_lines, serial_profile_lines,
+      "profile_serial.root", false, two_group_bins);
+  const ApplicationConfig serial_profile_config = LoadApplicationConfig(serial_profile_config_path);
+  const FitRunStatistics serial_profile_stats = RunFit(serial_profile_config, logger);
+  Expect(serial_profile_stats.profile_completed_slices == 10,
+         "serial profile-only comparison must complete the same fit_selection slices");
+  ExpectProfileNumericalEquivalence(temp_dir / "profile_serial.root", temp_dir / "profile_process.root");
   {
     TFile checkpoint(
         (temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.root").string().c_str(),
@@ -663,7 +831,7 @@ max = [2.0]
   }
   const FitRunStatistics resumed_process_stats =
       RunFit(process_config, logger, std::nullopt, std::nullopt, false, process_config_path);
-  Expect(resumed_process_stats.profile_completed_slices == 1,
+  Expect(resumed_process_stats.profile_completed_slices == 10,
          "matching process checkpoint must resume and still produce a complete result");
   {
     TFile resumed_output((temp_dir / "profile_process.root").string().c_str(), "READ");
@@ -672,11 +840,44 @@ max = [2.0]
            "final merge must prune duplicate nuisance aliases from reused checkpoint chunks");
   }
   const auto complete_profile_size = std::filesystem::file_size(temp_dir / "profile_process.root");
+
+  const std::string one_group_selection = two_group_bins + R"toml(
+
+[[fit_selection.centrality]]
+min = 0
+max = 10
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  const std::string changed_selection_config_path = WriteConfig(
+      temp_dir / "profile_process_changed_selection.toml", input_root, temp_dir.string(), "two_group_cf.root",
+      "profile_process_production.root", "profile_process_production.tsv", "profile_process_report.root",
+      true, std::nullopt, "use_coulomb = false\n", true, fixed_parameter_lines, process_profile_lines,
+      "profile_process.root", true, one_group_selection);
+  const ApplicationConfig changed_selection_config = LoadApplicationConfig(changed_selection_config_path);
+  bool saw_selection_checkpoint_mismatch = false;
+  try {
+    (void)RunFit(changed_selection_config, logger, std::nullopt, std::nullopt, false,
+                 changed_selection_config_path);
+  } catch (const std::runtime_error &error) {
+    saw_selection_checkpoint_mismatch =
+        std::string(error.what()).find("Checkpoint contract mismatch") != std::string::npos;
+  }
+  Expect(saw_selection_checkpoint_mismatch,
+         "changing fit_selection must reject chunks built from the previous expanded slice list");
+  Expect(std::filesystem::file_size(temp_dir / "profile_process.root") == complete_profile_size,
+         "fit_selection checkpoint rejection must preserve the previous complete profile output");
+
   {
-    std::ofstream mismatched_digest(
-        temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.digest",
-        std::ios::trunc);
-    mismatched_digest << "mismatched contract\n";
+    TFile incomplete_chunk(
+        (temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.root").string().c_str(),
+        "UPDATE");
+    auto *scan_directory = incomplete_chunk.GetDirectory(("profiles/" + profile_slice_id + "/rout2").c_str());
+    Expect(scan_directory != nullptr, "checkpoint scan directory missing before completeness test");
+    scan_directory->Delete("ProfilePoints;*");
+    incomplete_chunk.Close();
   }
   bool saw_checkpoint_mismatch = false;
   try {
@@ -684,9 +885,63 @@ max = [2.0]
   } catch (const std::runtime_error &error) {
     saw_checkpoint_mismatch = std::string(error.what()).find("Checkpoint contract mismatch") != std::string::npos;
   }
-  Expect(saw_checkpoint_mismatch, "resume must reject a mismatched checkpoint digest");
+  Expect(saw_checkpoint_mismatch, "resume must reject a chunk missing ProfilePoints");
   Expect(std::filesystem::file_size(temp_dir / "profile_process.root") == complete_profile_size,
          "checkpoint rejection must preserve the previous complete profile output");
+
+  std::filesystem::remove(temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.root");
+  std::filesystem::remove(temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.digest");
+  (void)RunFit(process_config, logger, std::nullopt, std::nullopt, false, process_config_path);
+  const auto repaired_profile_size = std::filesystem::file_size(temp_dir / "profile_process.root");
+  {
+    TFile incomplete_chunk(
+        (temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.root").string().c_str(),
+        "UPDATE");
+    auto *scan_directory = incomplete_chunk.GetDirectory(("profiles/" + profile_slice_id + "/rout2").c_str());
+    Expect(scan_directory != nullptr, "checkpoint scan directory missing before attempt-tree test");
+    scan_directory->Delete("AttemptPoints;*");
+    incomplete_chunk.Close();
+  }
+  bool saw_missing_attempts = false;
+  try {
+    (void)RunFit(process_config, logger, std::nullopt, std::nullopt, false, process_config_path);
+  } catch (const std::runtime_error &error) {
+    saw_missing_attempts = std::string(error.what()).find("Checkpoint contract mismatch") != std::string::npos;
+  }
+  Expect(saw_missing_attempts, "resume must reject a chunk missing AttemptPoints");
+  Expect(std::filesystem::file_size(temp_dir / "profile_process.root") == repaired_profile_size,
+         "missing-attempt checkpoint rejection must preserve the previous complete profile output");
+
+  const std::string empty_selection_bins = R"toml(
+
+[[bins.centrality]]
+min = 10
+max = 20
+
+[[fit_selection.centrality]]
+min = 10
+max = 20
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  const std::string empty_selection_config_path = WriteConfig(
+      temp_dir / "profile_process_empty_selection.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "empty_selection_fit.root", "empty_selection.tsv", "empty_selection_report.root",
+      true, std::nullopt, "use_coulomb = false\n", true, fixed_parameter_lines, process_profile_lines,
+      "empty_selection_profile.root", false, empty_selection_bins);
+  std::filesystem::remove(temp_dir / "empty_selection_profile.root");
+  const ApplicationConfig empty_selection_config = LoadApplicationConfig(empty_selection_config_path);
+  bool saw_empty_selection = false;
+  try {
+    (void)RunFit(empty_selection_config, logger, std::nullopt, std::nullopt, false,
+                 empty_selection_config_path);
+  } catch (const std::runtime_error &error) {
+    saw_empty_selection = std::string(error.what()).find("selected zero slices") != std::string::npos;
+  }
+  Expect(saw_empty_selection && !std::filesystem::exists(temp_dir / "empty_selection_profile.root"),
+         "an empty materialized fit_selection must fail before creating profile output");
 
   const std::string dynamic_override_lines = R"toml(
 [fit.profile_likelihood]

@@ -1,5 +1,32 @@
 # Tests
 
+## T-020: All-Selection Strict Parallel Profile-Only
+
+- date: 2026-09-05
+- environment: shared O2Physics ROOT executor, primary module
+- result: passed, executor status `PRIMARY_OK`
+- evidence:
+  - configured build succeeded and complete CTest passed 7/7 in 41.56 seconds
+  - config validation accepts process profile-only `fit_selection` without
+    `slice_ids`; invalid process/alongside and fit-selection-plus-IDs contracts
+    remain rejected
+  - two-group ROOT smoke selected all 10 toy slices, produced two disjoint
+    five-slice chunks, merged exactly 10 slice/scan catalog rows, and recorded
+    parent scope plus 2/2 configured/effective workers
+  - serial and two-process outputs matched coordinates, attempt order, winner,
+    status, reference source/objective, raw objective, and delta
+  - exact resume succeeded; changed `fit_selection`, missing `ProfilePoints`,
+    and missing `AttemptPoints` each rejected old chunks while preserving the
+    last complete final ROOT
+  - production fit ROOT, report ROOT, and TSV sentinels were unchanged
+  - ROOT inspector returned `STATUS: OK`; merged output contained 10
+    `ProfilePoints`, 10 `AttemptPoints`, compact named nuisance graphs, and one
+    `ProfileExecution` tree
+  - real `strict-parallel --profile-estimate-only` returned 84 slices, 12
+    groups, 10/10 workers, 153,468 maximum attempts, and 51,156 likelihood-slice
+    evaluations; the profile output state remained absent
+- scope note: no real strict profile calculation or physics attribution was run
+
 ## T-019: Compact Profile ROOT Display Contract
 
 - date: 2026-09-05

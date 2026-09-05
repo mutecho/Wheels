@@ -6,11 +6,15 @@
 - decision:
   legacy TMinuit profiles may run concurrently only as isolated process tasks
   owning complete `(centrality,mT,qn)` groups; each slice/scan remains serial,
-  and `profile_only` is required for the process backend
+  and `profile_only` is required for the process backend. The parent may select
+  exact `listed` slices or materialize all `fit_selection` slices, but each
+  child is narrowed to the exact list for one assigned group
 - rationale:
   - TMinuit, ROOT, PML, and Coulomb callback state are process-local rather than
     thread-safe in the current implementation
   - group ownership builds and freezes one finite-source kernel in one worker
+  - parent-side materialization preserves all-selection semantics without
+    allowing a child to re-expand the global selection or duplicate work
   - `posix_spawn` avoids inheriting ROOT locks, which a post-ROOT `fork` can do
   - chunk validation and atomic final replacement preserve the last complete
     diagnostic output across interruption or worker failure

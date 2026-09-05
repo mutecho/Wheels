@@ -827,10 +827,6 @@ namespace exp_femto_3d {
     if (!config.fit.options.use_pml) {
       throw ConfigError("fit.profile_likelihood.enabled requires fit.use_pml = true.");
     }
-    if (profile.execution_mode == ProfileExecutionMode::kProfileOnly
-        && profile.slice_scope != ProfileSliceScope::kListed) {
-      throw ConfigError("fit.profile_likelihood.execution_mode = 'profile_only' requires slice_scope = 'listed'.");
-    }
     if (profile.parallel_backend == ProfileParallelBackend::kProcess
         && profile.minimizer_backend != ProfileMinimizerBackend::kLegacyTMinuit) {
       throw ConfigError("fit.profile_likelihood.parallel_backend = 'process' requires minimizer_backend = 'legacy_tminuit'.");
