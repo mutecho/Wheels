@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-09-05
+
+- Reduced profile ROOT display objects to the compact diagnostic set while
+  retaining complete point/attempt trees and named `Nuisance_<parameter>`
+  trajectories. Removed duplicate `Nuisance_p<N>` aliases and redundant
+  coarse/refined, failure, minimum, boundary, and nuisance-canvas objects.
+- Process-mode final merge now prunes obsolete QA objects from reused legacy
+  checkpoint chunks without discarding their numerical results.
+
+## 2026-09-04
+
+- Added safe `profile_only` execution, group-level legacy-TMinuit process
+  parallelism via `posix_spawn`, per-group atomic checkpoints, strict resume
+  digests, catalog-complete merge validation, and atomic final replacement.
+- Added `fit --profile-estimate-only`, configurable worker/HESSE/backend fields,
+  process execution metadata, and per-attempt FCN/timing/error-validity fields.
+- Added an ordered per-slice `PMLBinCache` with an old/new objective invariant;
+  no parallel floating-point reduction or physics/statistics formula changed.
+- Added scout/focused tier configs and the `run_exp_femto_3d_PROFILE.sh` runner.
+- Fixed ROOT ownership of the top-level profile catalog trees and the single
+  valid-point 1D canvas X-axis range.
+- O2Physics build and CTest passed 7/7; ROOT schema and toy canvas checks passed.
+  Real OO scaling/physics attribution remains intentionally pending.
+
+## 2026-09-03
+
+- Added an opt-in `[fit.profile_likelihood]` detailed PML diagnostic mode to
+  the existing `fit` command, with listed/fit-selection slice scopes and
+  multiple serial 1D/2D scans.
+- Unified nominal, profile, and likelihood-slice evaluation through the same
+  stateful PML evaluator and shared Minuit request/result path while preserving
+  production fit semantics.
+- Added nominal/bidirectional-neighbor attempts, failure classification and
+  retention, interior regular refinement, and a per-slice global diagnostic
+  reference without replacing production minima.
+- Added a separate profile ROOT contract with metadata catalogs, numerical
+  point/attempt trees, nuisance trajectories, status masks, markers, and
+  diagnostic-only 1D/2D canvases.
+- Froze finite-source profile points to the nominal group Coulomb kernel and
+  recorded kernel provenance in the profile metadata.
+- Added config, deterministic pure-driver, and ROOT-guarded smoke coverage and
+  synchronized README, the public example, formula documentation, and ledger.
+- ROOT-independent driver validation and `git diff --check` passed. Full ROOT
+  executor build/CTest and canvas QA remain blocked by `/dev/fd` sandbox entry
+  failure plus HTTP 403 from the escalation approval backend; no real OO data
+  was run.
+
 ## 2026-08-13
 
 - Resolved the remote/local conflict as a semantic union of three independent

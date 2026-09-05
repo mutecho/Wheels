@@ -91,6 +91,90 @@ Independent fit-report output:
 - these fields control the standalone ROOT report file produced by `fit`; when
   `fit_report_directory` is omitted, it defaults to `output_directory`
 
+PML profile-likelihood diagnostics:
+
+- `[fit.profile_likelihood].enabled = false` is the default; when disabled,
+  `fit` does not create or reset the profile ROOT file
+- the mode requires `[fit].use_pml = true` and runs inside the existing `fit`
+  command without changing the production fit result, `FitCatalog`, or TSV
+- one run may contain multiple 1D/2D scans over exact `slice_ids`, or over all
+  slices selected by `fit_selection`
+- every grid point fixes the named scan parameter(s) and re-minimizes all
+  remaining free nuisance parameters; `Slice1D` is written separately for the
+  optional fixed-nuisance comparison
+- finite-source scans reuse the group Coulomb kernel prepared by the nominal
+  workflow; the kernel is never rebuilt as a scanned radius changes
+- `[output].profile_root_name` controls the independent diagnostic file and
+  must not resolve to the CF, detailed-fit, or report ROOT path
+- profile contours are labelled `diagnostic only`; they are not confidence
+  intervals and are not labelled as 68%/95% CL regions
+- `execution_mode = "profile_only"` requires explicitly listed slices and never
+  creates or modifies the detailed-fit ROOT, report ROOT, TSV, or `FitCatalog`
+- `parallel_backend = "process"` assigns complete `(centrality,mT,qn)` Coulomb
+  groups to isolated legacy-TMinuit workers; scans within one slice remain serial
+- process checkpoints are written per completed group and reused only when the
+  input-CF content and complete scan/model contract digest match
+- `hesse_strategy = "none"` skips HESSE for the private nominal fit and every
+  profile attempt; stored errors are NaN with `parameter_errors_valid=false`
+- the Minuit2/thread backend is parsed as an experimental contract but execution
+  is deliberately rejected until numerical A/B validation is completed
+
+```toml
+[output]
+profile_root_name = "profile_likelihood.root"
+
+[fit.profile_likelihood]
+enabled = true
+execution_mode = "profile_only"       # "alongside_fit" | "profile_only"
+parallel_backend = "process"          # "serial" | "process" | experimental "thread"
+workers = 2
+minimizer_backend = "legacy_tminuit"
+hesse_strategy = "none"               # "all_attempts" | "none"
+slice_scope = "listed" # or "fit_selection"
+slice_ids = ["exact_slice_id"] # remove this field for fit_selection
+retry_strategy = "reference_and_bidirectional_neighbors"
+write_likelihood_slice = true
+contour_levels = [1.0, 2.0, 4.0]
+
+[fit.profile_likelihood.checkpoint]
+enabled = true
+resume = true
+run_id = "oo_6phi_scout_v1"
+directory = "profile_likelihood_scout.work"
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [41]
+min = [0.01]
+max = [100.0]
+refine = true
+refinement_points = [21]
+
+[[fit.profile_likelihood.scans]]
+id = "rout2_lambda"
+parameters = ["rout2", "lambda"]
+points = [21, 21]
+refine = false
+```
+
+Finite scan bounds may be omitted to inherit the active fit bounds. Parameters
+without finite default bounds, including full-model off-diagonal radii, require
+explicit `min`/`max`. Targets must exist in the active `diag`/`full` model and
+must be free in the nominal fit. `refine = true` requires a matching
+`refinement_points` entry for every scan axis.
+
+Use `fit --profile-estimate-only` to perform config, catalog, effective-model,
+slice, range, grid, and output-collision validation and print the upper bounds
+on Minuit attempts and fixed-nuisance evaluations without creating any output.
+The staged runner `scripts/run_exp_femto_3d_PROFILE.sh` provides `scout`,
+`focused-1d`, `focused-2d`, and preserved `strict` tiers. Start with:
+
+```bash
+scripts/run_exp_femto_3d_PROFILE.sh --tier scout --profile-estimate-only
+scripts/run_exp_femto_3d_PROFILE.sh --tier scout
+```
+
 TOML progress control:
 
 - `[build].progress`

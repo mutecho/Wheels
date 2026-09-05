@@ -2,6 +2,36 @@
 
 ## Task Snapshot
 
+- scope: make the detailed PML profile-likelihood mode resumable and fast enough
+  for staged diagnosis without changing the PML statistic or physics model
+- current conclusion:
+  `profile_only` now leaves all production outputs untouched, group-level
+  `process` execution isolates legacy TMinuit/ROOT state, matching checkpoints
+  resume safely, and `PMLBinCache` removes repeated histogram traversal while
+  preserving deterministic sequential accumulation
+- primary evidence:
+  - `fit --profile-estimate-only` validates catalog/config/model/output contracts
+    and produces no output; the real scout contract reports 14 slices and 1,386
+    maximum Minuit attempts
+  - process workers are started by `posix_spawn`, receive whole
+    `(centrality,mT,qn)` groups, and keep each scan serial
+  - chunks carry an input-content plus scan/model digest; mismatches and
+    incomplete/duplicate catalogs are rejected before the previous final ROOT
+    can be replaced
+  - HESSE can be disabled for the private nominal and all profile attempts;
+    timing, FCN counts, HESSE execution, and error validity are explicit branches
+  - each new cache is compared once against the old histogram-bin evaluator at
+    `max(1e-10,1e-12*abs(objective))` tolerance
+  - separate scout, focused-1D, and focused-2D configs plus a tiered runner keep
+    the preserved strict configuration unchanged
+- verification:
+  `2026-09-04` O2Physics ROOT executor returned `PRIMARY_OK`; build and full
+  CTest passed 7/7, process/resume/mismatch smoke passed, ROOT inspector returned
+  `STATUS: OK`, and toy 1D canvas was visually checked. No expensive real OO
+  profile scan or scaling benchmark was run
+
+## Previous Task Snapshot
+
 - scope: resolve the remote/local merge and combine qn-aware ME splitting,
   configurable Levy parameters, and build-side mT/phi rebin
 - current conclusion:
@@ -191,14 +221,21 @@
 
 ## Verification Status
 
-- verification_status: verified for the new rebin config contract, synthetic
-  ROOT projection/normalization behavior, catalog metadata/compatibility,
-  safe-failure ordering, the full six-test suite, previous Wenya production
-  output structure, and Coulomb kernel behavior
+- verification_status: partially verified for the current profile-likelihood
+  change; ROOT-independent scan semantics and static checks pass, while the
+  ROOT executor build/CTest/schema/canvas closeout is blocked. Earlier rebin,
+  catalog, Wenya, and Coulomb evidence below remains historical and valid for
+  those earlier snapshots
 - project_state_sync_status: written
 
 Reason:
 
+- `2026-09-03` standalone `ProfileLikelihoodDriverTest` compiled and passed,
+  and `git diff --check` passed after the final profile fixes
+- the required O2Physics executor sandbox route failed during environment entry;
+  the explicitly authorized escalated call was then rejected by the approval
+  backend with HTTP 403, so ROOT runtime claims were not inferred from source
+  inspection
 - `2026-08-12` O2Physics ROOT executor build plus
   `ctest --test-dir build --output-on-failure` returned `PRIMARY_OK`; all six
   registered tests passed in 16.61 seconds
@@ -231,6 +268,7 @@ Reason:
   `-DEXP_FEMTO_3D_ENABLE_CATS=OFF`
 - the no-CATS `ctest` run passed the same 5/5 registered tests, including the
   explicit finite-source unavailable failure path
+
 - `2026-06-22` `scripts/cmake.sh` returned `PRIMARY_OK` through the O2Physics
   ROOT executor, clean-rebuilt the default build, and produced a CATS-linked
   `bin/exp_femto_3d`
@@ -341,8 +379,44 @@ Reason:
 
 - `project-state/` is the active adopted coordination ledger for
   `Exp_femto_3d`
-- this sync records the Wenya qn-all plus qn1/qn2/qn3 config/interface
-  update, production build/fit validation, the prior finite-source Coulomb
-  implementation, CATS/no-CATS validation matrix, the hardened
-  `scripts/cmake.sh` build helper, and the remaining real-data
-  equivalence-regression gap
+- this sync records the profile-likelihood implementation and its incomplete
+  ROOT-runtime closeout, together with the earlier Wenya production,
+  finite-source Coulomb, CATS/no-CATS, build-helper, and real-data regression
+  history
+
+## 2026-09-03 Documentation Closeout
+
+- docs_reviewed:
+  `README.md`, `config/examples/exp_femto_3d.example.toml`,
+  `docs/数学物理公式流程说明.md`, and all adopted `project-state/` ledger files
+- docs_written:
+  `README.md`, public example configuration, formula workflow document,
+  `current-status.md`, `handoff.md`, `tests.md`, `changelog.md`, `guide.md`,
+  `decisions.md`, `issues.md`, and `work-items.md`
+- docs_intentionally_unchanged: production OO/PbPb TOML configurations and
+  `ROOT_RUNTIME_AGENT_NOTE.md`; this pass does not enable profiles in production
+- docs_stale_candidates: none identified
+- docs_missing: none
+- formula_workflow_doc: updated with profile/slice definitions, reference
+  convention, minimum validity, frozen finite-source kernel, ROOT schema, and
+  implementation/test pointers
+- project_state_sync_status: written
+- closeout_write_status: small_patch_and_docs
+- project-state closeout: checked
+
+## 2026-09-04 Acceleration Closeout
+
+- docs_reviewed: README, public example TOML, formula workflow document, staged
+  configs/runner, and all adopted project-state ledgers
+- docs_written: README, public example, formula workflow document,
+  current-status, handoff, tests, changelog, guide, decisions, issues, work-items
+- docs_intentionally_unchanged: preserved strict OO likelihood configuration,
+  existing user-modified `run_exp_femto_3d.sh`, and unrelated OO configs
+- docs_stale_candidates: none after resolving the prior executor-blocked issue
+- docs_missing: real-data benchmark evidence remains an open work item, not a
+  documentation omission
+- formula_workflow_doc: updated for process ownership, checkpoint/atomic merge,
+  HESSE semantics, and ordered PML bin caching
+- project_state_sync_status: written
+- closeout_write_status: implementation_and_docs
+- project-state closeout: checked

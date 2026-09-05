@@ -1,5 +1,42 @@
 # Decisions
 
+## DEC-011: Parallelize Complete Groups In Processes, Keep Scans Sequential
+
+- date: 2026-09-04
+- decision:
+  legacy TMinuit profiles may run concurrently only as isolated process tasks
+  owning complete `(centrality,mT,qn)` groups; each slice/scan remains serial,
+  and `profile_only` is required for the process backend
+- rationale:
+  - TMinuit, ROOT, PML, and Coulomb callback state are process-local rather than
+    thread-safe in the current implementation
+  - group ownership builds and freezes one finite-source kernel in one worker
+  - `posix_spawn` avoids inheriting ROOT locks, which a post-ROOT `fork` can do
+  - chunk validation and atomic final replacement preserve the last complete
+    diagnostic output across interruption or worker failure
+- deferred alternative:
+  Minuit2/thread execution stays gated until grid minima, status classes, deltas,
+  and 1/2/4-worker scaling pass the documented A/B matrix
+
+## DEC-010: Keep Profile Likelihood Separate, Serial, And Diagnostic-Only
+
+- date: 2026-09-03
+- decision:
+  add profile likelihood as a default-off mode of the existing `fit` command;
+  write it to a separate ROOT file, keep scans serial, compute deltas from the
+  lowest valid nominal/profile point per slice, and never replace production
+  fit results with a profile minimum
+- rationale:
+  - the production PML statistic, physics model, catalog success semantics, and
+    ordinary output files remain backward compatible when the mode is disabled
+  - serial evaluation avoids races in the current global PML/Coulomb context
+  - numerical trees can preserve failed attempts and exact coordinates without
+    forcing invalid points into regular histogram bins
+  - diagnostic contours must not be presented as confidence intervals
+- finite-source constraint:
+  every profile point uses the final group Coulomb kernel prepared by the
+  nominal workflow; scanning a radius does not regenerate the kernel
+
 ## DEC-006: Keep Build-Side Rebin Explicit And Default Phi To Native
 
 - date: 2026-08-12

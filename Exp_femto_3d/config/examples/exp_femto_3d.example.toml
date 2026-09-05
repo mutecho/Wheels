@@ -12,6 +12,7 @@ fit_root_name = "fit_output.root"
 fit_summary_name = "fit_summary.tsv"
 fit_report_directory = "/absolute/path/to/report-output"
 fit_report_root_name = "fit_report.root"
+profile_root_name = "profile_likelihood.root"
 log_level = "info"
 
 [build]
@@ -41,6 +42,42 @@ fit_q_max = 0.15
 # map_pair_phi_to_symmetric_range = false
 reopen_output_file_per_slice = true
 progress = "auto"   # 也可写 "enabled" / "disabled"
+
+# Optional PML profile-likelihood diagnostics. Disabled means the
+# independent profile ROOT file is neither created nor reset.
+[fit.profile_likelihood]
+enabled = false
+execution_mode = "alongside_fit" # use "profile_only" with listed slices for diagnostics-only runs
+parallel_backend = "serial"      # process requires profile_only + legacy_tminuit
+workers = 1
+minimizer_backend = "legacy_tminuit" # thread/minuit2 remains experimental and execution-gated
+hesse_strategy = "all_attempts"  # "all_attempts" | "none"
+slice_scope = "listed" # "listed" | "fit_selection"
+slice_ids = ["replace_with_exact_slice_id"] # forbidden for fit_selection
+retry_strategy = "reference_and_bidirectional_neighbors"   # "reference_and_bidirectional_neighbors" | "reference_only"
+write_likelihood_slice = true
+contour_levels = [1.0, 2.0, 4.0]
+
+# [fit.profile_likelihood.checkpoint]
+# enabled = true
+# resume = true
+# run_id = "scout_v1"
+# directory = "profile_likelihood.work"
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [41]
+min = [0.01]
+max = [100.0]
+refine = true
+refinement_points = [21]
+
+[[fit.profile_likelihood.scans]]
+id = "rout2_lambda"
+parameters = ["rout2", "lambda"]
+points = [21, 21]
+refine = false
 
 # Optional main Levy fit-parameter overrides. Omitted fields keep legacy defaults.
 # [fit.parameters.lambda]

@@ -1,5 +1,96 @@
 # Tests
 
+## T-019: Compact Profile ROOT Display Contract
+
+- date: 2026-09-05
+- environment: shared O2Physics ROOT executor, primary module
+- result: passed, executor status `PRIMARY_OK`
+- evidence:
+  - build succeeded and complete CTest passed 7/7 in 38.04 seconds
+  - ROOT smoke confirms named `Nuisance_<parameter>` trajectories remain
+  - duplicate `Nuisance_p<N>` aliases and redundant QA objects are absent
+  - process resume test injects a legacy alias into a checkpoint and confirms
+    the final merged ROOT prunes it while retaining the numerical trees
+  - `git diff --check` passed
+
+## T-018: Profile Acceleration, Process Resume, And ROOT Closeout
+
+- date: 2026-09-04
+- environment: shared O2Physics ROOT executor, primary module
+- result: passed, executor status `PRIMARY_OK`
+- evidence:
+  - configured build succeeded
+  - final complete CTest passed 7/7 in 35.49 seconds
+  - `workflow_smoke_test` passed with profile-only production sentinels,
+    `posix_spawn` chunk generation/merge, checkpoint reuse, mismatch rejection,
+    timing/HESSE schema checks, PSD-invalid classification, and
+    `profile <= slice`
+  - ordered cache evaluator passed the built-in old/new objective tolerance
+  - ROOT inspector reported `STATUS: OK` for the merged process output: five
+    trees, thirty graphs, two canvases, and the expected profile directories
+  - real scout `--profile-estimate-only` returned 14 slices, 1,386 maximum
+    attempts, zero slice evaluations, and did not create an output
+  - `bash -n scripts/run_exp_femto_3d_PROFILE.sh` and `git diff --check` passed
+- scope note: no expensive real OO scan or worker-scaling benchmark was run
+
+## T-017: PML Profile-Likelihood Diagnostic Mode
+
+- date: 2026-09-03
+- intended environment: O2Physics ROOT executor with the configured CATS build
+- ROOT-independent command:
+
+```bash
+clang++ -std=c++17 -Wall -Wextra -Wpedantic \
+  -Iinclude -Isrc \
+  tests/ProfileLikelihoodDriverTest.cpp src/ProfileLikelihood.cpp \
+  -o /tmp/exp_femto_3d_profile_driver_test
+/tmp/exp_femto_3d_profile_driver_test
+python3 -c 'import tomllib; tomllib.load(open("config/examples/exp_femto_3d.example.toml", "rb"))'
+git diff --check
+```
+
+- result: passed
+- covered evidence:
+  - deterministic 1D/2D grids fix the intended target coordinates
+  - nuisance re-minimization produces a true profile and satisfies the scripted
+    `profile <= slice` case
+  - nominal, forward-neighbor, and reverse-neighbor attempts are retained and
+    the lowest valid branch wins
+  - non-converged/error/domain/objective failures remain represented
+  - interior coarse minima trigger one regular refinement pass
+  - a lower valid profile point triggers per-slice reference recomputation
+  - source inspection confirms the pure driver has no ROOT dependency
+  - the updated public example remains valid TOML
+- additional coverage written but not independently executed at closeout:
+  - config tests for default-off behavior, PML prerequisite,
+    listed/fit-selection scopes, multiple scans, safe IDs, dimensions, ranges,
+    point counts, contours, and refinement pairing
+  - separate-file schema and numerical tree fields
+  - exact 1D/2D coordinates and attempt rows
+  - likelihood slice comparison, nuisance output, failure/status mask,
+    nominal/profile/boundary markers, and output-collision ordering
+  - an unreachable full-model off-diagonal scan is expected to produce
+    `model_domain_invalid` rows; the compact display contract does not duplicate
+    that category as a standalone graph
+  - CLI `--model` target revalidation and fixed/unknown target rejection
+- blocked command:
+
+```bash
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'cmake --build build -j4 && ctest --test-dir build --output-on-failure'
+```
+
+- blocked result:
+  - sandbox execution returned `STATUS: ESCALATION_REQUIRED` with
+    `/dev/fd/... Operation not permitted`
+  - after explicit user authorization, the escalated call was rejected by the
+    approval backend with HTTP 403
+  - no alternate ROOT installation was used, and no real OO data was run
+- significance:
+  implementation and ROOT-independent scan semantics are verified; ROOT ABI,
+  file schema execution, and canvas visual QA remain an explicit open item
+
 ## T-016: Resolved Merge Compatibility Matrix
 
 - date: 2026-08-13

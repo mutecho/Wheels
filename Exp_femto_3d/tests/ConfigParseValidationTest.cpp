@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "exp_femto_3d/Config.h"
 
@@ -37,6 +38,55 @@ namespace {
     std::ofstream output(path);
     output << contents;
     return path.string();
+  }
+
+  std::string ProfileConfig(const std::string &profile_lines, const bool use_pml = true) {
+    return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+cf_root_name = "cf.root"
+fit_root_name = "fit.root"
+fit_summary_name = "fit.tsv"
+fit_report_root_name = "report.root"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+
+[fit]
+model = "full"
+use_pml = )toml" + std::string(use_pml ? "true\n" : "false\n") + R"toml(
+fit_q_max = 0.15
+
+)toml" + profile_lines + R"toml(
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  }
+
+  void ExpectConfigError(const std::filesystem::path &path,
+                         const std::string &contents,
+                         const std::string &message) {
+    bool rejected = false;
+    try {
+      (void)exp_femto_3d::LoadApplicationConfig(WriteFile(path, contents));
+    } catch (const exp_femto_3d::ConfigError &) {
+      rejected = true;
+    }
+    Expect(rejected, message);
   }
 
 }  // namespace
@@ -99,6 +149,8 @@ max = 0.4
   Expect(config.output.fit_summary_name == "summary.tsv", "summary extension normalization failed");
   Expect(config.output.fit_report_directory == "/tmp/report", "fit report directory should parse");
   Expect(config.output.fit_report_root_name == "report.root", "fit report root extension normalization failed");
+  Expect(config.output.profile_root_name == "profile_likelihood.root", "profile output default mismatch");
+  Expect(!config.fit.profile_likelihood.enabled, "profile likelihood must be opt-in by default");
   Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
@@ -1017,6 +1069,290 @@ max = 0.4
     saw_invalid_range = true;
   }
   Expect(saw_invalid_range, "invalid range (min >= max) should fail");
+
+  const std::string valid_profile_config = ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = ["slice_a"]
+retry_strategy = "reference_and_bidirectional_neighbors"
+write_likelihood_slice = true
+contour_levels = [1.0, 2.0, 4.0]
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+min = [0.01]
+max = [20.0]
+refine = true
+refinement_points = [5]
+
+[[fit.profile_likelihood.scans]]
+id = "rout2_rside2"
+parameters = ["rout2", "rside2"]
+points = [3, 3]
+refine = false
+)toml");
+  const ApplicationConfig parsed_profile =
+      LoadApplicationConfig(WriteFile(temp_dir / "valid_profile.toml", valid_profile_config));
+  Expect(parsed_profile.fit.profile_likelihood.enabled, "profile mode should parse as enabled");
+  Expect(parsed_profile.fit.profile_likelihood.scans.size() == 2U, "multiple profile scans should parse");
+  Expect(parsed_profile.fit.profile_likelihood.scans[0].refinement_points == std::vector<int>{5},
+         "profile refinement points mismatch");
+  const ApplicationConfig parsed_fit_selection_profile =
+      LoadApplicationConfig(WriteFile(temp_dir / "valid_fit_selection_profile.toml", ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "fit_selection"
+retry_strategy = "reference_only"
+[[fit.profile_likelihood.scans]]
+id = "lambda"
+parameters = ["lambda"]
+points = [3]
+)toml")));
+  Expect(parsed_fit_selection_profile.fit.profile_likelihood.slice_scope == ProfileSliceScope::kFitSelection,
+         "fit_selection profile scope should parse without listed slice IDs");
+
+  const ApplicationConfig parsed_process_profile = LoadApplicationConfig(WriteFile(
+      temp_dir / "valid_process_profile.toml", ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+execution_mode = "profile_only"
+parallel_backend = "process"
+workers = 2
+minimizer_backend = "legacy_tminuit"
+hesse_strategy = "none"
+slice_scope = "listed"
+slice_ids = ["slice_a"]
+[fit.profile_likelihood.checkpoint]
+enabled = true
+resume = true
+run_id = "test_v1"
+directory = "profile.work"
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml")));
+  Expect(parsed_process_profile.fit.profile_likelihood.execution_mode == ProfileExecutionMode::kProfileOnly
+             && parsed_process_profile.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kProcess
+             && parsed_process_profile.fit.profile_likelihood.workers == 2
+             && parsed_process_profile.fit.profile_likelihood.hesse_strategy == ProfileHesseStrategy::kNone
+             && parsed_process_profile.fit.profile_likelihood.checkpoint.resume,
+         "process/profile-only/checkpoint/HESSE controls should parse together");
+
+  ExpectConfigError(temp_dir / "profile_process_alongside.toml", ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+parallel_backend = "process"
+workers = 2
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"), "process backend must not share production-fit outputs");
+  ExpectConfigError(temp_dir / "profile_only_fit_selection.toml", ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+execution_mode = "profile_only"
+slice_scope = "fit_selection"
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"), "profile-only mode requires an explicit listed slice contract");
+  ExpectConfigError(temp_dir / "profile_resume_without_checkpoint.toml", ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[fit.profile_likelihood.checkpoint]
+resume = true
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"), "resume must require checkpoint enablement");
+
+  ExpectConfigError(temp_dir / "profile_requires_pml.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml", false),
+                    "profile likelihood must require the PML objective");
+  ExpectConfigError(temp_dir / "profile_missing_scans.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+)toml"),
+                    "enabled profile likelihood must require at least one scan");
+  ExpectConfigError(temp_dir / "profile_missing_listed_ids.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"),
+                    "listed profile scope must require exact slice IDs");
+  ExpectConfigError(temp_dir / "profile_duplicate_listed_ids.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = ["slice_a", "slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"),
+                    "listed profile IDs must be unique");
+  ExpectConfigError(temp_dir / "profile_fit_selection_has_ids.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "fit_selection"
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"),
+                    "fit_selection profile scope must reject explicit slice IDs");
+  ExpectConfigError(temp_dir / "profile_unsafe_duplicate_id.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "unsafe/path"
+parameters = ["rout2"]
+points = [3]
+[[fit.profile_likelihood.scans]]
+id = "unsafe/path"
+parameters = ["rside2"]
+points = [3]
+)toml"),
+                    "profile scan IDs must be safe and unique");
+  ExpectConfigError(temp_dir / "profile_duplicate_2d_target.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "duplicate_axis"
+parameters = ["rout2", "rout2"]
+points = [3, 3]
+)toml"),
+                    "2D profiles must reject a repeated target");
+  ExpectConfigError(temp_dir / "profile_too_few_points.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "too_few"
+parameters = ["rout2"]
+points = [2]
+)toml"),
+                    "profile grids need at least three points on every axis");
+  ExpectConfigError(temp_dir / "profile_unpaired_range.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "unpaired_range"
+parameters = ["rout2"]
+points = [3]
+min = [0.01]
+)toml"),
+                    "profile scan min and max must be paired");
+  ExpectConfigError(temp_dir / "profile_range_dimension.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "dimension_mismatch"
+parameters = ["rout2", "rside2"]
+points = [3, 3]
+min = [0.01]
+max = [20.0]
+)toml"),
+                    "profile ranges must match profile dimensionality");
+  ExpectConfigError(temp_dir / "profile_range_order.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "range_order"
+parameters = ["rout2"]
+points = [3]
+min = [2.0]
+max = [1.0]
+)toml"),
+                    "profile scan ranges must be strictly increasing");
+  ExpectConfigError(temp_dir / "profile_invalid_contour.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+contour_levels = [1.0, 0.0]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"),
+                    "profile contour levels must be finite and positive");
+  ExpectConfigError(temp_dir / "profile_refinement_pairing.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "orphan_refinement"
+parameters = ["rout2"]
+points = [3]
+refine = false
+refinement_points = [5]
+)toml"),
+                    "refinement points require refinement to be enabled");
+  ExpectConfigError(temp_dir / "profile_missing_refinement_points.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "missing_refinement_points"
+parameters = ["rout2"]
+points = [3]
+refine = true
+)toml"),
+                    "enabled refinement must require an explicit refinement grid");
+  ExpectConfigError(temp_dir / "profile_refinement_dimension.toml",
+                    ProfileConfig(R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "refinement_dimension"
+parameters = ["rout2", "rside2"]
+points = [3, 3]
+refine = true
+refinement_points = [5]
+)toml"),
+                    "refinement points must match scan dimensionality");
 
   std::cout << "config_parse_validation_test passed\n";
   return 0;

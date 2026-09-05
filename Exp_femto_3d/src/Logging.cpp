@@ -182,7 +182,9 @@ namespace exp_femto_3d {
     RenderProgressLineLocked(std::chrono::steady_clock::now());
   }
 
-  // Write a carriage-return progress line and clear leftover characters from longer prior renders.
+  // Return to column zero and erase the full terminal row before redrawing.
+  // Some PTY frontends use insert-style rendering for a bare carriage return,
+  // which otherwise leaves successive heartbeat frames concatenated.
   void Logger::RenderProgressLineLocked(const std::chrono::steady_clock::time_point now) const {
     const ProgressRenderSnapshot snapshot{progress_state_.label,
                                           progress_state_.total_steps,
@@ -191,7 +193,7 @@ namespace exp_femto_3d {
                                           now - progress_state_.start_time};
     const std::string line = FormatProgressLine(snapshot);
 
-    std::cerr << '\r' << line;
+    std::cerr << "\r\033[2K" << line;
     if (line.size() < progress_state_.last_rendered_width) {
       std::cerr << std::string(progress_state_.last_rendered_width - line.size(), ' ');
     }
@@ -211,7 +213,9 @@ namespace exp_femto_3d {
     }
 
     progress_state_.completed_steps = progress_state_.total_steps;
-    RenderProgressLineLocked(std::chrono::steady_clock::now());
+    if (!progress_state_.drawn || progress_state_.line_closed || progress_state_.last_percent < 100) {
+      RenderProgressLineLocked(std::chrono::steady_clock::now());
+    }
     CloseProgressLineLocked();
     progress_state_.enabled = false;
   }

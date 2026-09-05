@@ -100,6 +100,8 @@ namespace exp_femto_3d {
     std::string fit_summary_name = "fit_summary.tsv";
     std::string fit_report_directory;
     std::string fit_report_root_name = "fit_report.root";
+    // Profile diagnostics are deliberately isolated from the detailed-fit and report files.
+    std::string profile_root_name = "profile_likelihood.root";
     LogLevel log_level = LogLevel::kInfo;
   };
 
@@ -147,12 +149,65 @@ namespace exp_femto_3d {
     LevyFitParameterOverrides parameters;
   };
 
+  enum class ProfileSliceScope {
+    kListed,
+    kFitSelection,
+  };
+
+  enum class ProfileRetryStrategy {
+    kReferenceAndBidirectionalNeighbors,
+    kReferenceOnly,
+  };
+
+  // Legacy TMinuit uses process-local callback state; safe parallel execution
+  // therefore partitions complete Coulomb groups across independent processes.
+  enum class ProfileExecutionMode { kAlongsideFit, kProfileOnly };
+  enum class ProfileParallelBackend { kSerial, kProcess, kThread };
+  enum class ProfileMinimizerBackend { kLegacyTMinuit, kMinuit2 };
+  enum class ProfileHesseStrategy { kAllAttempts, kNone };
+
+  struct ProfileCheckpointConfig {
+    bool enabled = false;
+    bool resume = false;
+    std::string run_id;
+    std::string directory;
+  };
+
+  // One rectangular 1D/2D profile grid. Coordinates use native fit-parameter units.
+  struct ProfileScanConfig {
+    std::string id;
+    std::vector<std::string> parameters;
+    std::vector<int> points;
+    std::vector<double> min;
+    std::vector<double> max;
+    bool refine = false;
+    std::vector<int> refinement_points;
+  };
+
+  // This is opt-in because profiles are intentionally much more expensive than a fit.
+  struct ProfileLikelihoodConfig {
+    bool enabled = false;
+    ProfileSliceScope slice_scope = ProfileSliceScope::kListed;
+    std::vector<std::string> slice_ids;
+    ProfileRetryStrategy retry_strategy = ProfileRetryStrategy::kReferenceAndBidirectionalNeighbors;
+    bool write_likelihood_slice = true;
+    ProfileExecutionMode execution_mode = ProfileExecutionMode::kAlongsideFit;
+    ProfileParallelBackend parallel_backend = ProfileParallelBackend::kSerial;
+    int workers = 1;
+    ProfileMinimizerBackend minimizer_backend = ProfileMinimizerBackend::kLegacyTMinuit;
+    ProfileHesseStrategy hesse_strategy = ProfileHesseStrategy::kAllAttempts;
+    ProfileCheckpointConfig checkpoint;
+    std::vector<double> contour_levels{1.0, 2.0, 4.0};
+    std::vector<ProfileScanConfig> scans;
+  };
+
   struct FitConfig {
     FitModel model = FitModel::kFull;
     LevyFitOptions options;
     std::optional<bool> map_pair_phi_to_symmetric_range;
     bool reopen_output_file_per_slice = true;
     ProgressMode progress = ProgressMode::kAuto;
+    ProfileLikelihoodConfig profile_likelihood;
   };
 
   struct ApplicationConfig {
@@ -313,6 +368,19 @@ namespace exp_femto_3d {
     std::size_t fitted_slices = 0;
     std::size_t skipped_missing_objects = 0;
     std::size_t skipped_missing_raw_histograms = 0;
+    std::size_t profile_selected_slices = 0;
+    std::size_t profile_completed_slices = 0;
+    std::size_t profile_valid_points = 0;
+    std::size_t profile_failed_points = 0;
+    std::size_t profile_estimated_attempts = 0;
+    std::size_t profile_estimated_slice_evaluations = 0;
+    std::size_t profile_estimated_groups = 0;
+    std::size_t profile_estimated_coarse_points_per_slice = 0;
+    std::size_t profile_estimated_refined_points_per_slice = 0;
+    std::size_t profile_configured_workers = 1;
+    std::size_t profile_effective_workers = 1;
+    std::string profile_output_path;
+    bool profile_estimate_only = false;
   };
 
   inline bool NearlyEqual(const double lhs, const double rhs, const double tolerance = 1.0e-6) {

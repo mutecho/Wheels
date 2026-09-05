@@ -14,7 +14,9 @@ namespace exp_femto_3d {
   [[nodiscard]] FitRunStatistics RunFit(const ApplicationConfig &config,
                                         const Logger &logger,
                                         std::optional<FitModel> override_model = std::nullopt,
-                                        std::optional<std::string> input_cf_root_path = std::nullopt);
+                                        std::optional<std::string> input_cf_root_path = std::nullopt,
+                                        bool profile_estimate_only = false,
+                                        std::optional<std::string> source_config_path = std::nullopt);
 
   [[nodiscard]] std::vector<SliceCatalogEntry> LoadSliceCatalog(const std::string &cf_root_path);
 

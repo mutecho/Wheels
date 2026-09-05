@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -143,6 +144,214 @@ namespace exp_femto_3d {
         return *value;
       }
       throw ConfigError("Expected finite numeric field '" + key + "' in " + context + ".");
+    }
+
+    std::vector<std::string> ReadStringArray(const toml::table &table,
+                                             const std::string &key,
+                                             const std::string &context) {
+      const auto *array = table[key].as_array();
+      if (array == nullptr) {
+        throw ConfigError("Expected string array '" + key + "' in " + context + ".");
+      }
+      std::vector<std::string> result;
+      result.reserve(array->size());
+      for (const toml::node &node : *array) {
+        const auto value = node.value<std::string>();
+        if (!value.has_value() || value->empty()) {
+          throw ConfigError("Expected non-empty string values in " + context + "." + key + ".");
+        }
+        result.push_back(*value);
+      }
+      return result;
+    }
+
+    std::vector<int> ReadPointArray(const toml::table &table, const std::string &key, const std::string &context) {
+      const auto *array = table[key].as_array();
+      if (array == nullptr) {
+        throw ConfigError("Expected integer array '" + key + "' in " + context + ".");
+      }
+      std::vector<int> result;
+      result.reserve(array->size());
+      for (const toml::node &node : *array) {
+        const auto value = node.value<std::int64_t>();
+        if (!value.has_value() || *value < 3 || *value > std::numeric_limits<int>::max()) {
+          throw ConfigError(context + "." + key + " values must be integers >= 3.");
+        }
+        result.push_back(static_cast<int>(*value));
+      }
+      return result;
+    }
+
+    std::vector<double> ReadFiniteDoubleArray(const toml::table &table,
+                                              const std::string &key,
+                                              const std::string &context) {
+      const auto *array = table[key].as_array();
+      if (array == nullptr) {
+        throw ConfigError("Expected numeric array '" + key + "' in " + context + ".");
+      }
+      std::vector<double> result;
+      result.reserve(array->size());
+      for (const toml::node &node : *array) {
+        const auto value = node.value<double>();
+        if (!value.has_value() || !std::isfinite(*value)) {
+          throw ConfigError(context + "." + key + " must contain only finite values.");
+        }
+        result.push_back(*value);
+      }
+      return result;
+    }
+
+    bool IsSafeProfileScanId(const std::string &id) {
+      if (id.empty()) {
+        return false;
+      }
+      return std::all_of(id.begin(), id.end(), [](const unsigned char character) {
+        return std::isalnum(character) || character == '_' || character == '-';
+      });
+    }
+
+    ProfileSliceScope ParseProfileSliceScope(const std::string &value) {
+      if (value == "listed") {
+        return ProfileSliceScope::kListed;
+      }
+      if (value == "fit_selection") {
+        return ProfileSliceScope::kFitSelection;
+      }
+      throw ConfigError("fit.profile_likelihood.slice_scope must be 'listed' or 'fit_selection'.");
+    }
+
+    ProfileRetryStrategy ParseProfileRetryStrategy(const std::string &value) {
+      if (value == "reference_and_bidirectional_neighbors") {
+        return ProfileRetryStrategy::kReferenceAndBidirectionalNeighbors;
+      }
+      if (value == "reference_only") {
+        return ProfileRetryStrategy::kReferenceOnly;
+      }
+      throw ConfigError("Unsupported fit.profile_likelihood.retry_strategy: " + value);
+    }
+
+    ProfileExecutionMode ParseProfileExecutionMode(const std::string &value) {
+      if (value == "alongside_fit") return ProfileExecutionMode::kAlongsideFit;
+      if (value == "profile_only") return ProfileExecutionMode::kProfileOnly;
+      throw ConfigError("fit.profile_likelihood.execution_mode must be 'alongside_fit' or 'profile_only'.");
+    }
+
+    ProfileParallelBackend ParseProfileParallelBackend(const std::string &value) {
+      if (value == "serial") return ProfileParallelBackend::kSerial;
+      if (value == "process") return ProfileParallelBackend::kProcess;
+      if (value == "thread") return ProfileParallelBackend::kThread;
+      throw ConfigError("Unsupported fit.profile_likelihood.parallel_backend: " + value);
+    }
+
+    ProfileMinimizerBackend ParseProfileMinimizerBackend(const std::string &value) {
+      if (value == "legacy_tminuit") return ProfileMinimizerBackend::kLegacyTMinuit;
+      if (value == "minuit2") return ProfileMinimizerBackend::kMinuit2;
+      throw ConfigError("Unsupported fit.profile_likelihood.minimizer_backend: " + value);
+    }
+
+    ProfileHesseStrategy ParseProfileHesseStrategy(const std::string &value) {
+      if (value == "all_attempts") return ProfileHesseStrategy::kAllAttempts;
+      if (value == "none") return ProfileHesseStrategy::kNone;
+      throw ConfigError("Unsupported fit.profile_likelihood.hesse_strategy: " + value);
+    }
+
+    ProfileLikelihoodConfig ParseProfileLikelihoodConfig(const toml::table *table) {
+      ProfileLikelihoodConfig config;
+      if (table == nullptr) {
+        return config;
+      }
+      const std::set<std::string> allowed_profile_fields = {"enabled", "slice_scope", "slice_ids", "retry_strategy",
+                                                            "write_likelihood_slice", "contour_levels", "scans",
+                                                            "execution_mode", "parallel_backend", "workers",
+                                                            "minimizer_backend", "hesse_strategy", "checkpoint"};
+      for (const auto &[raw_key, node] : *table) {
+        (void)node;
+        if (allowed_profile_fields.count(std::string(raw_key.str())) == 0U) {
+          throw ConfigError("Unsupported field in fit.profile_likelihood: " + std::string(raw_key.str()));
+        }
+      }
+      config.enabled = ReadOptionalBool(*table, "enabled", config.enabled);
+      config.slice_scope = ParseProfileSliceScope(
+          ReadOptionalString(*table, "slice_scope", "listed"));
+      config.retry_strategy = ParseProfileRetryStrategy(ReadOptionalString(
+          *table, "retry_strategy", "reference_and_bidirectional_neighbors"));
+      config.write_likelihood_slice = ReadOptionalBool(*table, "write_likelihood_slice", true);
+      config.execution_mode = ParseProfileExecutionMode(
+          ReadOptionalString(*table, "execution_mode", "alongside_fit"));
+      config.parallel_backend = ParseProfileParallelBackend(
+          ReadOptionalString(*table, "parallel_backend", "serial"));
+      config.minimizer_backend = ParseProfileMinimizerBackend(
+          ReadOptionalString(*table, "minimizer_backend", "legacy_tminuit"));
+      config.hesse_strategy = ParseProfileHesseStrategy(
+          ReadOptionalString(*table, "hesse_strategy", "all_attempts"));
+      if (table->contains("workers")) {
+        const auto workers = (*table)["workers"].value<std::int64_t>();
+        if (!workers.has_value() || *workers < 1 || *workers > std::numeric_limits<int>::max()) {
+          throw ConfigError("fit.profile_likelihood.workers must be a positive integer.");
+        }
+        config.workers = static_cast<int>(*workers);
+      }
+      if (const auto *checkpoint = (*table)["checkpoint"].as_table(); checkpoint != nullptr) {
+        const std::set<std::string> allowed_checkpoint_fields = {"enabled", "resume", "run_id", "directory"};
+        for (const auto &[raw_key, node] : *checkpoint) {
+          (void)node;
+          if (allowed_checkpoint_fields.count(std::string(raw_key.str())) == 0U) {
+            throw ConfigError("Unsupported field in fit.profile_likelihood.checkpoint: " + std::string(raw_key.str()));
+          }
+        }
+        config.checkpoint.enabled = ReadOptionalBool(*checkpoint, "enabled", false);
+        config.checkpoint.resume = ReadOptionalBool(*checkpoint, "resume", false);
+        config.checkpoint.run_id = ReadOptionalString(*checkpoint, "run_id", "");
+        config.checkpoint.directory = ReadOptionalString(*checkpoint, "directory", "");
+      } else if (table->contains("checkpoint")) {
+        throw ConfigError("fit.profile_likelihood.checkpoint must be a table.");
+      }
+      if (table->contains("slice_ids")) {
+        config.slice_ids = ReadStringArray(*table, "slice_ids", "fit.profile_likelihood");
+      }
+      if (table->contains("contour_levels")) {
+        config.contour_levels = ReadFiniteDoubleArray(*table, "contour_levels", "fit.profile_likelihood");
+      }
+      const auto *scans = (*table)["scans"].as_array();
+      if (table->contains("scans") && scans == nullptr) {
+        throw ConfigError("fit.profile_likelihood.scans must be an array of tables.");
+      }
+      if (scans != nullptr) {
+        for (const toml::node &node : *scans) {
+          const auto *scan_table = node.as_table();
+          if (scan_table == nullptr) {
+            throw ConfigError("Each [[fit.profile_likelihood.scans]] entry must be a table.");
+          }
+          const std::set<std::string> allowed_scan_fields = {"id", "parameters", "points", "min", "max", "refine",
+                                                              "refinement_points"};
+          for (const auto &[raw_key, child] : *scan_table) {
+            (void)child;
+            if (allowed_scan_fields.count(std::string(raw_key.str())) == 0U) {
+              throw ConfigError("Unsupported field in fit.profile_likelihood.scans: " + std::string(raw_key.str()));
+            }
+          }
+          ProfileScanConfig scan;
+          scan.id = ReadRequiredString(*scan_table, "id", "fit.profile_likelihood.scans");
+          scan.parameters = ReadStringArray(*scan_table, "parameters", "fit.profile_likelihood.scans");
+          scan.points = ReadPointArray(*scan_table, "points", "fit.profile_likelihood.scans");
+          const bool has_min = scan_table->contains("min");
+          const bool has_max = scan_table->contains("max");
+          if (has_min != has_max) {
+            throw ConfigError("Profile scan min and max must be specified together.");
+          }
+          if (has_min) {
+            scan.min = ReadFiniteDoubleArray(*scan_table, "min", "fit.profile_likelihood.scans");
+            scan.max = ReadFiniteDoubleArray(*scan_table, "max", "fit.profile_likelihood.scans");
+          }
+          scan.refine = ReadOptionalBool(*scan_table, "refine", false);
+          if (scan_table->contains("refinement_points")) {
+            scan.refinement_points =
+                ReadPointArray(*scan_table, "refinement_points", "fit.profile_likelihood.scans");
+          }
+          config.scans.push_back(std::move(scan));
+        }
+      }
+      return config;
     }
 
     RangeBin ParseRangeBin(const toml::table &table, const std::string &context) {
@@ -431,6 +640,8 @@ namespace exp_femto_3d {
         ReadOptionalString(output, "fit_report_directory", config.output.fit_report_directory);
     config.output.fit_report_root_name =
         ReadOptionalString(output, "fit_report_root_name", config.output.fit_report_root_name);
+    config.output.profile_root_name =
+        ReadOptionalString(output, "profile_root_name", config.output.profile_root_name);
     config.output.log_level = ParseLogLevel(ReadOptionalString(output, "log_level", ToString(config.output.log_level)));
 
     config.build.map_pair_phi_to_symmetric_range =
@@ -490,6 +701,11 @@ namespace exp_femto_3d {
     config.fit.reopen_output_file_per_slice =
         ReadOptionalBool(fit, "reopen_output_file_per_slice", config.fit.reopen_output_file_per_slice);
     config.fit.progress = ReadOptionalProgressMode(fit, "progress", config.fit.progress);
+    const toml::table *profile_likelihood = fit["profile_likelihood"].as_table();
+    if (fit.contains("profile_likelihood") && profile_likelihood == nullptr) {
+      throw ConfigError("fit.profile_likelihood must be a table.");
+    }
+    config.fit.profile_likelihood = ParseProfileLikelihoodConfig(profile_likelihood);
 
     if (const auto *bins = root["bins"].as_table(); bins != nullptr) {
       config.centrality_bins = ParseRangeBinArray(GetOptionalArray(*bins, "centrality"), "bins.centrality");
@@ -533,6 +749,9 @@ namespace exp_femto_3d {
     }
     if (config.output.fit_report_root_name.empty()) {
       throw ConfigError("output.fit_report_root_name is required.");
+    }
+    if (config.output.profile_root_name.empty()) {
+      throw ConfigError("output.profile_root_name is required.");
     }
     if (config.fit.options.fit_q_max <= 0.0 || !std::isfinite(config.fit.options.fit_q_max)) {
       throw ConfigError("fit.fit_q_max must be finite and positive.");
@@ -599,6 +818,91 @@ namespace exp_femto_3d {
     EnsureExtension(config.output.fit_root_name, ".root");
     EnsureExtension(config.output.fit_summary_name, ".tsv");
     EnsureExtension(config.output.fit_report_root_name, ".root");
+    EnsureExtension(config.output.profile_root_name, ".root");
+
+    const ProfileLikelihoodConfig &profile = config.fit.profile_likelihood;
+    if (!profile.enabled) {
+      return;
+    }
+    if (!config.fit.options.use_pml) {
+      throw ConfigError("fit.profile_likelihood.enabled requires fit.use_pml = true.");
+    }
+    if (profile.execution_mode == ProfileExecutionMode::kProfileOnly
+        && profile.slice_scope != ProfileSliceScope::kListed) {
+      throw ConfigError("fit.profile_likelihood.execution_mode = 'profile_only' requires slice_scope = 'listed'.");
+    }
+    if (profile.parallel_backend == ProfileParallelBackend::kProcess
+        && profile.minimizer_backend != ProfileMinimizerBackend::kLegacyTMinuit) {
+      throw ConfigError("fit.profile_likelihood.parallel_backend = 'process' requires minimizer_backend = 'legacy_tminuit'.");
+    }
+    if (profile.parallel_backend == ProfileParallelBackend::kProcess
+        && profile.execution_mode != ProfileExecutionMode::kProfileOnly) {
+      throw ConfigError("fit.profile_likelihood.parallel_backend = 'process' currently requires execution_mode = 'profile_only'.");
+    }
+    if (profile.parallel_backend == ProfileParallelBackend::kThread
+        && profile.minimizer_backend != ProfileMinimizerBackend::kMinuit2) {
+      throw ConfigError("fit.profile_likelihood.parallel_backend = 'thread' requires minimizer_backend = 'minuit2'.");
+    }
+    if (profile.workers < 1) {
+      throw ConfigError("fit.profile_likelihood.workers must be positive.");
+    }
+    if (profile.checkpoint.resume && !profile.checkpoint.enabled) {
+      throw ConfigError("fit.profile_likelihood.checkpoint.resume requires checkpoint.enabled = true.");
+    }
+    if (profile.checkpoint.enabled
+        && (profile.checkpoint.run_id.empty() || profile.checkpoint.directory.empty())) {
+      throw ConfigError("Enabled fit.profile_likelihood.checkpoint requires non-empty run_id and directory.");
+    }
+    if (profile.scans.empty()) {
+      throw ConfigError("fit.profile_likelihood.enabled requires at least one [[fit.profile_likelihood.scans]] entry.");
+    }
+    if (profile.slice_scope == ProfileSliceScope::kListed) {
+      if (profile.slice_ids.empty()) {
+        throw ConfigError("fit.profile_likelihood.slice_ids is required when slice_scope = 'listed'.");
+      }
+      std::set<std::string> unique_slice_ids(profile.slice_ids.begin(), profile.slice_ids.end());
+      if (unique_slice_ids.size() != profile.slice_ids.size()) {
+        throw ConfigError("fit.profile_likelihood.slice_ids must be unique.");
+      }
+    } else if (!profile.slice_ids.empty()) {
+      throw ConfigError("fit.profile_likelihood.slice_ids is forbidden when slice_scope = 'fit_selection'.");
+    }
+    if (profile.contour_levels.empty()
+        || std::any_of(profile.contour_levels.begin(), profile.contour_levels.end(), [](const double value) {
+             return !std::isfinite(value) || value <= 0.0;
+           })) {
+      throw ConfigError("fit.profile_likelihood.contour_levels must contain finite positive values.");
+    }
+    std::set<std::string> scan_ids;
+    for (const ProfileScanConfig &scan : profile.scans) {
+      if (!IsSafeProfileScanId(scan.id) || !scan_ids.insert(scan.id).second) {
+        throw ConfigError("Profile scan id must be unique and contain only letters, digits, '_' or '-'.");
+      }
+      if (scan.parameters.empty() || scan.parameters.size() > 2U || scan.points.size() != scan.parameters.size()) {
+        throw ConfigError("Profile scans require matching one- or two-dimensional parameters and points arrays.");
+      }
+      if (scan.parameters.size() == 2U && scan.parameters[0] == scan.parameters[1]) {
+        throw ConfigError("A two-dimensional profile scan cannot repeat a parameter target.");
+      }
+      if (!scan.min.empty()
+          && (scan.min.size() != scan.parameters.size() || scan.max.size() != scan.parameters.size())) {
+        throw ConfigError("Profile scan min/max arrays must match parameters dimensionality.");
+      }
+      for (std::size_t axis = 0; axis < scan.min.size(); ++axis) {
+        if (!(scan.max[axis] > scan.min[axis])) {
+          throw ConfigError("Profile scan min/max must be finite increasing ranges.");
+        }
+      }
+      if (scan.refine && scan.refinement_points.empty()) {
+        throw ConfigError("refine = true requires refinement_points.");
+      }
+      if (scan.refine && scan.refinement_points.size() != scan.parameters.size()) {
+        throw ConfigError("Profile scan refinement_points must match parameters dimensionality.");
+      }
+      if (!scan.refine && !scan.refinement_points.empty()) {
+        throw ConfigError("refinement_points requires refine = true.");
+      }
+    }
   }
 
   std::string ToString(const LogLevel level) {

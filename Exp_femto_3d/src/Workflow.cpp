@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -18,15 +23,23 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "TAxis.h"
 #include "TCanvas.h"
 #include "TDirectory.h"
 #include "TF1.h"
 #include "TF3.h"
 #include "TFile.h"
+#include "TFileMerger.h"
 #include "TGraph.h"
 #include "TGraphErrors.h"
 #include "TH1.h"
+#include "TH2.h"
 #include "TH3.h"
 #include "THnSparse.h"
 #include "TLegend.h"
@@ -45,6 +58,9 @@
 #include "CATSconstants.h"
 #endif
 #include "exp_femto_3d/Config.h"
+#include "ProfileLikelihood.h"
+
+extern char **environ;
 
 namespace exp_femto_3d {
 
@@ -139,6 +155,22 @@ namespace exp_femto_3d {
       bool previous_ = true;
     };
 
+    struct PMLBinCacheEntry {
+      double q_out = 0.0;
+      double q_side = 0.0;
+      double q_long = 0.0;
+      double q_out2 = 0.0;
+      double q_side2 = 0.0;
+      double q_long2 = 0.0;
+      double q_out_q_side = 0.0;
+      double q_out_q_long = 0.0;
+      double q_side_q_long = 0.0;
+      double q2 = 0.0;
+      double same_counts = 0.0;
+      double mixed_counts = 0.0;
+      double coulomb_factor = 1.0;
+    };
+
     struct Levy3DPMLContext {
       TH3D *h_se_raw = nullptr;
       TH3D *h_me_raw = nullptr;
@@ -146,6 +178,13 @@ namespace exp_femto_3d {
       LevyFitOptions fit_options;
       const CoulombKernelTable *coulomb_kernel = nullptr;
       double raw_same_to_mixed_integral_ratio = 1.0;
+      std::size_t fcn_calls = 0;
+      std::vector<PMLBinCacheEntry> bin_cache;
+      TH3D *cached_h_se_raw = nullptr;
+      TH3D *cached_h_me_raw = nullptr;
+      const CoulombKernelTable *cached_coulomb_kernel = nullptr;
+      double cached_fit_q_max = std::numeric_limits<double>::quiet_NaN();
+      bool cache_equivalence_checked = false;
     };
 
     Levy3DPMLContext g_levy_3d_pml_context;
@@ -424,6 +463,128 @@ namespace exp_femto_3d {
     void CreateOrResetRootFile(const std::string &path) {
       auto file = OpenRootFile(path, "RECREATE");
       file->Close();
+    }
+
+    std::string SanitizeFileComponent(const std::string &value) {
+      std::string result = value;
+      for (char &character : result) {
+        const unsigned char byte = static_cast<unsigned char>(character);
+        if (!std::isalnum(byte) && character != '-' && character != '_') character = '_';
+      }
+      return result.empty() ? "unnamed" : result;
+    }
+
+    std::uint64_t Fnv1aUpdate(std::uint64_t hash, const char *data, const std::size_t size) {
+      constexpr std::uint64_t kPrime = 1099511628211ULL;
+      for (std::size_t index = 0; index < size; ++index) {
+        hash ^= static_cast<unsigned char>(data[index]);
+        hash *= kPrime;
+      }
+      return hash;
+    }
+
+    std::string BuildProfileContractDigest(const std::string &cf_root_path,
+                                           const ApplicationConfig &config,
+                                           const FitModel model,
+                                           const std::vector<const SliceCatalogEntry *> &entries) {
+      constexpr std::uint64_t kOffset = 14695981039346656037ULL;
+      std::uint64_t hash = kOffset;
+      std::ifstream input(cf_root_path, std::ios::binary);
+      if (!input) throw std::runtime_error("Cannot hash profile CF input: " + cf_root_path);
+      std::array<char, 1U << 16U> buffer{};
+      while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        hash = Fnv1aUpdate(hash, buffer.data(), static_cast<std::size_t>(input.gcount()));
+      }
+      std::ostringstream contract;
+      contract << "profile-schema-v2|" << ToString(model) << '|'
+               << static_cast<int>(config.fit.options.coulomb_mode) << '|'
+               << static_cast<int>(config.fit.options.finite_source_mode) << '|'
+               << static_cast<int>(config.fit.profile_likelihood.retry_strategy) << '|'
+               << static_cast<int>(config.fit.profile_likelihood.hesse_strategy) << '|'
+               << config.fit.profile_likelihood.write_likelihood_slice << '|';
+      for (const SliceCatalogEntry *entry : entries) contract << entry->slice_id << '|';
+      for (const ProfileScanConfig &scan : config.fit.profile_likelihood.scans) {
+        contract << scan.id << ':' << scan.refine << ':';
+        for (const std::string &parameter : scan.parameters) contract << parameter << ',';
+        for (const int points : scan.points) contract << points << ',';
+        for (const double value : scan.min) contract << std::setprecision(17) << value << ',';
+        for (const double value : scan.max) contract << std::setprecision(17) << value << ',';
+        for (const int points : scan.refinement_points) contract << points << ',';
+        contract << '|';
+      }
+      const std::string text = contract.str();
+      hash = Fnv1aUpdate(hash, text.data(), text.size());
+      std::ostringstream encoded;
+      encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
+      return encoded.str();
+    }
+
+    bool ValidateProfileChunk(const std::string &path,
+                              const std::vector<const SliceCatalogEntry *> &expected_entries,
+                              const std::vector<ProfileScanConfig> &expected_scans) {
+      try {
+        auto file = OpenRootFile(path, "READ");
+        auto *catalog = dynamic_cast<TTree *>(file->Get("meta/ProfileLikelihoodCatalog"));
+        const std::size_t expected_rows = expected_entries.size() * expected_scans.size();
+        if (catalog == nullptr || static_cast<std::size_t>(catalog->GetEntries()) != expected_rows) return false;
+        std::set<std::pair<std::string, std::string>> expected;
+        for (const SliceCatalogEntry *entry : expected_entries) {
+          for (const ProfileScanConfig &scan : expected_scans) {
+            expected.emplace(entry->slice_id, scan.id);
+          }
+        }
+        std::string *slice_id = nullptr;
+        std::string *scan_id = nullptr;
+        catalog->SetBranchAddress("slice_id", &slice_id);
+        catalog->SetBranchAddress("scan_id", &scan_id);
+        std::set<std::pair<std::string, std::string>> actual;
+        for (Long64_t row = 0; row < catalog->GetEntries(); ++row) {
+          catalog->GetEntry(row);
+          if (slice_id == nullptr || scan_id == nullptr || !actual.emplace(*slice_id, *scan_id).second) return false;
+        }
+        return actual == expected;
+      } catch (const std::exception &) {
+        return false;
+      }
+    }
+
+    void PruneRedundantProfileDisplayObjects(
+        TFile &file,
+        const std::vector<const SliceCatalogEntry *> &entries,
+        const std::vector<ProfileScanConfig> &scans) {
+      std::vector<std::string> redundant_names = {
+          "Profile1D_Coarse",
+          "Profile1D_Refined",
+          "FailurePoints1D",
+          "FailurePoints2D",
+          "RefinedPoints2D",
+          "ProfileMinimum",
+          "LowerBound",
+          "UpperBound",
+          "Canvas_Nuisance"};
+      for (int raw_status = static_cast<int>(profile_likelihood::PointStatus::kNonconverged);
+           raw_status <= static_cast<int>(profile_likelihood::PointStatus::kNoValidAttempt);
+           ++raw_status) {
+        const std::string status = profile_likelihood::ToString(
+            static_cast<profile_likelihood::PointStatus>(raw_status));
+        redundant_names.push_back("Failure_" + status + "1D");
+        redundant_names.push_back("Failure_" + status + "2D");
+      }
+      for (int parameter = 0; parameter < 16; ++parameter) {
+        redundant_names.push_back("Nuisance_p" + std::to_string(parameter));
+      }
+
+      for (const SliceCatalogEntry *entry : entries) {
+        for (const ProfileScanConfig &scan : scans) {
+          auto *directory = file.GetDirectory(
+              ("profiles/" + entry->slice_id + "/" + scan.id).c_str());
+          if (directory == nullptr) continue;
+          for (const std::string &name : redundant_names) {
+            directory->Delete((name + ";*").c_str());
+          }
+        }
+      }
     }
 
     // Resolve configured file paths before comparing them so report output cannot overwrite source artifacts.
@@ -1998,56 +2159,163 @@ namespace exp_femto_3d {
       return -2.0 * (same_counts * std::log(arg1) + mixed_counts * std::log(arg2));
     }
 
+    enum class PMLEvaluationStatus {
+      kValid,
+      kMissingInput,
+      kModelDomainInvalid,
+      kObjectiveInvalid,
+    };
+
+    struct PMLEvaluation {
+      double objective = kFitPenaltyValue;
+      PMLEvaluationStatus status = PMLEvaluationStatus::kObjectiveInvalid;
+    };
+
+    void EnsurePMLBinCache() {
+      Levy3DPMLContext &context = g_levy_3d_pml_context;
+      if (context.cached_h_se_raw == context.h_se_raw
+          && context.cached_h_me_raw == context.h_me_raw
+          && context.cached_coulomb_kernel == context.coulomb_kernel
+          && context.cached_fit_q_max == context.fit_options.fit_q_max) {
+        return;
+      }
+      context.bin_cache.clear();
+      context.cached_h_se_raw = context.h_se_raw;
+      context.cached_h_me_raw = context.h_me_raw;
+      context.cached_coulomb_kernel = context.coulomb_kernel;
+      context.cached_fit_q_max = context.fit_options.fit_q_max;
+      context.cache_equivalence_checked = false;
+      if (context.h_se_raw == nullptr || context.h_me_raw == nullptr) return;
+      for (int ix = 1; ix <= context.h_se_raw->GetNbinsX(); ++ix) {
+        const double q_out = context.h_se_raw->GetXaxis()->GetBinCenter(ix);
+        if (std::abs(q_out) > context.fit_options.fit_q_max) continue;
+        for (int iy = 1; iy <= context.h_se_raw->GetNbinsY(); ++iy) {
+          const double q_side = context.h_se_raw->GetYaxis()->GetBinCenter(iy);
+          if (std::abs(q_side) > context.fit_options.fit_q_max) continue;
+          for (int iz = 1; iz <= context.h_se_raw->GetNbinsZ(); ++iz) {
+            const double q_long = context.h_se_raw->GetZaxis()->GetBinCenter(iz);
+            if (std::abs(q_long) > context.fit_options.fit_q_max) continue;
+            const double same_counts = context.h_se_raw->GetBinContent(ix, iy, iz);
+            const double mixed_counts = context.h_me_raw->GetBinContent(ix, iy, iz);
+            if (same_counts == 0.0 && mixed_counts == 0.0) continue;
+            PMLBinCacheEntry bin;
+            bin.q_out = q_out;
+            bin.q_side = q_side;
+            bin.q_long = q_long;
+            bin.q_out2 = q_out * q_out;
+            bin.q_side2 = q_side * q_side;
+            bin.q_long2 = q_long * q_long;
+            bin.q_out_q_side = q_out * q_side;
+            bin.q_out_q_long = q_out * q_long;
+            bin.q_side_q_long = q_side * q_long;
+            bin.q2 = bin.q_out2 + bin.q_side2 + bin.q_long2;
+            bin.same_counts = same_counts;
+            bin.mixed_counts = mixed_counts;
+            bin.coulomb_factor = EvaluateCoulombFactor(q_out, q_side, q_long, context.fit_options);
+            context.bin_cache.push_back(bin);
+          }
+        }
+      }
+    }
+
+    double EvaluateCachedLevyModel(const PMLBinCacheEntry &bin,
+                                   const double *parameters,
+                                   const Levy3DPMLContext &context) {
+      double argument = 0.0;
+      double alpha = 0.0;
+      double baseline_q2 = 0.0;
+      if (context.use_full_model) {
+        argument = (parameters[2] * bin.q_out2 + parameters[3] * bin.q_side2
+                    + parameters[4] * bin.q_long2 + 2.0 * parameters[5] * bin.q_out_q_side
+                    + 2.0 * parameters[6] * bin.q_out_q_long
+                    + 2.0 * parameters[7] * bin.q_side_q_long) / (kHbarC * kHbarC);
+        if (argument < -kLevyArgumentTolerance) return kInvalidFullModelCFValue;
+        alpha = parameters[8];
+        baseline_q2 = parameters[9];
+      } else {
+        argument = (parameters[2] * bin.q_out2 + parameters[3] * bin.q_side2
+                    + parameters[4] * bin.q_long2) / (kHbarC * kHbarC);
+        alpha = parameters[5];
+        baseline_q2 = parameters[6];
+      }
+      const double protected_argument = argument < 0.0 ? 0.0 : argument;
+      const double levy_exponent = std::pow(protected_argument, alpha / 2.0);
+      const double lambda_eff = context.fit_options.use_core_halo_lambda ? parameters[1] : 1.0;
+      const double femto_value = parameters[0]
+                                 * ((1.0 - lambda_eff)
+                                    + lambda_eff * bin.coulomb_factor * (1.0 + std::exp(-levy_exponent)));
+      const double baseline = context.fit_options.use_q2_baseline ? 1.0 + baseline_q2 * bin.q2 : 1.0;
+      return femto_value * baseline;
+    }
+
+    double EvaluateUncachedPMLObjectiveForRegression(const double *parameters) {
+      double objective = 0.0;
+      const Levy3DPMLContext &context = g_levy_3d_pml_context;
+      for (int ix = 1; ix <= context.h_se_raw->GetNbinsX(); ++ix) {
+        const double q_out = context.h_se_raw->GetXaxis()->GetBinCenter(ix);
+        if (std::abs(q_out) > context.fit_options.fit_q_max) continue;
+        for (int iy = 1; iy <= context.h_se_raw->GetNbinsY(); ++iy) {
+          const double q_side = context.h_se_raw->GetYaxis()->GetBinCenter(iy);
+          if (std::abs(q_side) > context.fit_options.fit_q_max) continue;
+          for (int iz = 1; iz <= context.h_se_raw->GetNbinsZ(); ++iz) {
+            const double q_long = context.h_se_raw->GetZaxis()->GetBinCenter(iz);
+            if (std::abs(q_long) > context.fit_options.fit_q_max) continue;
+            const double same_counts = context.h_se_raw->GetBinContent(ix, iy, iz);
+            const double mixed_counts = context.h_me_raw->GetBinContent(ix, iy, iz);
+            if (same_counts == 0.0 && mixed_counts == 0.0) continue;
+            double ratio = EvaluateLevyModelFromParameterArray(
+                q_out, q_side, q_long, parameters, context.use_full_model);
+            ratio *= context.raw_same_to_mixed_integral_ratio;
+            const double contribution = ComputePMLNeg2LogLContribution(same_counts, mixed_counts, ratio);
+            if (!std::isfinite(contribution) || contribution >= kFitPenaltyValue) return kFitPenaltyValue;
+            objective += contribution;
+          }
+        }
+      }
+      return objective;
+    }
+
+    // This is the sole PML calculation path.  Its loop order and raw-count normalization
+    // intentionally match the established FCN so diagnostics cannot change the statistic.
+    PMLEvaluation EvaluatePMLObjective(const double *parameters) {
+      ++g_levy_3d_pml_context.fcn_calls;
+      if (g_levy_3d_pml_context.h_se_raw == nullptr || g_levy_3d_pml_context.h_me_raw == nullptr) {
+        return {kFitPenaltyValue, PMLEvaluationStatus::kMissingInput};
+      }
+      if (g_levy_3d_pml_context.use_full_model && !HasValidFullR2MatrixFromParameterArray(parameters)) {
+        return {kFitPenaltyValue, PMLEvaluationStatus::kModelDomainInvalid};
+      }
+
+      EnsurePMLBinCache();
+      double neg2_log_l = 0.0;
+      for (const PMLBinCacheEntry &bin : g_levy_3d_pml_context.bin_cache) {
+        double model_ratio = EvaluateCachedLevyModel(bin, parameters, g_levy_3d_pml_context);
+        model_ratio *= g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio;
+        const double contribution = ComputePMLNeg2LogLContribution(bin.same_counts, bin.mixed_counts, model_ratio);
+        if (!std::isfinite(contribution) || contribution >= kFitPenaltyValue) {
+          return {kFitPenaltyValue, PMLEvaluationStatus::kObjectiveInvalid};
+        }
+        neg2_log_l += contribution;
+      }
+
+      if (!g_levy_3d_pml_context.cache_equivalence_checked) {
+        const double uncached = EvaluateUncachedPMLObjectiveForRegression(parameters);
+        const double tolerance = std::max(1.0e-10, 1.0e-12 * std::abs(uncached));
+        if (!std::isfinite(uncached) || std::abs(neg2_log_l - uncached) > tolerance) {
+          throw std::runtime_error("PML bin-cache regression check failed.");
+        }
+        g_levy_3d_pml_context.cache_equivalence_checked = true;
+      }
+
+      return std::isfinite(neg2_log_l) ? PMLEvaluation{neg2_log_l, PMLEvaluationStatus::kValid}
+                                       : PMLEvaluation{kFitPenaltyValue, PMLEvaluationStatus::kObjectiveInvalid};
+    }
+
     void Levy3DPMLFCN(Int_t &npar, Double_t *grad, Double_t &f, Double_t *parameters, Int_t flag) {
       (void)npar;
       (void)grad;
       (void)flag;
-      if (g_levy_3d_pml_context.h_se_raw == nullptr || g_levy_3d_pml_context.h_me_raw == nullptr) {
-        f = kFitPenaltyValue;
-        return;
-      }
-      if (g_levy_3d_pml_context.use_full_model && !HasValidFullR2MatrixFromParameterArray(parameters)) {
-        f = kFitPenaltyValue;
-        return;
-      }
-
-      double neg2_log_l = 0.0;
-      for (int ix = 1; ix <= g_levy_3d_pml_context.h_se_raw->GetNbinsX(); ++ix) {
-        const double q_out = g_levy_3d_pml_context.h_se_raw->GetXaxis()->GetBinCenter(ix);
-        if (std::abs(q_out) > g_levy_3d_pml_context.fit_options.fit_q_max) {
-          continue;
-        }
-        for (int iy = 1; iy <= g_levy_3d_pml_context.h_se_raw->GetNbinsY(); ++iy) {
-          const double q_side = g_levy_3d_pml_context.h_se_raw->GetYaxis()->GetBinCenter(iy);
-          if (std::abs(q_side) > g_levy_3d_pml_context.fit_options.fit_q_max) {
-            continue;
-          }
-          for (int iz = 1; iz <= g_levy_3d_pml_context.h_se_raw->GetNbinsZ(); ++iz) {
-            const double q_long = g_levy_3d_pml_context.h_se_raw->GetZaxis()->GetBinCenter(iz);
-            if (std::abs(q_long) > g_levy_3d_pml_context.fit_options.fit_q_max) {
-              continue;
-            }
-
-            const double same_counts = g_levy_3d_pml_context.h_se_raw->GetBinContent(ix, iy, iz);
-            const double mixed_counts = g_levy_3d_pml_context.h_me_raw->GetBinContent(ix, iy, iz);
-            if (same_counts == 0.0 && mixed_counts == 0.0) {
-              continue;
-            }
-
-            double model_ratio = EvaluateLevyModelFromParameterArray(
-                q_out, q_side, q_long, parameters, g_levy_3d_pml_context.use_full_model);
-            model_ratio *= g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio;
-            const double contribution = ComputePMLNeg2LogLContribution(same_counts, mixed_counts, model_ratio);
-            if (!std::isfinite(contribution) || contribution >= kFitPenaltyValue) {
-              f = kFitPenaltyValue;
-              return;
-            }
-            neg2_log_l += contribution;
-          }
-        }
-      }
-
-      f = std::isfinite(neg2_log_l) ? neg2_log_l : kFitPenaltyValue;
+      f = EvaluatePMLObjective(parameters).objective;
     }
 
     int CountPMLUsableBins(TH3D *h_se_raw, TH3D *h_me_raw, const double q_max) {
@@ -2119,69 +2387,121 @@ namespace exp_femto_3d {
       return false;
     }
 
-    void ConfigurePMLMinuit(TMinuit &minuit,
+    struct PMLFixedParameter {
+      int index = -1;
+      double value = 0.0;
+    };
+
+    struct PMLMinimizationResult {
+      std::vector<double> values;
+      std::vector<double> errors;
+      double objective = kFitPenaltyValue;
+      double final_objective = kFitPenaltyValue;
+      double edm = std::numeric_limits<double>::quiet_NaN();
+      int nfree = 0;
+      int migrad_status = -1;
+      int hesse_status = -1;
+      int minuit_istat = -1;
+      PMLEvaluationStatus evaluation_status = PMLEvaluationStatus::kObjectiveInvalid;
+      std::vector<int> at_lower_bound;
+      std::vector<int> at_upper_bound;
+      bool setup_error = false;
+      std::size_t fcn_calls = 0;
+      double total_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      double migrad_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      double hesse_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      bool hesse_ran = false;
+      bool parameter_errors_valid = false;
+    };
+
+    bool ConfigurePMLMinuit(TMinuit &minuit,
                             TF3 *fit_function,
                             const bool use_full_model,
-                            const LevyFitOptions &fit_options) {
+                            const LevyFitOptions &fit_options,
+                            const std::vector<double> *seed_values = nullptr,
+                            const std::vector<PMLFixedParameter> &temporary_fixed = {}) {
       const int n_parameters = fit_function->GetNpar();
+      bool setup_ok = std::all_of(temporary_fixed.begin(), temporary_fixed.end(), [&](const PMLFixedParameter &item) {
+        return item.index >= 0 && item.index < n_parameters && std::isfinite(item.value);
+      });
       Int_t error_code = 0;
       for (int index = 0; index < n_parameters; ++index) {
         double lower = 0.0;
         double upper = 0.0;
         fit_function->GetParLimits(index, lower, upper);
-        const double value = fit_function->GetParameter(index);
+        const double value = seed_values != nullptr && static_cast<std::size_t>(index) < seed_values->size()
+                                 ? (*seed_values)[static_cast<std::size_t>(index)]
+                                 : fit_function->GetParameter(index);
         const double step = EstimatePMLStepSize(index, use_full_model);
-        const bool fixed = IsPMLParameterFixed(index, use_full_model, fit_options);
+        const auto fixed_iter = std::find_if(temporary_fixed.begin(), temporary_fixed.end(), [&](const PMLFixedParameter &item) {
+          return item.index == index;
+        });
+        const bool fixed = IsPMLParameterFixed(index, use_full_model, fit_options) || fixed_iter != temporary_fixed.end();
+        const double configured_value = fixed_iter != temporary_fixed.end() ? fixed_iter->value : value;
+        error_code = 0;
         if (fixed) {
-          minuit.mnparm(index, fit_function->GetParName(index), value, step, 0.0, 0.0, error_code);
+          minuit.mnparm(index, fit_function->GetParName(index), configured_value, step, 0.0, 0.0, error_code);
+          setup_ok = setup_ok && error_code == 0;
           minuit.FixParameter(index);
         } else {
-          minuit.mnparm(index, fit_function->GetParName(index), value, step, lower, upper, error_code);
+          minuit.mnparm(index, fit_function->GetParName(index), configured_value, step, lower, upper, error_code);
+          setup_ok = setup_ok && error_code == 0;
         }
       }
+      return setup_ok;
     }
 
-    bool RunPMLFit(TF3 *fit_function,
-                   TH3D *h_se_raw,
-                   TH3D *h_me_raw,
-                   const bool use_full_model,
-                   const LevyFitOptions &fit_options,
-                   double &fit_statistic,
-                   int &ndf,
-                   int &fit_status,
-                   double &edm,
-                   int &minuit_istat) {
+    PMLMinimizationResult RunPMLMinimization(TF3 *fit_function,
+                                              TH3D *h_se_raw,
+                                              TH3D *h_me_raw,
+                                              const bool use_full_model,
+                                              const LevyFitOptions &fit_options,
+                                              const std::vector<double> *seed_values = nullptr,
+                                              const std::vector<PMLFixedParameter> &temporary_fixed = {},
+                                              const bool run_hesse = true) {
+      PMLMinimizationResult result;
+      const auto total_start = std::chrono::steady_clock::now();
       if (fit_function == nullptr || h_se_raw == nullptr || h_me_raw == nullptr) {
-        return false;
+        result.setup_error = true;
+        return result;
       }
       const double raw_to_normalized_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
       if (raw_to_normalized_scale <= 0.0 || !std::isfinite(raw_to_normalized_scale)) {
-        return false;
+        result.setup_error = true;
+        return result;
       }
-
       g_levy_3d_pml_context.h_se_raw = h_se_raw;
       g_levy_3d_pml_context.h_me_raw = h_me_raw;
       g_levy_3d_pml_context.use_full_model = use_full_model;
       g_levy_3d_pml_context.fit_options = fit_options;
       g_levy_3d_pml_context.coulomb_kernel = g_active_coulomb_kernel;
       g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio = raw_to_normalized_scale;
+      g_levy_3d_pml_context.fcn_calls = 0;
 
       ActiveCoulombKernelGuard kernel_guard(g_levy_3d_pml_context.coulomb_kernel);
       TMinuit minuit(fit_function->GetNpar());
       minuit.SetFCN(Levy3DPMLFCN);
       minuit.SetPrintLevel(-1);
       minuit.SetErrorDef(1.0);
-      ConfigurePMLMinuit(minuit, fit_function, use_full_model, fit_options);
-
+      if (!ConfigurePMLMinuit(minuit, fit_function, use_full_model, fit_options, seed_values, temporary_fixed)) {
+        result.setup_error = true;
+        return result;
+      }
       Int_t error_code = 0;
-      Double_t arglist[2];
-      arglist[0] = 100000;
-      arglist[1] = 0.1;
+      Double_t arglist[2] = {100000, 0.1};
+      const auto migrad_start = std::chrono::steady_clock::now();
       minuit.mnexcm("MIGRAD", arglist, 2, error_code);
-      const Int_t migrad_error = error_code;
-      arglist[0] = 0;
-      minuit.mnexcm("HESSE", arglist, 1, error_code);
-
+      const auto migrad_end = std::chrono::steady_clock::now();
+      result.migrad_status = error_code;
+      result.migrad_wall_ms = std::chrono::duration<double, std::milli>(migrad_end - migrad_start).count();
+      if (run_hesse) {
+        arglist[0] = 0;
+        const auto hesse_start = std::chrono::steady_clock::now();
+        minuit.mnexcm("HESSE", arglist, 1, error_code);
+        result.hesse_wall_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - hesse_start).count();
+        result.hesse_status = error_code;
+        result.hesse_ran = true;
+      }
       Double_t fmin = 0.0;
       Double_t fedm = 0.0;
       Double_t errdef = 0.0;
@@ -2191,20 +2511,54 @@ namespace exp_femto_3d {
       minuit.mnstat(fmin, fedm, errdef, npari, nparx, istat);
       (void)errdef;
       (void)nparx;
-
+      result.objective = fmin;
+      result.edm = fedm;
+      result.nfree = npari;
+      result.minuit_istat = istat;
+      result.values.resize(static_cast<std::size_t>(fit_function->GetNpar()));
+      result.errors.resize(static_cast<std::size_t>(fit_function->GetNpar()));
+      result.at_lower_bound.assign(static_cast<std::size_t>(fit_function->GetNpar()), 0);
+      result.at_upper_bound.assign(static_cast<std::size_t>(fit_function->GetNpar()), 0);
       for (int index = 0; index < fit_function->GetNpar(); ++index) {
-        double value = 0.0;
-        double error = 0.0;
-        minuit.GetParameter(index, value, error);
-        fit_function->SetParameter(index, value);
-        fit_function->SetParError(index, error);
+        minuit.GetParameter(index, result.values[static_cast<std::size_t>(index)], result.errors[static_cast<std::size_t>(index)]);
+        if (!run_hesse) result.errors[static_cast<std::size_t>(index)] = std::numeric_limits<double>::quiet_NaN();
+        fit_function->SetParameter(index, result.values[static_cast<std::size_t>(index)]);
+        fit_function->SetParError(index, result.errors[static_cast<std::size_t>(index)]);
+        double lower = 0.0;
+        double upper = 0.0;
+        fit_function->GetParLimits(index, lower, upper);
+        if (lower < upper) {
+          result.at_lower_bound[static_cast<std::size_t>(index)] = NearlyEqual(result.values[static_cast<std::size_t>(index)], lower) ? 1 : 0;
+          result.at_upper_bound[static_cast<std::size_t>(index)] = NearlyEqual(result.values[static_cast<std::size_t>(index)], upper) ? 1 : 0;
+        }
       }
+      const PMLEvaluation evaluation = EvaluatePMLObjective(result.values.data());
+      result.final_objective = evaluation.objective;
+      result.evaluation_status = evaluation.status;
+      result.fcn_calls = g_levy_3d_pml_context.fcn_calls;
+      result.parameter_errors_valid = run_hesse && result.hesse_status == 0;
+      result.total_wall_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - total_start).count();
+      return result;
+    }
 
-      fit_statistic = fmin;
-      edm = fedm;
-      ndf = std::max(0, CountPMLUsableBins(h_se_raw, h_me_raw, fit_options.fit_q_max) - npari);
-      minuit_istat = istat;
-      fit_status = migrad_error != 0 ? -migrad_error : istat;
+    [[maybe_unused]] bool RunPMLFit(TF3 *fit_function,
+                   TH3D *h_se_raw,
+                   TH3D *h_me_raw,
+                   const bool use_full_model,
+                   const LevyFitOptions &fit_options,
+                   double &fit_statistic,
+                   int &ndf,
+                   int &fit_status,
+                   double &edm,
+                   int &minuit_istat) {
+      const PMLMinimizationResult result =
+          RunPMLMinimization(fit_function, h_se_raw, h_me_raw, use_full_model, fit_options);
+      if (result.setup_error) return false;
+      fit_statistic = result.objective;
+      edm = result.edm;
+      ndf = std::max(0, CountPMLUsableBins(h_se_raw, h_me_raw, fit_options.fit_q_max) - result.nfree);
+      minuit_istat = result.minuit_istat;
+      fit_status = result.migrad_status != 0 ? -result.migrad_status : result.minuit_istat;
       return true;
     }
 
@@ -2523,6 +2877,7 @@ namespace exp_femto_3d {
     struct SingleSliceFitOutput {
       std::unique_ptr<TF3> fit_function;
       LevyFitResult result;
+      std::optional<PMLMinimizationResult> pml_minimization;
     };
 
     double ComputeEffectiveRadiusFromResult(const LevyFitResult &result) {
@@ -2625,7 +2980,8 @@ namespace exp_femto_3d {
                                                        const FitModel model,
                                                        const LevyFitOptions &fit_options,
                                                        const bool fit_uses_symmetric_phi_range,
-                                                       const CoulombKernelTable *coulomb_kernel) {
+                                                       const CoulombKernelTable *coulomb_kernel,
+                                                       const bool run_pml_hesse = true) {
       if (fit_options.coulomb_mode == CoulombMode::kFiniteSource && coulomb_kernel == nullptr) {
         throw std::runtime_error("Finite-source Coulomb fit has no prepared kernel for group " + entry.group_id + ".");
       }
@@ -2642,16 +2998,25 @@ namespace exp_femto_3d {
       int fit_minuit_istat = -1;
       bool fit_succeeded = false;
       if (fit_options.use_pml) {
-        fit_succeeded = RunPMLFit(output.fit_function.get(),
-                                  h_se_raw,
-                                  h_me_raw,
-                                  model == FitModel::kFull,
-                                  fit_options,
-                                  fit_statistic,
-                                  fit_ndf,
-                                  fit_status,
-                                  fit_edm,
-                                  fit_minuit_istat);
+        g_levy_3d_pml_context.cached_h_se_raw = nullptr;
+        g_levy_3d_pml_context.cached_h_me_raw = nullptr;
+        g_levy_3d_pml_context.bin_cache.clear();
+        output.pml_minimization = RunPMLMinimization(output.fit_function.get(),
+                                                      h_se_raw,
+                                                      h_me_raw,
+                                                      model == FitModel::kFull,
+                                                      fit_options,
+                                                      nullptr,
+                                                      {},
+                                                      run_pml_hesse);
+        fit_succeeded = !output.pml_minimization->setup_error;
+        fit_statistic = output.pml_minimization->objective;
+        fit_edm = output.pml_minimization->edm;
+        fit_ndf = std::max(
+            0, CountPMLUsableBins(h_se_raw, h_me_raw, fit_options.fit_q_max) - output.pml_minimization->nfree);
+        fit_minuit_istat = output.pml_minimization->minuit_istat;
+        fit_status = output.pml_minimization->migrad_status != 0 ? -output.pml_minimization->migrad_status
+                                                                 : output.pml_minimization->minuit_istat;
       } else {
         const auto fit_status_object = h_cf->Fit(output.fit_function.get(), "RSMNQ0");
         fit_statistic = output.fit_function->GetChisquare();
@@ -3411,6 +3776,926 @@ namespace exp_femto_3d {
       output_file->Close();
     }
 
+    int ProfileParameterIndex(const std::string &name, const FitModel model) {
+      if (name == "norm") return 0;
+      if (name == "lambda") return 1;
+      if (name == "rout2") return 2;
+      if (name == "rside2") return 3;
+      if (name == "rlong2") return 4;
+      if (model == FitModel::kFull && name == "routside2") return 5;
+      if (model == FitModel::kFull && name == "routlong2") return 6;
+      if (model == FitModel::kFull && name == "rsidelong2") return 7;
+      if (name == "alpha") return model == FitModel::kFull ? 8 : 5;
+      if (name == "baseline_q2") return model == FitModel::kFull ? 9 : 6;
+      return -1;
+    }
+
+    std::string ProfileParameterLabel(const std::string &name) {
+      if (name == "norm") return "Norm";
+      if (name == "lambda") return "#lambda";
+      if (name == "rout2") return "R_{out}^{2} [fm^{2}]";
+      if (name == "rside2") return "R_{side}^{2} [fm^{2}]";
+      if (name == "rlong2") return "R_{long}^{2} [fm^{2}]";
+      if (name == "routside2") return "R_{outside}^{2} [fm^{2}]";
+      if (name == "routlong2") return "R_{outlong}^{2} [fm^{2}]";
+      if (name == "rsidelong2") return "R_{sidelong}^{2} [fm^{2}]";
+      if (name == "alpha") return "#alpha";
+      return "BaselineQ2 [(GeV/c)^{-2}]";
+    }
+
+    std::string ProfileParameterCanonicalName(const int index, const FitModel model) {
+      if (index == 0) return "norm";
+      if (index == 1) return "lambda";
+      if (index == 2) return "rout2";
+      if (index == 3) return "rside2";
+      if (index == 4) return "rlong2";
+      if (model == FitModel::kFull && index == 5) return "routside2";
+      if (model == FitModel::kFull && index == 6) return "routlong2";
+      if (model == FitModel::kFull && index == 7) return "rsidelong2";
+      if (index == (model == FitModel::kFull ? 8 : 5)) return "alpha";
+      if (index == (model == FitModel::kFull ? 9 : 6)) return "baseline_q2";
+      return {};
+    }
+
+    bool HasValidDelta(const profile_likelihood::PointRecord &point, const double delta) {
+      return point.status == profile_likelihood::PointStatus::kValid && std::isfinite(delta);
+    }
+
+    std::vector<double> MakeCenteredEdges(std::vector<double> centers) {
+      std::sort(centers.begin(), centers.end());
+      centers.erase(std::unique(centers.begin(), centers.end(), [](const double left, const double right) {
+                      return NearlyEqual(left, right, 1.0e-12);
+                    }),
+                    centers.end());
+      std::vector<double> edges;
+      if (centers.empty()) {
+        return edges;
+      }
+      edges.resize(centers.size() + 1U);
+      if (centers.size() == 1U) {
+        edges[0] = centers[0] - 0.5;
+        edges[1] = centers[0] + 0.5;
+        return edges;
+      }
+      for (std::size_t index = 1; index < centers.size(); ++index) {
+        edges[index] = 0.5 * (centers[index - 1U] + centers[index]);
+      }
+      edges.front() = centers.front() - 0.5 * (centers[1] - centers.front());
+      edges.back() = centers.back() + 0.5 * (centers.back() - centers[centers.size() - 2U]);
+      return edges;
+    }
+
+    std::unique_ptr<TGraph> MakeSinglePointGraph(const std::string &name,
+                                                 const std::string &title,
+                                                 const double x,
+                                                 const double y,
+                                                 const int color,
+                                                 const int marker_style) {
+      if (!std::isfinite(x) || !std::isfinite(y)) {
+        return nullptr;
+      }
+      auto graph = std::make_unique<TGraph>(1);
+      graph->SetName(name.c_str());
+      graph->SetTitle(title.c_str());
+      graph->SetPoint(0, x, y);
+      graph->SetMarkerColor(color);
+      graph->SetMarkerStyle(marker_style);
+      graph->SetMarkerSize(1.3);
+      graph->SetLineColor(color);
+      return graph;
+    }
+
+    void StyleProfileGraph(TGraph &graph, const int color, const int marker_style) {
+      graph.SetLineColor(color);
+      graph.SetMarkerColor(color);
+      graph.SetMarkerStyle(marker_style);
+      graph.SetMarkerSize(1.0);
+      graph.SetLineWidth(2);
+    }
+
+    struct ResolvedProfileScan {
+      const ProfileScanConfig *config = nullptr;
+      std::vector<int> target_indices;
+      std::vector<double> lower;
+      std::vector<double> upper;
+    };
+
+    std::vector<ResolvedProfileScan> ResolveProfileScans(const ApplicationConfig &config, const FitModel model) {
+      std::vector<ResolvedProfileScan> resolved;
+      if (!config.fit.profile_likelihood.enabled) return resolved;
+      std::unique_ptr<TF3> function(model == FitModel::kFull ? BuildFullLevyFitFunction("profile_validation", config.fit.options)
+                                                              : BuildLevyFitFunction("profile_validation", config.fit.options));
+      for (const ProfileScanConfig &scan : config.fit.profile_likelihood.scans) {
+        ResolvedProfileScan item;
+        item.config = &scan;
+        for (std::size_t axis = 0; axis < scan.parameters.size(); ++axis) {
+          const int index = ProfileParameterIndex(scan.parameters[axis], model);
+          if (index < 0 || IsPMLParameterFixed(index, model == FitModel::kFull, config.fit.options)) {
+            throw std::runtime_error("Profile target '" + scan.parameters[axis]
+                                     + "' is unknown, inactive, or fixed in the effective fit model.");
+          }
+          double lower = 0.0;
+          double upper = 0.0;
+          function->GetParLimits(index, lower, upper);
+          if (scan.min.empty()) {
+            if (!(upper > lower) || !std::isfinite(lower) || !std::isfinite(upper)) {
+              throw std::runtime_error("Profile target '" + scan.parameters[axis]
+                                       + "' has no finite effective bounds; explicit scan min/max are required.");
+            }
+          } else {
+            lower = scan.min[axis];
+            upper = scan.max[axis];
+            double parameter_lower = 0.0;
+            double parameter_upper = 0.0;
+            function->GetParLimits(index, parameter_lower, parameter_upper);
+            if (parameter_upper > parameter_lower
+                && (lower < parameter_lower || upper > parameter_upper)) {
+              throw std::runtime_error("Profile scan range for '" + scan.parameters[axis]
+                                       + "' lies outside its effective fit bounds.");
+            }
+          }
+          item.target_indices.push_back(index);
+          item.lower.push_back(lower);
+          item.upper.push_back(upper);
+        }
+        resolved.push_back(std::move(item));
+      }
+      return resolved;
+    }
+
+    void ConfigurePMLContextForEvaluation(TH3D *h_se_raw,
+                                          TH3D *h_me_raw,
+                                          const bool use_full_model,
+                                          const LevyFitOptions &fit_options) {
+      const double raw_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
+      if (!(raw_scale > 0.0) || !std::isfinite(raw_scale)) {
+        throw std::runtime_error("Cannot evaluate a PML profile with invalid raw SE/ME normalization.");
+      }
+      g_levy_3d_pml_context.h_se_raw = h_se_raw;
+      g_levy_3d_pml_context.h_me_raw = h_me_raw;
+      g_levy_3d_pml_context.use_full_model = use_full_model;
+      g_levy_3d_pml_context.fit_options = fit_options;
+      g_levy_3d_pml_context.coulomb_kernel = g_active_coulomb_kernel;
+      g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio = raw_scale;
+    }
+
+    profile_likelihood::MinimizationResult ToProfileResult(const PMLMinimizationResult &result) {
+      profile_likelihood::MinimizationResult profile;
+      profile.values = result.values;
+      profile.errors = result.errors;
+      profile.objective = result.final_objective;
+      profile.edm = result.edm;
+      profile.migrad_status = result.migrad_status;
+      profile.hesse_status = result.hesse_status;
+      profile.minuit_istat = result.minuit_istat;
+      profile.minimizer_error = result.setup_error;
+      profile.fcn_calls = result.fcn_calls;
+      profile.total_wall_ms = result.total_wall_ms;
+      profile.migrad_wall_ms = result.migrad_wall_ms;
+      profile.hesse_wall_ms = result.hesse_wall_ms;
+      profile.hesse_ran = result.hesse_ran;
+      profile.parameter_errors_valid = result.parameter_errors_valid;
+      profile.at_lower_bound = result.at_lower_bound;
+      profile.at_upper_bound = result.at_upper_bound;
+      profile.model_domain_valid = result.evaluation_status != PMLEvaluationStatus::kModelDomainInvalid
+                                   && result.evaluation_status != PMLEvaluationStatus::kMissingInput;
+      profile.objective_valid = result.evaluation_status == PMLEvaluationStatus::kValid
+                                && result.final_objective < kFitPenaltyValue;
+      return profile;
+    }
+
+    struct ProfileSliceScanOutput {
+      ResolvedProfileScan scan;
+      profile_likelihood::ScanResult result;
+      std::vector<double> deltas;
+      std::vector<double> slice_deltas;
+    };
+
+    struct ProfileSliceOutput {
+      std::vector<ProfileSliceScanOutput> scans;
+      double nominal_objective = std::numeric_limits<double>::quiet_NaN();
+      bool nominal_valid = false;
+      double reference_objective = std::numeric_limits<double>::quiet_NaN();
+      std::string reference_source = "none";
+      std::vector<double> nominal_values;
+    };
+
+    ProfileSliceOutput RunProfilesForSlice(const SliceCatalogEntry &entry,
+                                           TH3D *h_se_raw,
+                                           TH3D *h_me_raw,
+                                           const FitModel model,
+                                           const LevyFitOptions &fit_options,
+                                           const CoulombKernelTable *kernel,
+                                           const std::vector<ResolvedProfileScan> &scans,
+                                           const ProfileRetryStrategy retry_strategy,
+                                           const bool write_likelihood_slice,
+                                           const bool run_hesse,
+                                           const SingleSliceFitOutput &nominal) {
+      ActiveCoulombKernelGuard kernel_guard(kernel);
+      ConfigurePMLContextForEvaluation(h_se_raw, h_me_raw, model == FitModel::kFull, fit_options);
+      ProfileSliceOutput output;
+      std::vector<double> nominal_values(static_cast<std::size_t>(nominal.fit_function->GetNpar()));
+      for (int index = 0; index < nominal.fit_function->GetNpar(); ++index) {
+        nominal_values[static_cast<std::size_t>(index)] = nominal.fit_function->GetParameter(index);
+      }
+      output.nominal_values = nominal_values;
+      const PMLEvaluation nominal_evaluation = EvaluatePMLObjective(nominal_values.data());
+      output.nominal_objective = nominal_evaluation.objective;
+      output.nominal_valid = nominal.pml_minimization.has_value()
+                             && nominal.pml_minimization->migrad_status == 0
+                             && nominal_evaluation.status == PMLEvaluationStatus::kValid
+                             && nominal_evaluation.objective < kFitPenaltyValue;
+      for (const ResolvedProfileScan &scan : scans) {
+        auto minimize = [&](const std::vector<double> &seed,
+                            const std::vector<int> &indices,
+                            const std::vector<double> &values) {
+          std::unique_ptr<TF3> function(model == FitModel::kFull
+                                            ? BuildFullLevyFitFunction(entry.slice_id + "_profile_full", fit_options)
+                                            : BuildLevyFitFunction(entry.slice_id + "_profile_diag", fit_options));
+          std::vector<PMLFixedParameter> fixed;
+          for (std::size_t axis = 0; axis < indices.size(); ++axis) fixed.push_back({indices[axis], values[axis]});
+          return ToProfileResult(RunPMLMinimization(function.get(), h_se_raw, h_me_raw,
+                                                     model == FitModel::kFull, fit_options, &seed, fixed, run_hesse));
+        };
+        auto evaluate_slice = [&](const std::vector<int> &indices, const std::vector<double> &values) {
+          if (!write_likelihood_slice) return profile_likelihood::SliceEvaluation{};
+          std::vector<double> fixed_values = nominal_values;
+          for (std::size_t axis = 0; axis < indices.size(); ++axis) fixed_values[static_cast<std::size_t>(indices[axis])] = values[axis];
+          const PMLEvaluation evaluation = EvaluatePMLObjective(fixed_values.data());
+          profile_likelihood::SliceEvaluation slice_evaluation;
+          slice_evaluation.objective = evaluation.objective;
+          slice_evaluation.model_domain_valid = evaluation.status != PMLEvaluationStatus::kModelDomainInvalid
+                                                && evaluation.status != PMLEvaluationStatus::kMissingInput;
+          slice_evaluation.objective_valid = evaluation.status == PMLEvaluationStatus::kValid
+                                             && evaluation.objective < kFitPenaltyValue;
+          return slice_evaluation;
+        };
+        ProfileSliceScanOutput scan_output;
+        scan_output.scan = scan;
+        scan_output.result = profile_likelihood::RunProfileScan(*scan.config, scan.target_indices, scan.lower,
+                                                                  scan.upper, nominal_values,
+                                                                  retry_strategy,
+                                                                  minimize, evaluate_slice);
+        output.scans.push_back(std::move(scan_output));
+      }
+      std::vector<std::pair<std::string, const profile_likelihood::ScanResult *>> reference_scans;
+      for (const ProfileSliceScanOutput &scan : output.scans) {
+        reference_scans.emplace_back(scan.scan.config->id, &scan.result);
+      }
+      const profile_likelihood::ReferenceMinimum selected_reference = profile_likelihood::SelectGlobalReference(
+          output.nominal_objective, output.nominal_valid, reference_scans);
+      const double reference = selected_reference.objective;
+      output.reference_objective = selected_reference.objective;
+      output.reference_source = selected_reference.source;
+      for (ProfileSliceScanOutput &scan : output.scans) {
+        for (const profile_likelihood::PointRecord &point : scan.result.points) {
+          scan.deltas.push_back(point.status == profile_likelihood::PointStatus::kValid && std::isfinite(reference)
+                                    ? point.winner.objective - reference
+                                    : std::numeric_limits<double>::quiet_NaN());
+          scan.slice_deltas.push_back(point.likelihood_slice_objective_valid && std::isfinite(reference)
+                                          ? point.likelihood_slice_objective - reference
+                                          : std::numeric_limits<double>::quiet_NaN());
+        }
+      }
+      return output;
+    }
+
+    struct ProfileRunRecord {
+      SliceCatalogEntry entry;
+      ProfileSliceOutput output;
+      std::optional<CoulombKernelCatalogEntry> frozen_kernel;
+    };
+
+    [[maybe_unused]] void WriteProfileParameterCatalog(TFile &file,
+                                      const SliceCatalogEntry &entry,
+                                      const FitModel model,
+                                      const LevyFitOptions &fit_options,
+                                      const std::vector<double> &nominal_values) {
+      std::unique_ptr<TF3> function(model == FitModel::kFull
+                                        ? BuildFullLevyFitFunction("profile_parameter_catalog", fit_options)
+                                        : BuildLevyFitFunction("profile_parameter_catalog", fit_options));
+      auto *directory = GetOrCreateDirectoryPath(file, "meta");
+      directory->cd();
+      auto tree = std::make_unique<TTree>(("ProfileParameterCatalog_" + entry.slice_id).c_str(), "ProfileParameterCatalog");
+      std::string canonical_name;
+      std::string display_label;
+      std::string unit;
+      int minuit_index = -1;
+      int fixed = 0;
+      double lower = std::numeric_limits<double>::quiet_NaN();
+      double upper = std::numeric_limits<double>::quiet_NaN();
+      double nominal_value = std::numeric_limits<double>::quiet_NaN();
+      tree->Branch("canonical_name", &canonical_name);
+      tree->Branch("minuit_index", &minuit_index);
+      tree->Branch("display_label", &display_label);
+      tree->Branch("unit", &unit);
+      tree->Branch("lower", &lower);
+      tree->Branch("upper", &upper);
+      tree->Branch("nominal_value", &nominal_value);
+      tree->Branch("fixed", &fixed);
+      const std::array<std::string, 10> names = {"norm", "lambda", "rout2", "rside2", "rlong2", "routside2",
+                                                  "routlong2", "rsidelong2", "alpha", "baseline_q2"};
+      for (const std::string &name : names) {
+        minuit_index = ProfileParameterIndex(name, model);
+        if (minuit_index < 0) continue;
+        canonical_name = name;
+        display_label = ProfileParameterLabel(name);
+        unit = name.find("2") != std::string::npos && name != "baseline_q2" ? "fm^2"
+             : name == "baseline_q2" ? "(GeV/c)^-2" : "";
+        function->GetParLimits(minuit_index, lower, upper);
+        if (!(upper > lower)) {
+          lower = std::numeric_limits<double>::quiet_NaN();
+          upper = std::numeric_limits<double>::quiet_NaN();
+        }
+        nominal_value = static_cast<std::size_t>(minuit_index) < nominal_values.size()
+                            ? nominal_values[static_cast<std::size_t>(minuit_index)] : function->GetParameter(minuit_index);
+        fixed = IsPMLParameterFixed(minuit_index, model == FitModel::kFull, fit_options) ? 1 : 0;
+        tree->Fill();
+      }
+      tree->Write("", TObject::kOverwrite);
+      file.cd();
+    }
+
+    void WriteProfilePointTrees(TDirectory &directory,
+                                const ProfileSliceScanOutput &scan,
+                                const ProfileSliceOutput &slice_output) {
+      directory.cd();
+      auto points = std::make_unique<TTree>("ProfilePoints", "ProfilePoints; TTree is the numerical truth");
+      int point_index = 0;
+      int attempt_index = -1;
+      int stage = 0;
+      int ix = 0;
+      int iy = -1;
+      double scan_x = std::numeric_limits<double>::quiet_NaN();
+      double scan_y = std::numeric_limits<double>::quiet_NaN();
+      std::vector<double> coordinates;
+      std::vector<int> target_indices;
+      double objective = std::numeric_limits<double>::quiet_NaN();
+      double delta = std::numeric_limits<double>::quiet_NaN();
+      double slice_objective = std::numeric_limits<double>::quiet_NaN();
+      double slice_delta = std::numeric_limits<double>::quiet_NaN();
+      int slice_objective_valid = 0;
+      std::string status;
+      std::string winner_seed;
+      int attempt_count = 0;
+      int valid_attempt_count = 0;
+      double objective_spread = std::numeric_limits<double>::quiet_NaN();
+      double edm = std::numeric_limits<double>::quiet_NaN();
+      int migrad_status = -1;
+      int hesse_status = -1;
+      int minuit_istat = -1;
+      int model_domain_valid = 0;
+      int objective_valid = 0;
+      int minimizer_error = 0;
+      unsigned long long fcn_calls = 0;
+      double total_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      double migrad_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      double hesse_wall_ms = std::numeric_limits<double>::quiet_NaN();
+      int hesse_ran = 0;
+      int parameter_errors_valid = 0;
+      std::vector<double> parameter_values;
+      std::vector<double> parameter_errors;
+      std::vector<int> at_lower_bound;
+      std::vector<int> at_upper_bound;
+      target_indices = scan.scan.target_indices;
+      points->Branch("point_index", &point_index);
+      points->Branch("stage", &stage);
+      points->Branch("ix", &ix);
+      points->Branch("iy", &iy);
+      points->Branch("scan_x", &scan_x);
+      points->Branch("scan_y", &scan_y);
+      points->Branch("coordinates", &coordinates);
+      points->Branch("target_indices", &target_indices);
+      points->Branch("objective", &objective);
+      points->Branch("winner_objective", &objective);
+      points->Branch("delta_neg2logl", &delta);
+      points->Branch("slice_objective", &slice_objective);
+      points->Branch("slice_delta_neg2logl", &slice_delta);
+      points->Branch("slice_objective_valid", &slice_objective_valid);
+      points->Branch("status", &status);
+      points->Branch("winner_seed", &winner_seed);
+      points->Branch("attempt_count", &attempt_count);
+      points->Branch("valid_attempt_count", &valid_attempt_count);
+      points->Branch("objective_spread", &objective_spread);
+      points->Branch("edm", &edm);
+      points->Branch("winner_edm", &edm);
+      points->Branch("migrad_status", &migrad_status);
+      points->Branch("winner_migrad_status", &migrad_status);
+      points->Branch("hesse_status", &hesse_status);
+      points->Branch("winner_hesse_status", &hesse_status);
+      points->Branch("minuit_istat", &minuit_istat);
+      points->Branch("winner_minuit_istat", &minuit_istat);
+      points->Branch("model_domain_valid", &model_domain_valid);
+      points->Branch("winner_model_domain_valid", &model_domain_valid);
+      points->Branch("objective_valid", &objective_valid);
+      points->Branch("winner_objective_valid", &objective_valid);
+      points->Branch("minimizer_error", &minimizer_error);
+      points->Branch("winner_minimizer_error", &minimizer_error);
+      points->Branch("fcn_calls", &fcn_calls);
+      points->Branch("total_wall_ms", &total_wall_ms);
+      points->Branch("migrad_wall_ms", &migrad_wall_ms);
+      points->Branch("hesse_wall_ms", &hesse_wall_ms);
+      points->Branch("hesse_ran", &hesse_ran);
+      points->Branch("parameter_errors_valid", &parameter_errors_valid);
+      points->Branch("parameter_values", &parameter_values);
+      points->Branch("winner_parameter_values", &parameter_values);
+      points->Branch("parameter_errors", &parameter_errors);
+      points->Branch("winner_parameter_errors", &parameter_errors);
+      points->Branch("at_lower_bound", &at_lower_bound);
+      points->Branch("winner_at_lower_bound", &at_lower_bound);
+      points->Branch("at_upper_bound", &at_upper_bound);
+      points->Branch("winner_at_upper_bound", &at_upper_bound);
+      for (std::size_t index = 0; index < scan.result.points.size(); ++index) {
+        const auto &point = scan.result.points[index];
+        point_index = point.point_index; stage = point.stage; ix = point.ix; iy = point.iy;
+        coordinates = point.coordinates;
+        scan_x = !coordinates.empty() ? coordinates[0] : std::numeric_limits<double>::quiet_NaN();
+        scan_y = coordinates.size() > 1U ? coordinates[1] : std::numeric_limits<double>::quiet_NaN();
+        objective = point.winner.objective; delta = scan.deltas[index];
+        slice_objective = point.likelihood_slice_objective; slice_delta = scan.slice_deltas[index];
+        slice_objective_valid = point.likelihood_slice_objective_valid ? 1 : 0;
+        status = profile_likelihood::ToString(point.status); winner_seed = profile_likelihood::ToString(point.winner_seed);
+        attempt_count = point.attempt_count; valid_attempt_count = point.valid_attempt_count;
+        objective_spread = point.objective_spread;
+        edm = point.winner.edm; migrad_status = point.winner.migrad_status; hesse_status = point.winner.hesse_status;
+        minuit_istat = point.winner.minuit_istat;
+        model_domain_valid = point.winner.model_domain_valid ? 1 : 0;
+        objective_valid = point.winner.objective_valid ? 1 : 0;
+        minimizer_error = point.winner.minimizer_error ? 1 : 0;
+        fcn_calls = static_cast<unsigned long long>(point.winner.fcn_calls);
+        total_wall_ms = point.winner.total_wall_ms;
+        migrad_wall_ms = point.winner.migrad_wall_ms;
+        hesse_wall_ms = point.winner.hesse_wall_ms;
+        hesse_ran = point.winner.hesse_ran ? 1 : 0;
+        parameter_errors_valid = point.winner.parameter_errors_valid ? 1 : 0;
+        parameter_values = point.winner.values; parameter_errors = point.winner.errors;
+        at_lower_bound = point.winner.at_lower_bound; at_upper_bound = point.winner.at_upper_bound;
+        points->Fill();
+      }
+      points->Write("", TObject::kOverwrite);
+      auto attempts = std::make_unique<TTree>("AttemptPoints", "AttemptPoints");
+      std::string seed_origin;
+      attempts->Branch("attempt_index", &attempt_index);
+      attempts->Branch("point_index", &point_index);
+      attempts->Branch("stage", &stage); attempts->Branch("ix", &ix); attempts->Branch("iy", &iy);
+      attempts->Branch("scan_x", &scan_x); attempts->Branch("scan_y", &scan_y);
+      attempts->Branch("coordinates", &coordinates); attempts->Branch("seed_origin", &seed_origin);
+      attempts->Branch("target_indices", &target_indices);
+      attempts->Branch("objective", &objective); attempts->Branch("status", &status);
+      attempts->Branch("edm", &edm);
+      attempts->Branch("migrad_status", &migrad_status); attempts->Branch("hesse_status", &hesse_status);
+      attempts->Branch("minuit_istat", &minuit_istat); attempts->Branch("parameter_values", &parameter_values);
+      attempts->Branch("parameter_errors", &parameter_errors); attempts->Branch("at_lower_bound", &at_lower_bound);
+      attempts->Branch("at_upper_bound", &at_upper_bound);
+      attempts->Branch("model_domain_valid", &model_domain_valid);
+      attempts->Branch("objective_valid", &objective_valid);
+      attempts->Branch("minimizer_error", &minimizer_error);
+      attempts->Branch("fcn_calls", &fcn_calls);
+      attempts->Branch("total_wall_ms", &total_wall_ms);
+      attempts->Branch("migrad_wall_ms", &migrad_wall_ms);
+      attempts->Branch("hesse_wall_ms", &hesse_wall_ms);
+      attempts->Branch("hesse_ran", &hesse_ran);
+      attempts->Branch("parameter_errors_valid", &parameter_errors_valid);
+      for (const auto &attempt : scan.result.attempts) {
+        attempt_index = attempt.attempt_index; point_index = attempt.point_index;
+        stage = attempt.stage; ix = attempt.ix; iy = attempt.iy; coordinates = attempt.coordinates;
+        scan_x = !coordinates.empty() ? coordinates[0] : std::numeric_limits<double>::quiet_NaN();
+        scan_y = coordinates.size() > 1U ? coordinates[1] : std::numeric_limits<double>::quiet_NaN();
+        seed_origin = profile_likelihood::ToString(attempt.seed_origin); objective = attempt.result.objective;
+        status = profile_likelihood::ToString(attempt.status); migrad_status = attempt.result.migrad_status;
+        hesse_status = attempt.result.hesse_status; minuit_istat = attempt.result.minuit_istat; edm = attempt.result.edm;
+        model_domain_valid = attempt.result.model_domain_valid ? 1 : 0;
+        objective_valid = attempt.result.objective_valid ? 1 : 0;
+        minimizer_error = attempt.result.minimizer_error ? 1 : 0;
+        fcn_calls = static_cast<unsigned long long>(attempt.result.fcn_calls);
+        total_wall_ms = attempt.result.total_wall_ms;
+        migrad_wall_ms = attempt.result.migrad_wall_ms;
+        hesse_wall_ms = attempt.result.hesse_wall_ms;
+        hesse_ran = attempt.result.hesse_ran ? 1 : 0;
+        parameter_errors_valid = attempt.result.parameter_errors_valid ? 1 : 0;
+        parameter_values = attempt.result.values; parameter_errors = attempt.result.errors;
+        at_lower_bound = attempt.result.at_lower_bound; at_upper_bound = attempt.result.at_upper_bound;
+        attempts->Fill();
+      }
+      attempts->Write("", TObject::kOverwrite);
+      (void)slice_output;
+    }
+
+    void WriteProfileDisplay(TDirectory &directory,
+                             const ProfileSliceScanOutput &scan,
+                             const ProfileSliceOutput &slice_output,
+                             const FitModel model,
+                             const std::vector<double> &contour_levels,
+                             const bool write_likelihood_slice) {
+      directory.cd();
+      const ProfileScanConfig &config = *scan.scan.config;
+      const std::string y_title = "#Delta(-2 ln L_{PML})";
+      if (config.parameters.size() == 1U) {
+        auto profile = std::make_unique<TGraph>();
+        auto slice = std::make_unique<TGraph>();
+        double y_max = 1.0;
+        for (std::size_t index = 0; index < scan.result.points.size(); ++index) {
+          const auto &point = scan.result.points[index];
+          if (point.coordinates.empty()) continue;
+          const double x = point.coordinates[0];
+          if (HasValidDelta(point, scan.deltas[index])) {
+            const double y = scan.deltas[index];
+            profile->SetPoint(profile->GetN(), x, y);
+            y_max = std::max(y_max, y);
+          }
+          if (write_likelihood_slice && point.likelihood_slice_objective_valid
+              && std::isfinite(scan.slice_deltas[index])) {
+            slice->SetPoint(slice->GetN(), x, scan.slice_deltas[index]);
+            y_max = std::max(y_max, scan.slice_deltas[index]);
+          }
+        }
+        profile->Sort();
+        slice->Sort();
+        y_max *= 1.15;
+        profile->SetName("Profile1D");
+        profile->SetTitle(("Profile likelihood;" + ProfileParameterLabel(config.parameters[0]) + ";" + y_title).c_str());
+        StyleProfileGraph(*profile, kBlue + 1, 20);
+        profile->GetXaxis()->SetLimits(scan.scan.lower[0], scan.scan.upper[0]);
+        profile->SetMinimum(0.0);
+        profile->SetMaximum(y_max);
+        profile->Write();
+        std::unique_ptr<TGraph> slice_for_canvas;
+        if (write_likelihood_slice) {
+          slice->SetName("Slice1D");
+          slice->SetTitle(("Likelihood slice (nuisance fixed at nominal);" + ProfileParameterLabel(config.parameters[0])
+                           + ";" + y_title)
+                              .c_str());
+          StyleProfileGraph(*slice, kGray + 2, 25);
+          slice->Write();
+          slice_for_canvas = std::move(slice);
+        }
+        const int target_index = scan.scan.target_indices.empty() ? -1 : scan.scan.target_indices[0];
+        const double nominal_x =
+            target_index >= 0 && static_cast<std::size_t>(target_index) < slice_output.nominal_values.size()
+                ? slice_output.nominal_values[static_cast<std::size_t>(target_index)]
+                : std::numeric_limits<double>::quiet_NaN();
+        const double nominal_y = slice_output.nominal_valid && std::isfinite(slice_output.reference_objective)
+                                     ? slice_output.nominal_objective - slice_output.reference_objective
+                                     : std::numeric_limits<double>::quiet_NaN();
+        auto nominal_marker = MakeSinglePointGraph(
+            "NominalPoint", "Nominal point", nominal_x, nominal_y, kBlack, 29);
+        if (nominal_marker) nominal_marker->Write();
+
+        auto canvas = std::make_unique<TCanvas>("Canvas_1D", "Profile likelihood diagnostic only", 850, 650);
+        profile->Draw("ALP");
+        if (slice_for_canvas && slice_for_canvas->GetN() > 0) slice_for_canvas->Draw("LP SAME");
+        if (nominal_marker) nominal_marker->Draw("P SAME");
+        auto legend = std::make_unique<TLegend>(0.58, 0.73, 0.88, 0.88);
+        legend->SetBorderSize(0); legend->AddEntry(profile.get(), "Profile", "l");
+        if (slice_for_canvas && slice_for_canvas->GetN() > 0) legend->AddEntry(slice_for_canvas.get(), "Slice", "l");
+        if (nominal_marker) legend->AddEntry(nominal_marker.get(), "Nominal", "p");
+        legend->Draw();
+        auto diagnostic_note = std::make_unique<TPaveText>(0.14, 0.86, 0.50, 0.92, "NDC");
+        diagnostic_note->SetName("DiagnosticOnlyNote");
+        diagnostic_note->SetFillStyle(0);
+        diagnostic_note->SetBorderSize(0);
+        diagnostic_note->SetTextAlign(12);
+        diagnostic_note->AddText("diagnostic only; no confidence-level interpretation");
+        diagnostic_note->Draw();
+        canvas->Write();
+        // Named nuisance trajectories remain directly inspectable without duplicate p<N> aliases.
+        const std::size_t physical_parameter_count = model == FitModel::kFull ? 10U : 7U;
+        for (std::size_t parameter = 0;
+             parameter < std::min(physical_parameter_count, slice_output.nominal_values.size());
+             ++parameter) {
+          if (std::find(scan.scan.target_indices.begin(), scan.scan.target_indices.end(), static_cast<int>(parameter))
+              != scan.scan.target_indices.end()) continue;
+          auto trajectory = std::make_unique<TGraph>();
+          for (const auto &point : scan.result.points) {
+            if (point.status == profile_likelihood::PointStatus::kValid
+                && parameter < point.winner.values.size()) {
+              trajectory->SetPoint(trajectory->GetN(), point.coordinates[0], point.winner.values[parameter]);
+            }
+          }
+          if (trajectory->GetN() > 0) {
+            const std::string canonical_name = ProfileParameterCanonicalName(static_cast<int>(parameter), model);
+            if (canonical_name.empty()) continue;
+            trajectory->SetName(("Nuisance_" + canonical_name).c_str());
+            trajectory->SetTitle(("Nuisance " + canonical_name + ";" + ProfileParameterLabel(config.parameters[0])
+                                  + ";" + ProfileParameterLabel(canonical_name))
+                                     .c_str());
+            StyleProfileGraph(*trajectory, static_cast<int>(kAzure + (parameter % 7U)), 20 + static_cast<int>(parameter % 10U));
+            trajectory->Sort();
+            trajectory->Write();
+          }
+        }
+      } else {
+        std::vector<double> x_centers;
+        std::vector<double> y_centers;
+        for (const auto &point : scan.result.points) {
+          if (point.stage != 0 || point.coordinates.size() < 2U) continue;
+          x_centers.push_back(point.coordinates[0]);
+          y_centers.push_back(point.coordinates[1]);
+        }
+        std::vector<double> x_edges = MakeCenteredEdges(x_centers);
+        std::vector<double> y_edges = MakeCenteredEdges(y_centers);
+        if (x_edges.size() < 2U || y_edges.size() < 2U) {
+          x_edges = {scan.scan.lower[0], scan.scan.upper[0]};
+          y_edges = {scan.scan.lower[1], scan.scan.upper[1]};
+        }
+        const int nx = static_cast<int>(x_edges.size() - 1U);
+        const int ny = static_cast<int>(y_edges.size() - 1U);
+        auto delta = std::make_unique<TH2D>(
+            "DeltaNeg2LogL2D",
+            ("diagnostic only; no confidence-level interpretation;" + ProfileParameterLabel(config.parameters[0])
+             + ";" + ProfileParameterLabel(config.parameters[1]) + ";" + y_title)
+                .c_str(),
+            nx,
+            x_edges.data(),
+            ny,
+            y_edges.data());
+        auto status = std::make_unique<TH2I>(
+            "PointStatus2D",
+            ("Point status;" + ProfileParameterLabel(config.parameters[0]) + ";" + ProfileParameterLabel(config.parameters[1]))
+                .c_str(),
+            nx,
+            x_edges.data(),
+            ny,
+            y_edges.data());
+        status->GetZaxis()->SetTitle(
+            "1 valid; 2 nonconverged; 3 minimizer error; 4 model domain invalid; 5 objective invalid; 6 no valid attempt");
+        for (int bx = 1; bx <= nx; ++bx) {
+          for (int by = 1; by <= ny; ++by) {
+            delta->SetBinContent(bx, by, std::numeric_limits<double>::quiet_NaN());
+          }
+        }
+        for (std::size_t index = 0; index < scan.result.points.size(); ++index) {
+          const auto &point = scan.result.points[index];
+          if (point.coordinates.size() < 2U) continue;
+          if (point.stage == 0) {
+            const int bx = point.ix + 1;
+            const int by = point.iy + 1;
+            // Store one-based status codes so valid samples are distinguishable from an unwritten bin.
+            status->SetBinContent(bx, by, static_cast<int>(point.status) + 1);
+            if (HasValidDelta(point, scan.deltas[index])) {
+              delta->SetBinContent(bx, by, scan.deltas[index]);
+            }
+          }
+        }
+        if (!contour_levels.empty()) {
+          delta->SetContour(static_cast<int>(contour_levels.size()), contour_levels.data());
+        }
+        delta->Write(); status->Write();
+        std::unique_ptr<TGraph> nominal_marker;
+        if (slice_output.nominal_valid) {
+          nominal_marker = MakeSinglePointGraph(
+              "NominalPoint",
+              "Nominal point",
+              !scan.scan.target_indices.empty()
+                  && static_cast<std::size_t>(scan.scan.target_indices[0]) < slice_output.nominal_values.size()
+                  ? slice_output.nominal_values[static_cast<std::size_t>(scan.scan.target_indices[0])]
+                  : std::numeric_limits<double>::quiet_NaN(),
+              scan.scan.target_indices.size() > 1U
+                  && static_cast<std::size_t>(scan.scan.target_indices[1]) < slice_output.nominal_values.size()
+                  ? slice_output.nominal_values[static_cast<std::size_t>(scan.scan.target_indices[1])]
+                  : std::numeric_limits<double>::quiet_NaN(),
+              kBlack,
+              29);
+        }
+        if (nominal_marker) nominal_marker->Write();
+        auto canvas = std::make_unique<TCanvas>("Canvas_2D", "Profile likelihood diagnostic only", 850, 700);
+        delta->Draw("COLZ");
+        if (!contour_levels.empty()) {
+          delta->Draw("CONT3 SAME");
+        }
+        if (nominal_marker) nominal_marker->Draw("P SAME");
+        if (nominal_marker) {
+          auto legend = std::make_unique<TLegend>(0.68, 0.82, 0.88, 0.88);
+          legend->SetBorderSize(0);
+          legend->AddEntry(nominal_marker.get(), "Nominal", "p");
+          legend->Draw();
+        }
+        auto diagnostic_note = std::make_unique<TPaveText>(0.14, 0.86, 0.58, 0.92, "NDC");
+        diagnostic_note->SetName("DiagnosticOnlyNote");
+        diagnostic_note->SetFillStyle(0);
+        diagnostic_note->SetBorderSize(0);
+        diagnostic_note->SetTextAlign(12);
+        diagnostic_note->AddText("diagnostic only; no confidence-level interpretation");
+        diagnostic_note->Draw();
+        canvas->Write();
+      }
+    }
+
+    void WriteProfileRootFile(const std::string &path,
+                              const ApplicationConfig &config,
+                              const FitModel model,
+                              const std::vector<ProfileRunRecord> &records) {
+      auto file = OpenRootFile(path, "UPDATE");
+      auto *meta = GetOrCreateDirectoryPath(*file, "meta"); meta->cd();
+      auto parameter_catalog = std::make_unique<TTree>("ProfileParameterCatalog", "ProfileParameterCatalog");
+      // The tree is owned by this unique_ptr until Write().  Detach it from the
+      // TFile so ROOT cannot delete it again while closing the file.
+      parameter_catalog->SetDirectory(nullptr);
+      std::string parameter_slice_id, canonical_name, display_label, unit;
+      int minuit_index = -1, fixed = 0;
+      double lower = std::numeric_limits<double>::quiet_NaN(), upper = std::numeric_limits<double>::quiet_NaN();
+      double nominal_value = std::numeric_limits<double>::quiet_NaN();
+      parameter_catalog->Branch("slice_id", &parameter_slice_id); parameter_catalog->Branch("canonical_name", &canonical_name);
+      parameter_catalog->Branch("minuit_index", &minuit_index); parameter_catalog->Branch("display_label", &display_label);
+      parameter_catalog->Branch("unit", &unit); parameter_catalog->Branch("lower", &lower); parameter_catalog->Branch("upper", &upper);
+      parameter_catalog->Branch("nominal_value", &nominal_value); parameter_catalog->Branch("fixed", &fixed);
+      auto catalog = std::make_unique<TTree>("ProfileLikelihoodCatalog", "ProfileLikelihoodCatalog");
+      catalog->SetDirectory(nullptr);
+      std::string slice_id, group_id, slice_directory, scan_id, model_name, objective_kind, targets, nominal_source;
+      std::string reference_source;
+      std::string refinement_reason, finite_source_mode, kernel_group_id, qn_label, mt_rebin_mode, phi_rebin_mode;
+      std::string execution_mode, parallel_backend, minimizer_backend, hesse_strategy;
+      double nominal_objective = std::numeric_limits<double>::quiet_NaN(), reference_objective = std::numeric_limits<double>::quiet_NaN();
+      double scan_x_min = std::numeric_limits<double>::quiet_NaN(), scan_x_max = std::numeric_limits<double>::quiet_NaN();
+      double scan_y_min = std::numeric_limits<double>::quiet_NaN(), scan_y_max = std::numeric_limits<double>::quiet_NaN();
+      double cent_low = 0.0, cent_high = 0.0, mt_low = 0.0, mt_high = 0.0;
+      double qn_low = std::numeric_limits<double>::quiet_NaN(), qn_high = std::numeric_limits<double>::quiet_NaN();
+      double raw_phi_low = 0.0, raw_phi_high = 0.0, display_phi_low = 0.0, display_phi_high = 0.0;
+      double display_phi_center = std::numeric_limits<double>::quiet_NaN();
+      int nominal_valid = 0, refined = 0, valid_count = 0, failed_count = 0, finite_kernel_frozen = 0;
+      int scan_dimension = 0, scan_x_points = 0, scan_y_points = 0, refinement_x_points = 0, refinement_y_points = 0;
+      int coarse_point_count = 0, refined_point_count = 0, attempt_count = 0, valid_attempt_count = 0;
+      int centrality_index = -1, mt_index = -1, qn_index = -1, phi_index = -1;
+      int mt_rebin_enabled = 0, phi_rebin_enabled = 0, is_qn_integrated = 1, is_phi_integrated = 0;
+      int finite_kernel_seed_is_phi_all = 0, kernel_kstar_bin_count = 0;
+      int configured_workers = config.fit.profile_likelihood.workers;
+      std::vector<int> target_indices;
+      std::vector<double> scan_min;
+      std::vector<double> scan_max;
+      std::vector<int> scan_points;
+      std::vector<int> refinement_points;
+      double kernel_seed_radius = std::numeric_limits<double>::quiet_NaN(), kernel_final_radius = std::numeric_limits<double>::quiet_NaN();
+      double kernel_kstar_min = std::numeric_limits<double>::quiet_NaN(), kernel_kstar_max = std::numeric_limits<double>::quiet_NaN();
+      catalog->Branch("slice_id", &slice_id); catalog->Branch("group_id", &group_id); catalog->Branch("scan_id", &scan_id);
+      catalog->Branch("slice_directory", &slice_directory);
+      catalog->Branch("fit_model", &model_name); catalog->Branch("targets", &targets); catalog->Branch("nominal_objective", &nominal_objective);
+      catalog->Branch("nominal_source", &nominal_source);
+      catalog->Branch("nominal_valid", &nominal_valid);
+      catalog->Branch("reference_objective", &reference_objective); catalog->Branch("reference_source", &reference_source);
+      catalog->Branch("reference_objective_source", &reference_source);
+      catalog->Branch("scan_dimension", &scan_dimension);
+      catalog->Branch("target_indices", &target_indices);
+      catalog->Branch("scan_min", &scan_min);
+      catalog->Branch("scan_max", &scan_max);
+      catalog->Branch("scan_points", &scan_points);
+      catalog->Branch("scan_x_min", &scan_x_min);
+      catalog->Branch("x_min", &scan_x_min);
+      catalog->Branch("scan_x_max", &scan_x_max);
+      catalog->Branch("x_max", &scan_x_max);
+      catalog->Branch("scan_y_min", &scan_y_min);
+      catalog->Branch("y_min", &scan_y_min);
+      catalog->Branch("scan_y_max", &scan_y_max);
+      catalog->Branch("y_max", &scan_y_max);
+      catalog->Branch("scan_x_points", &scan_x_points);
+      catalog->Branch("nx", &scan_x_points);
+      catalog->Branch("scan_y_points", &scan_y_points);
+      catalog->Branch("ny", &scan_y_points);
+      catalog->Branch("refined", &refined); catalog->Branch("refinement_reason", &refinement_reason);
+      catalog->Branch("refinement_points", &refinement_points);
+      catalog->Branch("refinement_x_points", &refinement_x_points);
+      catalog->Branch("refinement_y_points", &refinement_y_points);
+      catalog->Branch("coarse_point_count", &coarse_point_count);
+      catalog->Branch("refined_point_count", &refined_point_count);
+      catalog->Branch("attempt_count", &attempt_count);
+      catalog->Branch("valid_count", &valid_count); catalog->Branch("failed_count", &failed_count);
+      catalog->Branch("valid_attempt_count", &valid_attempt_count);
+      catalog->Branch("centrality_index", &centrality_index);
+      catalog->Branch("mt_index", &mt_index);
+      catalog->Branch("qn_index", &qn_index);
+      catalog->Branch("phi_index", &phi_index);
+      catalog->Branch("cent_low", &cent_low);
+      catalog->Branch("cent_high", &cent_high);
+      catalog->Branch("mt_low", &mt_low);
+      catalog->Branch("mt_high", &mt_high);
+      catalog->Branch("qn_low", &qn_low);
+      catalog->Branch("qn_high", &qn_high);
+      catalog->Branch("qn_label", &qn_label);
+      catalog->Branch("raw_phi_low", &raw_phi_low);
+      catalog->Branch("raw_phi_high", &raw_phi_high);
+      catalog->Branch("display_phi_low", &display_phi_low);
+      catalog->Branch("display_phi_high", &display_phi_high);
+      catalog->Branch("display_phi_center", &display_phi_center);
+      catalog->Branch(kSliceCatalogMtRebinEnabledBranch, &mt_rebin_enabled);
+      catalog->Branch(kSliceCatalogMtRebinModeBranch, &mt_rebin_mode);
+      catalog->Branch(kSliceCatalogPhiRebinEnabledBranch, &phi_rebin_enabled);
+      catalog->Branch(kSliceCatalogPhiRebinModeBranch, &phi_rebin_mode);
+      catalog->Branch("is_qn_integrated", &is_qn_integrated);
+      catalog->Branch("is_phi_integrated", &is_phi_integrated);
+      catalog->Branch("objective_kind", &objective_kind); catalog->Branch("finite_kernel_frozen", &finite_kernel_frozen);
+      catalog->Branch("execution_mode", &execution_mode);
+      catalog->Branch("parallel_backend", &parallel_backend);
+      catalog->Branch("workers", &configured_workers);
+      catalog->Branch("minimizer_backend", &minimizer_backend);
+      catalog->Branch("hesse_strategy", &hesse_strategy);
+      catalog->Branch("kernel_group_id", &kernel_group_id);
+      catalog->Branch("finite_source_mode", &finite_source_mode); catalog->Branch("kernel_seed_radius_fm", &kernel_seed_radius);
+      catalog->Branch("kernel_final_radius_fm", &kernel_final_radius);
+      catalog->Branch("finite_source_seed_radius_fm", &kernel_seed_radius);
+      catalog->Branch("finite_source_final_radius_fm", &kernel_final_radius);
+      catalog->Branch("kernel_kstar_min_mev", &kernel_kstar_min);
+      catalog->Branch("kernel_kstar_max_mev", &kernel_kstar_max);
+      catalog->Branch("kernel_kstar_bin_count", &kernel_kstar_bin_count);
+      catalog->Branch("finite_kernel_seed_is_phi_all", &finite_kernel_seed_is_phi_all);
+      for (const ProfileRunRecord &record : records) {
+        std::unique_ptr<TF3> parameter_function(model == FitModel::kFull
+                                                    ? BuildFullLevyFitFunction("profile_parameter_catalog", config.fit.options)
+                                                    : BuildLevyFitFunction("profile_parameter_catalog", config.fit.options));
+        parameter_slice_id = record.entry.slice_id;
+        const std::array<std::string, 10> names = {"norm", "lambda", "rout2", "rside2", "rlong2", "routside2",
+                                                    "routlong2", "rsidelong2", "alpha", "baseline_q2"};
+        for (const std::string &name : names) {
+          minuit_index = ProfileParameterIndex(name, model); if (minuit_index < 0) continue;
+          canonical_name = name; display_label = ProfileParameterLabel(name);
+          unit = name.find("2") != std::string::npos && name != "baseline_q2" ? "fm^2"
+               : name == "baseline_q2" ? "(GeV/c)^-2" : "";
+          parameter_function->GetParLimits(minuit_index, lower, upper);
+          if (!(upper > lower)) {
+            lower = std::numeric_limits<double>::quiet_NaN();
+            upper = std::numeric_limits<double>::quiet_NaN();
+          }
+          nominal_value = static_cast<std::size_t>(minuit_index) < record.output.nominal_values.size()
+                              ? record.output.nominal_values[static_cast<std::size_t>(minuit_index)]
+                              : parameter_function->GetParameter(minuit_index);
+          fixed = IsPMLParameterFixed(minuit_index, model == FitModel::kFull, config.fit.options) ? 1 : 0;
+          parameter_catalog->Fill();
+        }
+        slice_id = record.entry.slice_id; group_id = record.entry.group_id; slice_directory = record.entry.slice_directory;
+        model_name = ToString(model); objective_kind = "neg2logl_pml";
+        execution_mode = config.fit.profile_likelihood.execution_mode == ProfileExecutionMode::kProfileOnly
+                             ? "profile_only" : "alongside_fit";
+        parallel_backend = config.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kProcess
+                               ? "process"
+                               : config.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kThread
+                                     ? "thread" : "serial";
+        minimizer_backend = config.fit.profile_likelihood.minimizer_backend == ProfileMinimizerBackend::kMinuit2
+                                ? "minuit2" : "legacy_tminuit";
+        hesse_strategy = config.fit.profile_likelihood.hesse_strategy == ProfileHesseStrategy::kNone
+                             ? "none" : "all_attempts";
+        nominal_objective = record.output.nominal_objective; reference_objective = record.output.reference_objective;
+        nominal_source = "nominal_fit";
+        nominal_valid = record.output.nominal_valid ? 1 : 0;
+        reference_source = record.output.reference_source; finite_kernel_frozen = record.frozen_kernel.has_value() ? 1 : 0;
+        kernel_group_id = record.frozen_kernel.has_value() ? record.frozen_kernel->group_id : "";
+        finite_source_mode = record.frozen_kernel.has_value() ? record.frozen_kernel->finite_source_mode : "";
+        kernel_seed_radius = record.frozen_kernel.has_value() ? record.frozen_kernel->seed_radius_fm : std::numeric_limits<double>::quiet_NaN();
+        kernel_final_radius = record.frozen_kernel.has_value() ? record.frozen_kernel->final_radius_fm : std::numeric_limits<double>::quiet_NaN();
+        kernel_kstar_min = record.frozen_kernel.has_value() ? record.frozen_kernel->kstar_min_mev : std::numeric_limits<double>::quiet_NaN();
+        kernel_kstar_max = record.frozen_kernel.has_value() ? record.frozen_kernel->kstar_max_mev : std::numeric_limits<double>::quiet_NaN();
+        kernel_kstar_bin_count = record.frozen_kernel.has_value() ? record.frozen_kernel->kstar_bin_count : 0;
+        // Every finite-source group kernel is built from its phi_all seed slice.
+        // `is_phi_integrated` separately describes the slice being profiled.
+        finite_kernel_seed_is_phi_all = record.frozen_kernel.has_value() ? 1 : 0;
+        centrality_index = record.entry.centrality_index; mt_index = record.entry.mt_index; qn_index = record.entry.qn_index;
+        phi_index = record.entry.phi_index;
+        cent_low = record.entry.cent_low; cent_high = record.entry.cent_high; mt_low = record.entry.mt_low; mt_high = record.entry.mt_high;
+        qn_low = record.entry.qn_low; qn_high = record.entry.qn_high; qn_label = record.entry.qn_label;
+        raw_phi_low = record.entry.raw_phi_low; raw_phi_high = record.entry.raw_phi_high;
+        display_phi_low = record.entry.display_phi_low; display_phi_high = record.entry.display_phi_high;
+        display_phi_center = record.entry.display_phi_center;
+        mt_rebin_enabled = record.entry.mt_rebin_enabled ? 1 : 0; mt_rebin_mode = record.entry.mt_rebin_mode;
+        phi_rebin_enabled = record.entry.phi_rebin_enabled ? 1 : 0; phi_rebin_mode = record.entry.phi_rebin_mode;
+        is_qn_integrated = record.entry.is_qn_integrated ? 1 : 0; is_phi_integrated = record.entry.is_phi_integrated ? 1 : 0;
+        for (const ProfileSliceScanOutput &scan : record.output.scans) {
+          scan_id = scan.scan.config->id; targets.clear();
+          for (const std::string &target : scan.scan.config->parameters) targets += (targets.empty() ? "" : ",") + target;
+          refined = scan.result.refinement_performed ? 1 : 0; refinement_reason = scan.result.refinement_reason;
+          scan_dimension = static_cast<int>(scan.scan.config->parameters.size());
+          target_indices = scan.scan.target_indices;
+          scan_min = scan.scan.lower;
+          scan_max = scan.scan.upper;
+          scan_points = scan.scan.config->points;
+          refinement_points = scan.scan.config->refinement_points;
+          scan_x_min = scan.scan.lower.empty() ? std::numeric_limits<double>::quiet_NaN() : scan.scan.lower[0];
+          scan_x_max = scan.scan.upper.empty() ? std::numeric_limits<double>::quiet_NaN() : scan.scan.upper[0];
+          scan_y_min = scan.scan.lower.size() > 1U ? scan.scan.lower[1] : std::numeric_limits<double>::quiet_NaN();
+          scan_y_max = scan.scan.upper.size() > 1U ? scan.scan.upper[1] : std::numeric_limits<double>::quiet_NaN();
+          scan_x_points = scan.scan.config->points.empty() ? 0 : scan.scan.config->points[0];
+          scan_y_points = scan.scan.config->points.size() > 1U ? scan.scan.config->points[1] : 0;
+          refinement_x_points = scan.scan.config->refinement_points.empty() ? 0 : scan.scan.config->refinement_points[0];
+          refinement_y_points = scan.scan.config->refinement_points.size() > 1U ? scan.scan.config->refinement_points[1] : 0;
+          valid_count = 0; failed_count = 0; coarse_point_count = 0; refined_point_count = 0;
+          for (const auto &point : scan.result.points) {
+            (point.status == profile_likelihood::PointStatus::kValid ? valid_count : failed_count)++;
+            if (point.stage == 0) ++coarse_point_count;
+            if (point.stage > 0) ++refined_point_count;
+          }
+          attempt_count = static_cast<int>(scan.result.attempts.size());
+          valid_attempt_count = static_cast<int>(std::count_if(scan.result.attempts.begin(),
+                                                               scan.result.attempts.end(),
+                                                               [](const profile_likelihood::AttemptRecord &attempt) {
+                                                                 return profile_likelihood::IsValid(attempt.result);
+                                                               }));
+          catalog->Fill();
+          auto *directory = GetOrCreateDirectoryPath(*file, "profiles/" + slice_id + "/" + scan_id);
+          WriteProfilePointTrees(*directory, scan, record.output);
+          WriteProfileDisplay(*directory, scan, record.output, model, config.fit.profile_likelihood.contour_levels,
+                              config.fit.profile_likelihood.write_likelihood_slice);
+        }
+      }
+      meta->cd(); parameter_catalog->Write("", TObject::kOverwrite);
+      catalog->Write("", TObject::kOverwrite); file->Write("", TObject::kOverwrite); file->Close();
+    }
+
   }  // namespace
 
   BuildCfRunStatistics RunBuildCf(const ApplicationConfig &config, const Logger &logger) {
@@ -3776,9 +5061,9 @@ namespace exp_femto_3d {
   FitRunStatistics RunFit(const ApplicationConfig &config,
                           const Logger &logger,
                           const std::optional<FitModel> override_model,
-                          const std::optional<std::string> input_cf_root_path) {
-    EnsureDirectoryExists(config.output.output_directory);
-    EnsureDirectoryExists(config.output.fit_report_directory);
+                          const std::optional<std::string> input_cf_root_path,
+                          const bool profile_estimate_only,
+                          const std::optional<std::string> source_config_path) {
     const std::string cf_root_path = input_cf_root_path.has_value()
                                          ? ResolvePath(config.output.output_directory, *input_cf_root_path)
                                          : ResolvePath(config.output.output_directory, config.output.cf_root_name);
@@ -3786,10 +5071,17 @@ namespace exp_femto_3d {
     const std::string fit_summary_path = ResolvePath(config.output.output_directory, config.output.fit_summary_name);
     const std::string fit_report_root_path =
         ResolvePath(config.output.fit_report_directory, config.output.fit_report_root_name);
+    const std::string profile_root_path = ResolvePath(config.output.output_directory, config.output.profile_root_name);
     if (PathsReferToSameLocation(fit_report_root_path, fit_root_path)
         || PathsReferToSameLocation(fit_report_root_path, cf_root_path)) {
       throw std::runtime_error(
           "output.fit_report_root_name must resolve to a file distinct from the CF and detailed fit ROOT files.");
+    }
+    if (config.fit.profile_likelihood.enabled
+        && (PathsReferToSameLocation(profile_root_path, cf_root_path)
+            || PathsReferToSameLocation(profile_root_path, fit_root_path)
+            || PathsReferToSameLocation(profile_root_path, fit_report_root_path))) {
+      throw std::runtime_error("output.profile_root_name must resolve to a file distinct from CF, detailed-fit, and report ROOT files.");
     }
     if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource && !HasCatsFiniteSourceSupport()) {
       throw std::runtime_error(
@@ -3828,13 +5120,95 @@ namespace exp_femto_3d {
       }
     }
 
+    const FitModel model = override_model.value_or(config.fit.model);
+    std::vector<const SliceCatalogEntry *> profile_entries;
+    if (config.fit.profile_likelihood.enabled) {
+      if (config.fit.profile_likelihood.slice_scope == ProfileSliceScope::kFitSelection) {
+        profile_entries = selected_entries;
+      } else {
+        std::set<std::string> requested(config.fit.profile_likelihood.slice_ids.begin(),
+                                        config.fit.profile_likelihood.slice_ids.end());
+        for (const SliceCatalogEntry &entry : catalog_entries) {
+          if (requested.erase(entry.slice_id) != 0U) profile_entries.push_back(&entry);
+        }
+        if (!requested.empty()) {
+          throw std::runtime_error("Configured profile slice_id is absent from the input SliceCatalog: " + *requested.begin());
+        }
+      }
+    }
+    // Dynamic target and effective-bound checks happen after CLI --model resolution and before any output reset.
+    const std::vector<ResolvedProfileScan> resolved_profile_scans = ResolveProfileScans(config, model);
+
     FitRunStatistics statistics;
     statistics.catalog_slices = catalog_entries.size();
-    const std::size_t total_selected_slices = selected_entries.size();
-    std::size_t processed_selected_slices = 0;
-    ProgressReporter progress(logger, "fit", total_selected_slices, config.fit.progress);
+    statistics.profile_selected_slices = profile_entries.size();
+    if (config.fit.profile_likelihood.enabled) statistics.profile_output_path = profile_root_path;
+    statistics.profile_configured_workers = static_cast<std::size_t>(config.fit.profile_likelihood.workers);
+    std::set<FitResultGroupKey> estimated_groups;
+    for (const SliceCatalogEntry *entry : profile_entries) {
+      estimated_groups.emplace(entry->centrality_index, entry->mt_index, entry->qn_index);
+    }
+    statistics.profile_estimated_groups = estimated_groups.size();
+    statistics.profile_effective_workers = std::max<std::size_t>(
+        1U, std::min(statistics.profile_configured_workers, statistics.profile_estimated_groups));
+    for (const ResolvedProfileScan &scan : resolved_profile_scans) {
+      std::size_t coarse_points = 1U;
+      for (const int points : scan.config->points) coarse_points *= static_cast<std::size_t>(points);
+      statistics.profile_estimated_coarse_points_per_slice += coarse_points;
+      std::size_t grid_points = coarse_points;
+      if (scan.config->refine) {
+        std::size_t refined_points = 1U;
+        for (const int points : scan.config->refinement_points) refined_points *= static_cast<std::size_t>(points);
+        grid_points += refined_points;
+        statistics.profile_estimated_refined_points_per_slice += refined_points;
+      }
+      const std::size_t attempts_per_point =
+          config.fit.profile_likelihood.retry_strategy == ProfileRetryStrategy::kReferenceOnly ? 1U : 3U;
+      statistics.profile_estimated_attempts += grid_points * attempts_per_point * profile_entries.size();
+      if (config.fit.profile_likelihood.write_likelihood_slice) {
+        statistics.profile_estimated_slice_evaluations += grid_points * profile_entries.size();
+      }
+    }
+    if (profile_estimate_only) {
+      if (!config.fit.profile_likelihood.enabled) {
+        throw std::runtime_error("--profile-estimate-only requires fit.profile_likelihood.enabled = true.");
+      }
+      statistics.profile_estimate_only = true;
+      logger.Info("Profile estimate: slices=" + std::to_string(statistics.profile_selected_slices)
+                  + ", scans=" + std::to_string(resolved_profile_scans.size())
+                  + ", attempts_max=" + std::to_string(statistics.profile_estimated_attempts)
+                  + ", likelihood_slice_evaluations_max="
+                  + std::to_string(statistics.profile_estimated_slice_evaluations)
+                  + ", groups=" + std::to_string(statistics.profile_estimated_groups)
+                  + ", workers=" + std::to_string(statistics.profile_effective_workers)
+                  + "/" + std::to_string(statistics.profile_configured_workers) + ".");
+      return statistics;
+    }
 
-    const FitModel model = override_model.value_or(config.fit.model);
+    EnsureDirectoryExists(config.output.output_directory);
+    if (config.fit.profile_likelihood.execution_mode != ProfileExecutionMode::kProfileOnly) {
+      EnsureDirectoryExists(config.output.fit_report_directory);
+    }
+    const bool profile_only = config.fit.profile_likelihood.enabled
+                              && config.fit.profile_likelihood.execution_mode == ProfileExecutionMode::kProfileOnly;
+    const bool process_worker = std::getenv("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER") != nullptr;
+    const bool process_coordinator = profile_only
+                                     && config.fit.profile_likelihood.parallel_backend
+                                            == ProfileParallelBackend::kProcess
+                                     && !process_worker;
+    const std::size_t total_selected_slices = profile_only ? profile_entries.size() : selected_entries.size();
+    std::size_t processed_selected_slices = 0;
+    // Only the process coordinator owns the terminal progress line. Workers
+    // write to per-group logs, so independent carriage-return streams cannot
+    // corrupt the coordinator's display.
+    const ProgressMode progress_mode = process_worker ? ProgressMode::kDisabled : config.fit.progress;
+    ProgressReporter progress(logger, "fit", total_selected_slices, progress_mode);
+    const auto advance_private_profile_progress = [&]() {
+      if (!profile_only) return;
+      ++processed_selected_slices;
+      progress.Update(processed_selected_slices);
+    };
+
     logger.Info("Starting fit stage with model=" + ToString(model) + ", coulombMode="
                 + ToString(config.fit.options.coulomb_mode) + ", finiteSourceMode="
                 + (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource
@@ -3844,8 +5218,248 @@ namespace exp_femto_3d {
                 + ", fitPhiMapping=" + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
     progress.Update(0);
 
-    // The detailed fit file is reset only after catalog read and dynamic fit-selection validation succeed.
-    CreateOrResetRootFile(fit_root_path);
+    if (config.fit.profile_likelihood.enabled
+        && config.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kThread) {
+      throw std::runtime_error(
+          "The Minuit2 thread backend remains experimental and is not enabled until numerical A/B validation passes.");
+    }
+    if (process_coordinator) {
+      struct ProcessJob {
+        FitResultGroupKey key;
+        std::vector<const SliceCatalogEntry *> entries;
+        std::string chunk_path;
+        std::string temporary_chunk_path;
+        std::string sidecar_path;
+        std::string log_path;
+        std::string expected_digest;
+        bool reused = false;
+      };
+
+      const auto process_start = std::chrono::steady_clock::now();
+      std::map<FitResultGroupKey, std::vector<const SliceCatalogEntry *>> grouped;
+      for (const SliceCatalogEntry *entry : profile_entries) {
+        grouped[{entry->centrality_index, entry->mt_index, entry->qn_index}].push_back(entry);
+      }
+      const std::string contract_digest = BuildProfileContractDigest(cf_root_path, config, model, profile_entries);
+      const std::string checkpoint_base = config.fit.profile_likelihood.checkpoint.enabled
+                                              ? ResolvePath(config.output.output_directory,
+                                                            config.fit.profile_likelihood.checkpoint.directory)
+                                              : ResolvePath(config.output.output_directory, ".profile_process_work");
+      const std::string run_component = config.fit.profile_likelihood.checkpoint.run_id.empty()
+                                            ? "transient" : config.fit.profile_likelihood.checkpoint.run_id;
+      const std::filesystem::path work_directory =
+          std::filesystem::path(checkpoint_base) / SanitizeFileComponent(run_component);
+      EnsureDirectoryExists(work_directory.string());
+
+      std::vector<ProcessJob> jobs;
+      jobs.reserve(grouped.size());
+      for (const auto &[key, entries] : grouped) {
+        ProcessJob job;
+        job.key = key;
+        job.entries = entries;
+        const std::string group_name = "cent" + std::to_string(std::get<0>(key))
+                                       + "_mt" + std::to_string(std::get<1>(key))
+                                       + "_qn" + std::to_string(std::get<2>(key));
+        job.chunk_path = (work_directory / (group_name + ".root")).string();
+        job.temporary_chunk_path = job.chunk_path + ".tmp." + std::to_string(getpid())
+                                   + "." + std::to_string(jobs.size());
+        job.sidecar_path = (work_directory / (group_name + ".digest")).string();
+        job.log_path = (work_directory / (group_name + ".worker.log")).string();
+        job.expected_digest = contract_digest + "|" + group_name;
+        if (config.fit.profile_likelihood.checkpoint.resume) {
+          const bool chunk_exists = std::filesystem::exists(job.chunk_path);
+          const bool sidecar_exists = std::filesystem::exists(job.sidecar_path);
+          if (chunk_exists != sidecar_exists) {
+            throw std::runtime_error("Checkpoint is incomplete for profile group " + group_name + ".");
+          }
+          if (chunk_exists) {
+            std::ifstream sidecar(job.sidecar_path);
+            std::string stored_digest;
+            std::getline(sidecar, stored_digest);
+            if (stored_digest != job.expected_digest
+                || !ValidateProfileChunk(job.chunk_path, entries, config.fit.profile_likelihood.scans)) {
+              throw std::runtime_error("Checkpoint contract mismatch for profile group " + group_name + ".");
+            }
+            job.reused = true;
+          }
+        }
+        jobs.push_back(std::move(job));
+      }
+
+      input_file->Close();
+      input_file.reset();
+      if (!source_config_path.has_value()) {
+        throw std::runtime_error("Process profile execution requires the source TOML path.");
+      }
+      std::deque<std::size_t> pending;
+      for (const ProcessJob &job : jobs) {
+        if (job.reused) processed_selected_slices += job.entries.size();
+      }
+      progress.Update(processed_selected_slices);
+      for (std::size_t index = 0; index < jobs.size(); ++index) {
+        if (!jobs[index].reused) pending.push_back(index);
+      }
+      std::map<pid_t, std::size_t> active;
+      const std::size_t worker_limit = static_cast<std::size_t>(config.fit.profile_likelihood.workers);
+      bool worker_failed = false;
+      while (!pending.empty() || !active.empty()) {
+        while (!pending.empty() && active.size() < worker_limit) {
+          const std::size_t job_index = pending.front();
+          pending.pop_front();
+          std::string encoded_slices;
+          for (const SliceCatalogEntry *entry : jobs[job_index].entries) {
+            if (!encoded_slices.empty()) encoded_slices += ';';
+            encoded_slices += entry->slice_id;
+          }
+          std::vector<std::string> argument_storage = {
+              EXP_FEMTO_3D_EXECUTABLE_PATH, "fit", "--config", *source_config_path,
+              "--model", ToString(model), "--input-cf-root", cf_root_path};
+          std::vector<char *> arguments;
+          for (std::string &argument : argument_storage) arguments.push_back(argument.data());
+          arguments.push_back(nullptr);
+          std::vector<std::string> environment_storage;
+          for (char **item = environ; item != nullptr && *item != nullptr; ++item) {
+            const std::string value(*item);
+            if (value.rfind("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER=", 0) == 0
+                || value.rfind("EXP_FEMTO_3D_PROFILE_WORKER_SLICES=", 0) == 0
+                || value.rfind("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT=", 0) == 0) continue;
+            environment_storage.push_back(value);
+          }
+          environment_storage.push_back("EXP_FEMTO_3D_PROFILE_PROCESS_WORKER=1");
+          environment_storage.push_back("EXP_FEMTO_3D_PROFILE_WORKER_SLICES=" + encoded_slices);
+          environment_storage.push_back("EXP_FEMTO_3D_PROFILE_WORKER_OUTPUT=" + jobs[job_index].temporary_chunk_path);
+          std::vector<char *> environment;
+          for (std::string &value : environment_storage) environment.push_back(value.data());
+          environment.push_back(nullptr);
+          posix_spawn_file_actions_t file_actions;
+          int spawn_status = posix_spawn_file_actions_init(&file_actions);
+          const bool file_actions_initialized = spawn_status == 0;
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn_file_actions_addopen(
+                &file_actions, STDOUT_FILENO, jobs[job_index].log_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+          }
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn_file_actions_adddup2(&file_actions, STDOUT_FILENO, STDERR_FILENO);
+          }
+          pid_t pid = -1;
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn(&pid, EXP_FEMTO_3D_EXECUTABLE_PATH, &file_actions, nullptr,
+                                       arguments.data(), environment.data());
+          }
+          if (file_actions_initialized) posix_spawn_file_actions_destroy(&file_actions);
+          if (spawn_status != 0) throw std::runtime_error("posix_spawn() failed while starting a profile worker.");
+          active.emplace(pid, job_index);
+        }
+        int status = 0;
+        const pid_t finished = waitpid(-1, &status, 0);
+        if (finished < 0) throw std::runtime_error("waitpid() failed while collecting a profile worker.");
+        const auto active_iter = active.find(finished);
+        if (active_iter == active.end()) throw std::runtime_error("Collected an unknown profile worker process.");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+          worker_failed = true;
+          logger.Error("Profile worker failed; see " + jobs[active_iter->second].log_path + ".");
+        } else {
+          ProcessJob &job = jobs[active_iter->second];
+          if (!ValidateProfileChunk(job.temporary_chunk_path, job.entries, config.fit.profile_likelihood.scans)) {
+            worker_failed = true;
+            logger.Error("Profile worker produced an invalid chunk; see " + job.log_path + ".");
+          } else {
+            std::filesystem::rename(job.temporary_chunk_path, job.chunk_path);
+            const std::string temporary_sidecar = job.sidecar_path + ".tmp." + std::to_string(getpid());
+            {
+              std::ofstream sidecar(temporary_sidecar, std::ios::trunc);
+              if (!sidecar) throw std::runtime_error("Cannot write checkpoint digest sidecar.");
+              sidecar << job.expected_digest << '\n';
+            }
+            std::filesystem::rename(temporary_sidecar, job.sidecar_path);
+            processed_selected_slices += job.entries.size();
+            progress.Update(processed_selected_slices);
+          }
+        }
+        active.erase(active_iter);
+        if (worker_failed) {
+          pending.clear();
+        }
+      }
+      if (worker_failed) {
+        throw std::runtime_error("At least one profile process worker failed; completed chunks were retained.");
+      }
+
+      const std::string temporary_final = profile_root_path + ".tmp." + std::to_string(getpid());
+      TFileMerger merger(false, false);
+      if (!merger.OutputFile(temporary_final.c_str(), "RECREATE")) {
+        throw std::runtime_error("Cannot create temporary merged profile ROOT file.");
+      }
+      for (const ProcessJob &job : jobs) {
+        if (!merger.AddFile(job.chunk_path.c_str())) {
+          throw std::runtime_error("Cannot add profile chunk to merge: " + job.chunk_path);
+        }
+      }
+      if (!merger.Merge()) throw std::runtime_error("Failed to merge profile process chunks.");
+      if (!ValidateProfileChunk(temporary_final, profile_entries, config.fit.profile_likelihood.scans)) {
+        throw std::runtime_error("Merged profile ROOT file failed catalog completeness validation.");
+      }
+      {
+        auto merged = OpenRootFile(temporary_final, "UPDATE");
+        // Checkpoint chunks from older builds may contain duplicate or obsolete QA graphs.
+        // Keep their numerical trees, but normalize the final merged file to the compact display contract.
+        PruneRedundantProfileDisplayObjects(
+            *merged, profile_entries, config.fit.profile_likelihood.scans);
+        auto *meta = GetOrCreateDirectoryPath(*merged, "meta");
+        meta->cd();
+        auto execution = std::make_unique<TTree>("ProfileExecution", "Profile process execution metadata");
+        execution->SetDirectory(nullptr);
+        std::string execution_backend = "process";
+        std::string execution_contract_digest = contract_digest;
+        std::string checkpoint_run_id = config.fit.profile_likelihood.checkpoint.run_id;
+        int configured_workers = config.fit.profile_likelihood.workers;
+        int resume_requested = config.fit.profile_likelihood.checkpoint.resume ? 1 : 0;
+        int reused_chunks = static_cast<int>(std::count_if(jobs.begin(), jobs.end(), [](const ProcessJob &job) {
+          return job.reused;
+        }));
+        int completed_chunks = static_cast<int>(jobs.size());
+        double wall_ms = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - process_start).count();
+        execution->Branch("parallel_backend", &execution_backend);
+        execution->Branch("workers", &configured_workers);
+        execution->Branch("contract_digest", &execution_contract_digest);
+        execution->Branch("checkpoint_run_id", &checkpoint_run_id);
+        execution->Branch("resume_requested", &resume_requested);
+        execution->Branch("reused_chunks", &reused_chunks);
+        execution->Branch("completed_chunks", &completed_chunks);
+        execution->Branch("wall_ms", &wall_ms);
+        execution->Fill();
+        execution->Write("", TObject::kOverwrite);
+        merged->Write("", TObject::kOverwrite);
+        merged->Close();
+      }
+      std::filesystem::rename(temporary_final, profile_root_path);
+      progress.Finish();
+      statistics.profile_completed_slices = profile_entries.size();
+      {
+        auto merged = OpenRootFile(profile_root_path, "READ");
+        auto *catalog = dynamic_cast<TTree *>(merged->Get("meta/ProfileLikelihoodCatalog"));
+        int valid_count = 0;
+        int failed_count = 0;
+        catalog->SetBranchAddress("valid_count", &valid_count);
+        catalog->SetBranchAddress("failed_count", &failed_count);
+        for (Long64_t row = 0; row < catalog->GetEntries(); ++row) {
+          catalog->GetEntry(row);
+          statistics.profile_valid_points += static_cast<std::size_t>(valid_count);
+          statistics.profile_failed_points += static_cast<std::size_t>(failed_count);
+        }
+      }
+      logger.Info("Completed process profile stage: groups=" + std::to_string(jobs.size())
+                  + ", slices=" + std::to_string(statistics.profile_completed_slices)
+                  + ", workers=" + std::to_string(config.fit.profile_likelihood.workers) + ".");
+      return statistics;
+    }
+    // The detailed fit file is reset only for the production-fit path, after all validation succeeds.
+    if (!profile_only) CreateOrResetRootFile(fit_root_path);
+    if (config.fit.profile_likelihood.enabled) {
+      // The isolated diagnostic file is not opened or reset in the default-off path.
+      CreateOrResetRootFile(profile_root_path);
+    }
 
     std::map<FitResultGroupKey, CoulombKernelTable> finite_source_kernels;
     std::vector<CoulombKernelCatalogEntry> kernel_catalog_entries;
@@ -3870,9 +5484,33 @@ namespace exp_femto_3d {
     };
 
     if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
+      std::vector<const SliceCatalogEntry *> kernel_entries = profile_only ? profile_entries : selected_entries;
+      if (profile_only) {
+        std::set<FitResultGroupKey> required_groups;
+        for (const SliceCatalogEntry *entry : profile_entries) {
+          required_groups.emplace(entry->centrality_index, entry->mt_index, entry->qn_index);
+        }
+        for (const FitResultGroupKey &key : required_groups) {
+          const auto seed = std::find_if(catalog_entries.begin(), catalog_entries.end(), [&](const SliceCatalogEntry &entry) {
+            return entry.is_phi_integrated
+                   && FitResultGroupKey{entry.centrality_index, entry.mt_index, entry.qn_index} == key;
+          });
+          if (seed == catalog_entries.end()) {
+            throw std::runtime_error("Finite-source profile-only execution requires a phi-integrated seed slice for each group.");
+          }
+          if (std::find(kernel_entries.begin(), kernel_entries.end(), &*seed) == kernel_entries.end()) {
+            kernel_entries.push_back(&*seed);
+          }
+        }
+      }
+      for (const SliceCatalogEntry *profile_entry : profile_entries) {
+        if (std::find(kernel_entries.begin(), kernel_entries.end(), profile_entry) == kernel_entries.end()) {
+          kernel_entries.push_back(profile_entry);
+        }
+      }
       std::vector<FitResultGroupKey> group_order;
       std::map<FitResultGroupKey, const SliceCatalogEntry *> phi_integrated_by_group;
-      for (const SliceCatalogEntry *entry : selected_entries) {
+      for (const SliceCatalogEntry *entry : kernel_entries) {
         const FitResultGroupKey key{entry->centrality_index, entry->mt_index, entry->qn_index};
         if (phi_integrated_by_group.find(key) == phi_integrated_by_group.end()
             && std::find(group_order.begin(), group_order.end(), key) == group_order.end()) {
@@ -3909,7 +5547,9 @@ namespace exp_femto_3d {
                                        model,
                                        seed_options,
                                        fit_uses_symmetric_phi_range,
-                                       nullptr);
+                                       nullptr,
+                                       !profile_only || config.fit.profile_likelihood.hesse_strategy
+                                                            == ProfileHesseStrategy::kAllAttempts);
         if (!seed_fit.has_value()) {
           throw std::runtime_error("Gamow seed fit failed for finite-source group " + seed_entry.group_id + ".");
         }
@@ -3926,7 +5566,9 @@ namespace exp_femto_3d {
                                              model,
                                              config.fit.options,
                                              fit_uses_symmetric_phi_range,
-                                             &working_kernel);
+                                             &working_kernel,
+                                             !profile_only || config.fit.profile_likelihood.hesse_strategy
+                                                                  == ProfileHesseStrategy::kAllAttempts);
           if (!iterative_fit.has_value()) {
             throw std::runtime_error("Finite-source iterative seed fit failed for group " + seed_entry.group_id + ".");
           }
@@ -3945,12 +5587,18 @@ namespace exp_femto_3d {
     }
 
     std::unique_ptr<TFile> shared_output_file;
-    if (!config.fit.reopen_output_file_per_slice) {
+    if (!profile_only && !config.fit.reopen_output_file_per_slice) {
       shared_output_file = OpenRootFile(fit_root_path, "UPDATE");
     }
 
     std::vector<LevyFitResult> fit_results;
-    for (const SliceCatalogEntry *entry_ptr : selected_entries) {
+    std::set<std::string> profile_slice_ids;
+    for (const SliceCatalogEntry *profile_entry : profile_entries) profile_slice_ids.insert(profile_entry->slice_id);
+    std::vector<ProfileRunRecord> profile_records;
+    const std::vector<const SliceCatalogEntry *> production_entries = profile_only
+                                                                          ? std::vector<const SliceCatalogEntry *>{}
+                                                                          : selected_entries;
+    for (const SliceCatalogEntry *entry_ptr : production_entries) {
       const SliceCatalogEntry &entry = *entry_ptr;
       ++statistics.selected_slices;
       logger.Debug("Fitting slice " + entry.slice_id);
@@ -4002,12 +5650,94 @@ namespace exp_femto_3d {
                                      coulomb_kernel);
         fit_results.push_back(fit_output->result);
         ++statistics.fitted_slices;
+        if (profile_slice_ids.count(entry.slice_id) != 0U) {
+          ProfileRunRecord profile_record;
+          profile_record.entry = entry;
+          if (coulomb_kernel != nullptr) profile_record.frozen_kernel = coulomb_kernel->catalog_entry;
+          profile_record.output = RunProfilesForSlice(entry,
+                                                       h_se_raw.get(),
+                                                       h_me_raw.get(),
+                                                       model,
+                                                       config.fit.options,
+                                                       coulomb_kernel,
+                                                       resolved_profile_scans,
+                                                       config.fit.profile_likelihood.retry_strategy,
+                                                       config.fit.profile_likelihood.write_likelihood_slice,
+                                                       config.fit.profile_likelihood.hesse_strategy
+                                                           == ProfileHesseStrategy::kAllAttempts,
+                                                       *fit_output);
+          for (const ProfileSliceScanOutput &scan : profile_record.output.scans) {
+            for (const auto &point : scan.result.points) {
+              if (point.status == profile_likelihood::PointStatus::kValid) ++statistics.profile_valid_points;
+              else ++statistics.profile_failed_points;
+            }
+          }
+          profile_records.push_back(std::move(profile_record));
+          ++statistics.profile_completed_slices;
+        }
       }
       ++processed_selected_slices;
       progress.Update(processed_selected_slices);
     }
 
-    if (shared_output_file) {
+    // Listed profiles may intentionally target catalog slices outside production fit_selection.
+    // Run their nominal point privately so the established FitCatalog/TSV selection remains unchanged.
+    if (config.fit.profile_likelihood.enabled) {
+      std::set<std::string> already_profiled;
+      for (const ProfileRunRecord &record : profile_records) already_profiled.insert(record.entry.slice_id);
+      for (const SliceCatalogEntry *entry_ptr : profile_entries) {
+        const SliceCatalogEntry &entry = *entry_ptr;
+        if (already_profiled.count(entry.slice_id) != 0U) continue;
+        std::unique_ptr<TH3D> h_cf(LoadStoredHistogram3D(*input_file, entry.cf_object_path, entry.slice_id + "_profile_cf"));
+        std::unique_ptr<TH3D> h_se_raw;
+        std::unique_ptr<TH3D> h_me_raw;
+        if (!h_cf || !load_raw_histograms_if_needed(entry, h_se_raw, h_me_raw, false)) {
+          logger.Warn("Cannot run listed PML profile because required histogram data are missing for " + entry.slice_id);
+          advance_private_profile_progress();
+          continue;
+        }
+        const CoulombKernelTable *coulomb_kernel = nullptr;
+        if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
+          const FitResultGroupKey key{entry.centrality_index, entry.mt_index, entry.qn_index};
+          const auto kernel_iter = finite_source_kernels.find(key);
+          if (kernel_iter == finite_source_kernels.end()) {
+            throw std::runtime_error("Missing finite-source Coulomb kernel for listed profile group " + entry.group_id + ".");
+          }
+          coulomb_kernel = &kernel_iter->second;
+        }
+        auto nominal = FitSingleSlice(
+            h_cf.get(), h_se_raw.get(), h_me_raw.get(), entry, model, config.fit.options,
+            fit_uses_symmetric_phi_range, coulomb_kernel,
+            config.fit.profile_likelihood.hesse_strategy == ProfileHesseStrategy::kAllAttempts);
+        if (!nominal.has_value()) {
+          advance_private_profile_progress();
+          continue;
+        }
+        ProfileRunRecord profile_record;
+        profile_record.entry = entry;
+        if (coulomb_kernel != nullptr) profile_record.frozen_kernel = coulomb_kernel->catalog_entry;
+        profile_record.output = RunProfilesForSlice(entry, h_se_raw.get(), h_me_raw.get(), model, config.fit.options,
+                                                     coulomb_kernel, resolved_profile_scans,
+                                                     config.fit.profile_likelihood.retry_strategy,
+                                                     config.fit.profile_likelihood.write_likelihood_slice,
+                                                     config.fit.profile_likelihood.hesse_strategy
+                                                         == ProfileHesseStrategy::kAllAttempts,
+                                                     *nominal);
+        for (const ProfileSliceScanOutput &scan : profile_record.output.scans) {
+          for (const auto &point : scan.result.points) {
+            if (point.status == profile_likelihood::PointStatus::kValid) ++statistics.profile_valid_points;
+            else ++statistics.profile_failed_points;
+          }
+        }
+        profile_records.push_back(std::move(profile_record));
+        ++statistics.profile_completed_slices;
+        advance_private_profile_progress();
+      }
+    }
+
+    if (profile_only) {
+      // A diagnostic-only run never creates or mutates detailed-fit ROOT, report ROOT, TSV, or FitCatalog.
+    } else if (shared_output_file) {
       WriteR2Graphs(*shared_output_file, fit_results);
       WriteFitCatalogTree(*shared_output_file, fit_results);
       WriteCoulombKernelCatalogTree(*shared_output_file, kernel_catalog_entries);
@@ -4021,8 +5751,13 @@ namespace exp_femto_3d {
       WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
       output_file->Close();
     }
-    WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
-    WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries);
+    if (!profile_only) {
+      WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
+      WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries);
+    }
+    if (config.fit.profile_likelihood.enabled) {
+      WriteProfileRootFile(profile_root_path, config, model, profile_records);
+    }
 
     progress.Finish();
     logger.Info("Completed fit stage: fitted " + std::to_string(statistics.fitted_slices) + " slices.");

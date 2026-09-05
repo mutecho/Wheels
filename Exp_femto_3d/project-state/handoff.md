@@ -2,6 +2,63 @@
 
 ## Latest Durable Handoff
 
+- completed on 2026-09-04:
+  - added `profile_only`, process workers, explicit worker count, HESSE policy,
+    checkpoints, resume digests, and `fit --profile-estimate-only`
+  - made `profile_only` bypass detailed-fit ROOT, report ROOT, TSV, and
+    `FitCatalog` writes entirely
+  - used `posix_spawn` rather than post-ROOT `fork`; workers own complete
+    Coulomb groups and final merge is catalog-validated and atomic
+  - added ordered `PMLBinCache` plus a once-per-slice old/new objective check
+  - added attempt FCN/timing/HESSE/error-validity metadata and process execution
+    metadata
+  - added scout/focused configs and `scripts/run_exp_femto_3d_PROFILE.sh`
+- verified:
+  - O2Physics executor build and full CTest passed 7/7 with `PRIMARY_OK`
+  - workflow smoke covers output isolation, process chunk merge, matching
+    resume, digest mismatch rejection, and preservation of the last final ROOT
+  - real scout estimate-only passed: 14 slices, 1,386 maximum attempts, no
+    likelihood-slice evaluations
+  - ROOT inspector returned `PRIMARY_OK` / `STATUS: OK`; toy canvas was viewed
+- intentionally pending:
+  - real OO scan and 1/2/4/6-worker scaling/RSS/swap benchmark
+  - Minuit2 thread backend; configuration is recognized but runtime execution is
+    rejected until the specified numerical A/B gate passes
+
+## Previous Durable Handoff
+
+- completed:
+  - added default-off `[fit.profile_likelihood]` support inside the existing
+    `fit` command for multiple serial 1D/2D scans over listed exact slices or
+    all `fit_selection` slices
+  - extracted the original PML calculation into the shared
+    `EvaluatePMLObjective()` path and consolidated nominal/profile Minuit setup
+    in `RunPMLMinimization()` without changing the statistic or physics model
+  - added nominal and bidirectional-neighbor starts, complete attempt retention,
+    explicit point statuses, one regular interior refinement pass, and a
+    per-slice global reference recomputation
+  - froze finite-source profile evaluation to the group kernel produced by the
+    nominal workflow and recorded its metadata in the profile catalog
+  - added the independent profile ROOT schema and diagnostic 1D/2D displays;
+    production fits are never replaced by a lower profile minimum
+  - added config, pure-driver, and ROOT-guarded smoke coverage, and synchronized
+    README, public example configuration, formula documentation, and this ledger
+  - preserved the user's local `scripts/run_exp_femto_3d.sh` edit and the two
+    untracked OO configurations
+- verified:
+  - standalone ROOT-independent profile driver compiled and passed
+  - `git diff --check` passed
+- blocked verification:
+  - the required O2Physics ROOT executor cannot enter the runtime in the
+    sandbox (`/dev/fd/... Operation not permitted`)
+  - the user authorized escalation, but the approval backend rejected the
+    escalated executor call with HTTP 403; therefore the full ROOT build/CTest,
+    direct skipped-test reruns, ROOT schema inspection, and toy canvas visual QA
+    remain pending
+  - no real OO data run or Type I–VI physical attribution was performed
+
+## Previous Durable Handoff
+
 - completed:
   - resolved the pull conflict by composing remote qn-ME splitting and Levy
     parameter controls with local phi/mT rebin; no feature side was discarded
@@ -26,6 +83,19 @@
     `ctest --test-dir build --output-on-failure` through the O2Physics ROOT
     executor; all six registered tests passed in 32.06 seconds with
     `PRIMARY_OK`
+
+## Recommended Owner Action
+
+- inspect the current real scout estimate without creating output:
+
+```bash
+scripts/run_exp_femto_3d_PROFILE.sh --tier scout --profile-estimate-only
+```
+
+- then run the scout with `workers=2`; keep its output diagnostic-only
+- benchmark workers 1/2/4/6 before raising concurrency, watching RSS and swap
+- promote only anomalous slices to focused-1D/focused-2D and finally strict
+- do not enable the Minuit2 thread backend until its A/B gate is completed
 
 ## Previous Recommended Owner Action
 

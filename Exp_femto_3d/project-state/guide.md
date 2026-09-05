@@ -174,6 +174,50 @@
   - 显式写为 `true` 或 `false` 时：`fit` 会基于 `raw_phi_*` 重新解释切片坐标，
     从而在不重建 CF 文件的情况下切换 `R2_vs_phi` 等 summary 的横轴语义
 
+- `[fit.profile_likelihood]`
+
+  这是默认关闭的 PML 详细诊断模式，要求 `[fit].use_pml = true`。
+  它使用现有 `fit` 命令，不增加子命令，也不会用 profile minimum
+  替换 production fit。
+
+  - `slice_scope = "listed"` 要求精确 `slice_ids`；
+    `slice_scope = "fit_selection"` 禁止再写 `slice_ids`。
+  - 每个 `[[fit.profile_likelihood.scans]]` 仅支持 1D 或 2D，每轴至少
+    3 个点。目标参数必须在当前 `diag/full` 模型中存在且原本为
+    free。
+  - 有限参数可省略 scan `min/max` 来继承有效 fit 边界；默认无界
+    的 full-model off-diagonal 参数必须显式给定扫描范围。
+  - `retry_strategy = "reference_and_bidirectional_neighbors"` 保留 nominal
+    启动并增加正反向邻点 warm-start；所有 attempts 都写入数值树。
+  - `refine = true` 仅在 coarse 最低有效点对所有轴都是内点时做一次
+    规则加密。
+  - finite-source 模式始终复用 nominal group Coulomb kernel，扫描
+    半径时不重建 CATS 表。
+
+  最小配置示例：
+
+```toml
+[output]
+profile_root_name = "profile_likelihood.root"
+
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = ["exact_slice_id"]
+retry_strategy = "reference_and_bidirectional_neighbors"
+write_likelihood_slice = true
+contour_levels = [1.0, 2.0, 4.0]
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [41]
+min = [0.01]
+max = [100.0]
+refine = true
+refinement_points = [21]
+```
+
 - `[build].split_mixed_event_by_phi`
 
   这是 build-cf 阶段的 ME 分母切分开关，默认值为 `false`。
@@ -230,6 +274,25 @@ ranges、native phi、integrated phi ME 和 integrated qn ME 读取。
 省略 `[[fit_selection.mt]]` 表示选择 catalog 中的全部 mT groups，显式区间则
 在读取 catalog 后校验，校验失败不会先清空已有 fit ROOT 输出。
 
+### profile-likelihood 输出
+
+`[output].profile_root_name` 指定独立 ROOT 文件，路径必须与 CF、详细
+fit 和 report ROOT 文件不同。`enabled = false` 时该文件不会被创建或
+重置。开启后主要对象为：
+
+- `meta/ProfileLikelihoodCatalog`
+- `meta/ProfileParameterCatalog`
+- `profiles/<slice_id>/<scan_id>/ProfilePoints`
+- `profiles/<slice_id>/<scan_id>/AttemptPoints`
+- 1D `Profile1D` / optional `Slice1D` / `NominalPoint` /
+  named `Nuisance_<parameter>` trajectories / `Canvas_1D`
+- 2D `DeltaNeg2LogL2D` / `PointStatus2D` / `NominalPoint` / `Canvas_2D`
+
+`ProfilePoints` 和 `AttemptPoints` 是数值真源。失败类别、refinement、
+minimum 和边界仅保留在数值/metadata 中；不写重复的 `Nuisance_p<N>`
+或额外 QA 图。失败点不在 TH1/TH2 中当作 0 的有效 likelihood。所有
+contour 仅供诊断，禁止标成 68%/95% CL。
+
 ## 构建与验证要求
 
 ### 构建要求
@@ -241,13 +304,12 @@ ranges、native phi、integrated phi ME 和 integrated qn ME 读取。
 
 ### ROOT 调用要求
 
-ROOT 相关命令必须在完整进入的 O2Physics 环境中执行。推荐方式：
+ROOT 相关命令必须通过共享 O2Physics ROOT executor 执行：
 
 ```bash
-alienv setenv O2Physics/latest-master-o2 -c sh -lc '
-  cd /Users/allenzhou/Research_software/Code_base/Exp_femto_3d/build &&
-  ctest --output-on-failure
-'
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'cmake --build build -j4 && ctest --test-dir build --output-on-failure'
 ```
 
 ### 已确认的环境注意事项
@@ -284,13 +346,31 @@ alienv setenv O2Physics/latest-master-o2 -c sh -lc '
 - 本地 unit / integration smoke tests；`2026-08-12` O2Physics ROOT executor
   完整 `ctest --test-dir build --output-on-failure` 六项全通过
 - ROOT 调用失败模式诊断文档化
+- 默认关闭的 PML profile-likelihood 详细诊断模式，包含独立
+  ROOT 数值树、1D/2D 显示、attempt 保留和 finite-source kernel 冻结
 - `2026-04-19` 非沙箱 O2Physics `ctest` 三项全通过
 
 当前仍建议继续完成的工作：
 
+- 用 `scripts/run_exp_femto_3d_PROFILE.sh --tier scout --profile-estimate-only`
+  先检查真实 catalog 与计算上限，再运行 scout
+- 对真实 CF 依次 benchmark 1/2/4/6 个 process worker；确认 2 workers 至少
+  1.6x 且不增加 swap 压力后再提高默认并发
 - 用真实实验数据重新做一次与 legacy macro 的数值等价验证
 - 在真实数据回归里同时覆盖“跟随输入映射”和“fit 显式覆盖映射”两种语义
 - 在真实数据回归里同时覆盖
   `build.split_mixed_event_by_phi = false` 和 `true` 两种 ME 分母语义
 - 在真实数据上比较 native、factor 与显式 ranges rebin 的积分守恒和 fit 输出
 - 继续把沙箱里的 `alienv` 失败视为环境进入问题，除非非沙箱复现出相同症状
+
+### Profile 加速运行约束
+
+- `profile_only` 只允许 `slice_scope="listed"`，不会写 production fit ROOT、
+  report ROOT、TSV 或 `FitCatalog`
+- legacy TMinuit 并行使用 `parallel_backend="process"`；完整 group 分配到
+  独立 worker，scan 内保持串行
+- 首次建议 `workers=2`、`hesse_strategy="none"`、`reference_only` 和关闭
+  likelihood slice；异常 slice 再进入 focused/strict tier
+- `resume=true` 只接受 CF 内容、模型、scan contract 和 catalog 完全匹配的
+  chunk；不匹配会拒绝，不会覆盖上一次完整 final ROOT
+- `thread`/Minuit2 目前只保留配置契约，执行会明确拒绝，不能用于权威结果

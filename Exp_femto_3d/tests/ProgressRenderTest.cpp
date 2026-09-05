@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -44,6 +45,23 @@ int main() {
     std::cerr << "Expected completed progress line to show 100% and zero ETA.\n"
               << complete_line << "\n";
     return 3;
+  }
+
+  // Live redraws must clear the terminal row explicitly. A bare carriage
+  // return is rendered in insert mode by some PTY frontends and concatenates
+  // successive heartbeat snapshots.
+  std::ostringstream captured_progress;
+  std::streambuf *previous_error_buffer = std::cerr.rdbuf(captured_progress.rdbuf());
+  {
+    Logger logger(LogLevel::kError);
+    ProgressReporter progress(logger, "fit", 2U, ProgressMode::kEnabled);
+    progress.Update(0U);
+    progress.Finish();
+  }
+  std::cerr.rdbuf(previous_error_buffer);
+  if (!Contains(captured_progress.str(), "\r\033[2Kfit [")) {
+    std::cerr << "Expected live progress redraws to erase the complete terminal row.\n";
+    return 4;
   }
 
   return 0;

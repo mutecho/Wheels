@@ -55,6 +55,7 @@ endif()
 add_library(exp_femto_3d_core
   src/Config.cpp
   src/Logging.cpp
+  src/ProfileLikelihood.cpp
   src/Workflow.cpp
 )
 
@@ -102,6 +103,10 @@ target_compile_options(exp_femto_3d_core
     -Wpedantic
 )
 
+target_compile_definitions(exp_femto_3d_core
+  PRIVATE EXP_FEMTO_3D_EXECUTABLE_PATH="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/exp_femto_3d"
+)
+
 add_executable(exp_femto_3d
   app/main.cpp
 )
@@ -138,6 +143,22 @@ target_link_libraries(config_parse_validation_test
 add_test(
   NAME config_parse_validation_test
   COMMAND config_parse_validation_test
+)
+
+add_executable(profile_likelihood_driver_test
+  tests/ProfileLikelihoodDriverTest.cpp
+  src/ProfileLikelihood.cpp
+)
+
+target_include_directories(profile_likelihood_driver_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_test(
+  NAME profile_likelihood_driver_test
+  COMMAND profile_likelihood_driver_test
 )
 
 add_executable(progress_render_test
