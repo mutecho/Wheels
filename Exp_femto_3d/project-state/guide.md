@@ -127,6 +127,10 @@
   - `baseline_q2`
 
   每个子表可写 `initial`、`min`、`max`；省略字段保持旧默认值。
+  这里的 `min/max` 是 nominal fit 和 profile nuisance 再最小化共同遵守的
+  硬边界。四份 OO profile tier 配置显式采用
+  `rout2/rside2/rlong2 = [0.01,64.0] fm^2`；未覆盖的旧配置仍使用代码默认
+  `[0.01,400.0] fm^2`。
   `lambda` 和 `alpha` 额外支持 `fixed_value`。`lambda` 覆盖要求
   `use_core_halo_lambda = true`，`baseline_q2` 覆盖要求
   `use_q2_baseline = true`。
@@ -187,6 +191,9 @@
     free。
   - 有限参数可省略 scan `min/max` 来继承有效 fit 边界；默认无界
     的 full-model off-diagonal 参数必须显式给定扫描范围。
+    scan 自身的 `min/max` 只能是硬边界内的诊断子区间；它不会改写
+    nominal/profile 最小化的硬边界。scout 的三条对角半径扫描因此仍为
+    `[0.01,20.0] fm^2`。
   - `retry_strategy = "reference_and_bidirectional_neighbors"` 保留 nominal
     启动并增加正反向邻点 warm-start；所有 attempts 都写入数值树。
   - `refine = true` 仅在 coarse 最低有效点对所有轴都是内点时做一次
@@ -286,12 +293,25 @@ fit 和 report ROOT 文件不同。`enabled = false` 时该文件不会被创建
 - `profiles/<slice_id>/<scan_id>/AttemptPoints`
 - 1D `Profile1D` / optional `Slice1D` / `NominalPoint` /
   named `Nuisance_<parameter>` trajectories / `Canvas_1D`
-- 2D `DeltaNeg2LogL2D` / `PointStatus2D` / `NominalPoint` / `Canvas_2D`
+- 2D profile `DeltaNeg2LogL2D` / `PointStatus2D` / `NominalPoint` /
+  optional `BestProfileGridPoint` / `Canvas_2D` / `Canvas_2D_FullRange`
+- optional 2D fixed-nuisance slice `SliceDeltaNeg2LogL2D` /
+  `BestSliceGridPoint` / `Canvas_Slice2D` / `Canvas_Slice2D_FullRange`
 
-`ProfilePoints` 和 `AttemptPoints` 是数值真源。失败类别、refinement、
-minimum 和边界仅保留在数值/metadata 中；不写重复的 `Nuisance_p<N>`
-或额外 QA 图。失败点不在 TH1/TH2 中当作 0 的有效 likelihood。所有
-contour 仅供诊断，禁止标成 68%/95% CL。
+`ProfilePoints` 和 `AttemptPoints` 是精确采样坐标与 objective 的数值真源。
+2D TH2 只是显示单元：外边界等于 resolved scan，内部边界为相邻采样点中点；
+失败点保持 NaN 并在画布上显示为灰色。Profile contour 只穿过四角均有效的
+coarse 单元，slice 使用独立有效性 mask。Best marker 可来自 refined 点，
+但 heatmap/contour 不混入 refinement。阈值画布只饱和颜色，完整有限值由
+FullRange 画布展示。所有 contour 仅供诊断，禁止标成 68%/95% CL。
+
+所有实际写出的 1D `Profile1D`、可选 `Slice1D`、`NominalPoint`、
+`Nuisance_*` 以及 `Canvas_1D` 都使用 resolved scan 横轴。若 nominal 点在
+显式诊断子区间外，数值仍保留，只在画布上裁剪；若没有任何有效 profile
+点，画布仍保留正确坐标轴并给出提示，不会伪造数据点。checkpoint 复用同时
+校验有效参数域、fixed/free 状态和 resolved scan；继承边界变化会拒绝旧
+chunk。当前 checkpoint 为 `profile-contract-v4|display-contract-v3`；旧 v2
+chunk 不会被静默复用。
 
 ## 构建与验证要求
 
@@ -377,12 +397,19 @@ bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_co
   chunk；不匹配会拒绝，不会覆盖上一次完整 final ROOT
 - `thread`/Minuit2 目前只保留配置契约，执行会明确拒绝，不能用于权威结果
 
-完整 strict 网格但不写 production fit 的全 selection 入口是：
+保留 strict 拟合策略、覆盖全部参数对且不写 production fit 的全 selection 入口是：
 
 ```bash
 scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel --profile-estimate-only
 scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel
 ```
 
-对应配置固定 `workers=10`；实际有效并发为 `min(10, selected_groups)`，正式
+该配置保留 `lambda`、`rout2`、`rside2`、`rlong2` 四个 1D 扫描，并启用
+`rout2_lambda`、`rside2_lambda`、`rlong2_lambda`、`rout2_rside2`、
+`rout2_rlong2`、`rside2_rlong2` 六个 2D 扫描。所有 2D 扫描均为
+`21 x 21`、`refine=false`，继承参数硬边界。新增扫描会改变 checkpoint
+摘要；此前仅五个扫描的 chunk 不能复用，已有该代 checkpoint 时应手动
+选择新的 `run_id`。
+
+对应配置固定 `workers=8`；实际有效并发为 `min(8, selected_groups)`，正式
 启动前应先用 estimate-only 核对 slice/group 数并观察机器的 RSS 与 swap。

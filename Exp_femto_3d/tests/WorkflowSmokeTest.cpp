@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -13,10 +14,16 @@
 
 #include "TFile.h"
 #include "TF1.h"
+#include "TCanvas.h"
+#include "TDirectory.h"
 #include "TGraph.h"
+#include "TH1.h"
 #include "TH2.h"
 #include "THnSparse.h"
+#include "TKey.h"
 #include "TMath.h"
+#include "TPad.h"
+#include "TPaveText.h"
 #include "TTree.h"
 #include "TTreeReader.h"
 #include "TTreeReaderValue.h"
@@ -281,6 +288,110 @@ namespace {
     return std::abs(left - right) <= 1.0e-10 * (1.0 + std::max(std::abs(left), std::abs(right)));
   }
 
+  void ExpectGraphXAxisLimits(TGraph &graph,
+                              const double lower,
+                              const double upper,
+                              const std::string &name) {
+    Expect(graph.GetXaxis() != nullptr, name + " X axis missing");
+    Expect(std::abs(graph.GetXaxis()->GetXmin() - lower) < 1.0e-12
+               && std::abs(graph.GetXaxis()->GetXmax() - upper) < 1.0e-12,
+           name + " must persist the resolved scan X limits");
+  }
+
+  std::pair<double, double> FindResolved1DScanRange(TTree &catalog,
+                                                      const std::string &slice_id,
+                                                      const std::string &scan_id) {
+    TTreeReader reader(&catalog);
+    TTreeReaderValue<std::string> row_slice(reader, "slice_id");
+    TTreeReaderValue<std::string> row_scan(reader, "scan_id");
+    TTreeReaderValue<int> dimension(reader, "scan_dimension");
+    TTreeReaderValue<double> lower(reader, "scan_x_min");
+    TTreeReaderValue<double> upper(reader, "scan_x_max");
+    while (reader.Next()) {
+      if (*row_slice == slice_id && *row_scan == scan_id) {
+        Expect(*dimension == 1, "requested resolved scan range must be one-dimensional");
+        return {*lower, *upper};
+      }
+    }
+    throw std::runtime_error("missing 1D profile catalog row for " + slice_id + "/" + scan_id);
+  }
+
+  double FindProfileParameterNominalValue(TTree &parameters,
+                                          const std::string &slice_id,
+                                          const std::string &canonical_name) {
+    TTreeReader reader(&parameters);
+    TTreeReaderValue<std::string> row_slice(reader, "slice_id");
+    TTreeReaderValue<std::string> name(reader, "canonical_name");
+    TTreeReaderValue<double> nominal(reader, "nominal_value");
+    while (reader.Next()) {
+      if (*row_slice == slice_id && *name == canonical_name) return *nominal;
+    }
+    throw std::runtime_error("missing profile parameter catalog row for " + canonical_name);
+  }
+
+  void ExpectProfileParameterBounds(TTree &parameters,
+                                    const std::string &slice_id,
+                                    const std::string &canonical_name,
+                                    const double lower,
+                                    const double upper) {
+    TTreeReader reader(&parameters);
+    TTreeReaderValue<std::string> row_slice(reader, "slice_id");
+    TTreeReaderValue<std::string> name(reader, "canonical_name");
+    TTreeReaderValue<double> row_lower(reader, "lower");
+    TTreeReaderValue<double> row_upper(reader, "upper");
+    while (reader.Next()) {
+      if (*row_slice == slice_id && *name == canonical_name) {
+        Expect(std::abs(*row_lower - lower) < 1.0e-12 && std::abs(*row_upper - upper) < 1.0e-12,
+               canonical_name + " ProfileParameterCatalog hard bounds mismatch");
+        return;
+      }
+    }
+    throw std::runtime_error("missing profile parameter catalog bounds for " + canonical_name);
+  }
+
+  void ExpectPersisted1DDisplayRange(TFile &file,
+                                     const std::string &directory,
+                                     const double lower,
+                                     const double upper,
+                                     const bool expect_no_valid_note,
+                                     const bool expect_nuisance = true) {
+    auto *profile = dynamic_cast<TGraph *>(file.Get((directory + "/Profile1D").c_str()));
+    auto *nominal = dynamic_cast<TGraph *>(file.Get((directory + "/NominalPoint").c_str()));
+    auto *canvas = dynamic_cast<TCanvas *>(file.Get((directory + "/Canvas_1D").c_str()));
+    Expect(profile != nullptr && nominal != nullptr && canvas != nullptr,
+           "persisted 1D display objects missing for " + directory);
+    ExpectGraphXAxisLimits(*profile, lower, upper, directory + "/Profile1D");
+    ExpectGraphXAxisLimits(*nominal, lower, upper, directory + "/NominalPoint");
+    if (auto *slice = dynamic_cast<TGraph *>(file.Get((directory + "/Slice1D").c_str()))) {
+      ExpectGraphXAxisLimits(*slice, lower, upper, directory + "/Slice1D");
+    }
+
+    auto *frame = dynamic_cast<TH1 *>(canvas->GetPrimitive("Canvas_1D_Frame"));
+    Expect(frame != nullptr, directory + "/Canvas_1D must persist an explicit frame");
+    Expect(std::abs(frame->GetXaxis()->GetXmin() - lower) < 1.0e-12
+               && std::abs(frame->GetXaxis()->GetXmax() - upper) < 1.0e-12,
+           directory + "/Canvas_1D frame must use the resolved scan X limits");
+    const bool has_no_valid_note = canvas->GetPrimitive("NoValidProfilePointsNote") != nullptr;
+    Expect(has_no_valid_note == expect_no_valid_note,
+           directory + "/Canvas_1D no-valid-points annotation mismatch");
+
+    auto *scan_directory = file.GetDirectory(directory.c_str());
+    Expect(scan_directory != nullptr, "profile scan directory missing: " + directory);
+    TIter next_key(scan_directory->GetListOfKeys());
+    bool saw_nuisance = false;
+    while (auto *key = dynamic_cast<TKey *>(next_key())) {
+      const std::string name = key->GetName();
+      if (name.rfind("Nuisance_", 0) != 0) continue;
+      auto *nuisance = dynamic_cast<TGraph *>(scan_directory->Get(name.c_str()));
+      Expect(nuisance != nullptr, directory + "/" + name + " must be a TGraph");
+      ExpectGraphXAxisLimits(*nuisance, lower, upper, directory + "/" + name);
+      saw_nuisance = true;
+    }
+    if (expect_nuisance) {
+      Expect(saw_nuisance, directory + " must persist at least one named nuisance trajectory");
+    }
+  }
+
   void ExpectProfileNumericalEquivalence(const std::filesystem::path &serial_path,
                                          const std::filesystem::path &process_path) {
     TFile serial(serial_path.string().c_str(), "READ");
@@ -377,8 +488,11 @@ namespace {
     Expect(catalog->GetBranch("objective_kind") != nullptr, "profile catalog objective kind missing");
     Expect(catalog->GetBranch("finite_kernel_frozen") != nullptr, "profile catalog frozen-kernel metadata missing");
     Expect(catalog->GetBranch("reference_objective") != nullptr, "profile catalog reference objective missing");
-    Expect(catalog->GetEntries() == 3, "profile catalog should contain the requested 1D, 2D, and PSD scans");
+    Expect(catalog->GetEntries() == 5, "profile catalog should contain the requested 1D, 2D, and PSD scans");
     Expect(parameters->GetEntries() == 10, "full-model parameter catalog should contain all ten physical parameters");
+    for (const std::string &radius : {"rout2", "rside2", "rlong2"}) {
+      ExpectProfileParameterBounds(*parameters, slice_id, radius, 0.01, 400.0);
+    }
 
     TTreeReader catalog_reader(catalog);
     TTreeReaderValue<std::string> objective_kind(catalog_reader, "objective_kind");
@@ -386,7 +500,25 @@ namespace {
       Expect(*objective_kind == "neg2logl_pml", "profile objective kind must identify the PML -2 ln L statistic");
     }
 
+    TTreeReader display_catalog_reader(catalog);
+    TTreeReaderValue<std::string> display_slice(display_catalog_reader, "slice_id");
+    TTreeReaderValue<std::string> display_scan(display_catalog_reader, "scan_id");
+    TTreeReaderValue<int> display_dimension(display_catalog_reader, "scan_dimension");
+    TTreeReaderValue<double> display_lower(display_catalog_reader, "scan_x_min");
+    TTreeReaderValue<double> display_upper(display_catalog_reader, "scan_x_max");
+    TTreeReaderValue<int> display_valid_count(display_catalog_reader, "valid_count");
+    while (display_catalog_reader.Next()) {
+      if (*display_slice == slice_id && *display_dimension == 1) {
+        ExpectPersisted1DDisplayRange(file, "profiles/" + *display_slice + "/" + *display_scan,
+                                      *display_lower, *display_upper, *display_valid_count == 0,
+                                      *display_valid_count > 0);
+      }
+    }
+
     const std::string base = "profiles/" + slice_id + "/";
+    const auto rout2_range = FindResolved1DScanRange(*catalog, slice_id, "rout2");
+    Expect(std::abs(rout2_range.first - 0.01) < 1.0e-12 && std::abs(rout2_range.second - 2.0) < 1.0e-12,
+           "1D profile catalog must store its explicit resolved scan range");
     auto *one_d_points = dynamic_cast<TTree *>(file.Get((base + "rout2/ProfilePoints").c_str()));
     auto *one_d_attempts = dynamic_cast<TTree *>(file.Get((base + "rout2/AttemptPoints").c_str()));
     Expect(one_d_points != nullptr && one_d_attempts != nullptr, "1D profile point/attempt trees missing");
@@ -419,18 +551,16 @@ namespace {
     }
     Expect(!one_d_reader.Next() && one_d_index == 3, "1D ProfilePoints must have no implicit under/overflow rows");
     Expect(valid_one_d_points > 0, "toy profile must retain at least one valid profiled point for slice comparison");
-    Expect(dynamic_cast<TGraph *>(file.Get((base + "rout2/Profile1D").c_str())) != nullptr,
-           "1D profiled likelihood graph missing");
-    Expect(dynamic_cast<TGraph *>(file.Get((base + "rout2/Slice1D").c_str())) != nullptr,
-           "1D fixed-nuisance likelihood slice graph missing");
+    auto *slice_graph = dynamic_cast<TGraph *>(file.Get((base + "rout2/Slice1D").c_str()));
+    Expect(slice_graph != nullptr, "1D fixed-nuisance likelihood slice graph missing");
+    ExpectGraphXAxisLimits(*slice_graph, rout2_range.first, rout2_range.second, base + "rout2/Slice1D");
     Expect(dynamic_cast<TGraph *>(file.Get((base + "rout2/Nuisance_norm").c_str())) != nullptr,
            "named 1D nuisance trajectory graph missing");
     for (int parameter = 0; parameter < 16; ++parameter) {
       Expect(file.Get((base + "rout2/Nuisance_p" + std::to_string(parameter)).c_str()) == nullptr,
              "positional nuisance object must not be written");
     }
-    Expect(file.Get((base + "rout2/Canvas_1D").c_str()) != nullptr, "1D profile canvas missing");
-    Expect(file.Get((base + "rout2/NominalPoint").c_str()) != nullptr, "nominal marker missing");
+    ExpectPersisted1DDisplayRange(file, base + "rout2", rout2_range.first, rout2_range.second, false);
     for (const std::string &removed : {"Profile1D_Coarse",
                                        "Profile1D_Refined",
                                        "FailurePoints1D",
@@ -446,12 +576,64 @@ namespace {
     auto *two_d_attempts = dynamic_cast<TTree *>(file.Get((base + "rout2_rside2/AttemptPoints").c_str()));
     auto *delta = dynamic_cast<TH2 *>(file.Get((base + "rout2_rside2/DeltaNeg2LogL2D").c_str()));
     auto *status = dynamic_cast<TH2 *>(file.Get((base + "rout2_rside2/PointStatus2D").c_str()));
+    auto *slice_delta = dynamic_cast<TH2 *>(file.Get((base + "rout2_rside2/SliceDeltaNeg2LogL2D").c_str()));
     Expect(two_d_points != nullptr && two_d_attempts != nullptr, "2D profile point/attempt trees missing");
-    Expect(delta != nullptr && status != nullptr, "2D profile heatmap/status mask missing");
+    Expect(delta != nullptr && status != nullptr && slice_delta != nullptr,
+           "2D profile, status, or fixed-nuisance slice matrix missing");
     ExpectProfileTreeContract(*two_d_points, "2D ProfilePoints");
     ExpectProfileTreeContract(*two_d_attempts, "2D AttemptPoints");
     Expect(two_d_points->GetEntries() == 9, "2D ProfilePoints must retain every requested coordinate exactly once");
     Expect(two_d_attempts->GetEntries() >= two_d_points->GetEntries(), "2D attempts must retain every requested point");
+    for (TH2 *histogram : {delta, status, slice_delta}) {
+      Expect(std::abs(histogram->GetXaxis()->GetXmin() - 390.0) < 1.0e-12
+                 && std::abs(histogram->GetXaxis()->GetXmax() - 400.0) < 1.0e-12
+                 && std::abs(histogram->GetYaxis()->GetXmin() - 390.0) < 1.0e-12
+                 && std::abs(histogram->GetYaxis()->GetXmax() - 400.0) < 1.0e-12,
+             std::string(histogram->GetName()) + " axes must match the resolved 2D scan bounds exactly");
+      Expect(histogram->GetXaxis()->GetTitle()[0] != '\0'
+                 && histogram->GetYaxis()->GetTitle()[0] != '\0'
+                 && histogram->GetZaxis()->GetTitle()[0] != '\0',
+             std::string(histogram->GetName()) + " must persist explicit X/Y/Z titles");
+      Expect(histogram->TestBit(TH1::kNoStats),
+             std::string(histogram->GetName()) + " must disable the default statistics box");
+    }
+    TTreeReader two_d_reader(two_d_points);
+    TTreeReaderValue<int> two_d_stage(two_d_reader, "stage");
+    TTreeReaderValue<int> two_d_ix(two_d_reader, "ix");
+    TTreeReaderValue<int> two_d_iy(two_d_reader, "iy");
+    TTreeReaderValue<std::vector<double>> two_d_coordinates(two_d_reader, "coordinates");
+    TTreeReaderValue<std::string> two_d_status(two_d_reader, "status");
+    TTreeReaderValue<double> two_d_delta(two_d_reader, "delta_neg2logl");
+    TTreeReaderValue<int> two_d_slice_valid(two_d_reader, "slice_objective_valid");
+    TTreeReaderValue<double> two_d_slice_delta(two_d_reader, "slice_delta_neg2logl");
+    std::vector<std::pair<double, double>> two_d_centers;
+    int finite_profile_bins = 0;
+    int finite_slice_bins = 0;
+    while (two_d_reader.Next()) {
+      Expect(two_d_coordinates->size() == 2U, "2D ProfilePoints must retain both configured coordinates");
+      two_d_centers.emplace_back(two_d_coordinates->at(0), two_d_coordinates->at(1));
+      if (*two_d_stage != 0) continue;
+      const double stored_profile = delta->GetBinContent(*two_d_ix + 1, *two_d_iy + 1);
+      const double stored_slice = slice_delta->GetBinContent(*two_d_ix + 1, *two_d_iy + 1);
+      const bool profile_finite = *two_d_status == "valid" && std::isfinite(*two_d_delta);
+      const bool slice_finite = *two_d_slice_valid != 0 && std::isfinite(*two_d_slice_delta);
+      Expect(profile_finite ? EquivalentProfileNumber(stored_profile, *two_d_delta) : !std::isfinite(stored_profile),
+             "coarse ProfilePoints row must map directly to its ix/iy likelihood bin");
+      Expect(slice_finite ? EquivalentProfileNumber(stored_slice, *two_d_slice_delta) : !std::isfinite(stored_slice),
+             "coarse slice validity must independently control its ix/iy likelihood bin");
+      finite_profile_bins += profile_finite ? 1 : 0;
+      finite_slice_bins += slice_finite ? 1 : 0;
+    }
+    Expect(finite_slice_bins > 0,
+           "toy 2D output must retain independently valid slice bins even when profile minimization fails");
+    for (const double x : {390.0, 395.0, 400.0}) {
+      for (const double y : {390.0, 395.0, 400.0}) {
+        const bool found = std::any_of(two_d_centers.begin(), two_d_centers.end(), [x, y](const auto &center) {
+          return std::abs(center.first - x) < 1.0e-12 && std::abs(center.second - y) < 1.0e-12;
+        });
+        Expect(found, "2D ProfilePoints must preserve every coarse-grid center");
+      }
+    }
     for (int xbin = 0; xbin <= delta->GetNbinsX() + 1; ++xbin) {
       Expect(delta->GetBinContent(xbin, 0) == 0.0
                  && delta->GetBinContent(xbin, delta->GetNbinsY() + 1) == 0.0,
@@ -462,8 +644,42 @@ namespace {
                  && delta->GetBinContent(delta->GetNbinsX() + 1, ybin) == 0.0,
              "2D likelihood heatmap must leave X underflow/overflow empty");
     }
-    Expect(file.Get((base + "rout2_rside2/Canvas_2D").c_str()) != nullptr, "2D diagnostic canvas missing");
+    auto *profile_canvas = dynamic_cast<TCanvas *>(file.Get((base + "rout2_rside2/Canvas_2D").c_str()));
+    auto *profile_full_canvas = dynamic_cast<TCanvas *>(file.Get((base + "rout2_rside2/Canvas_2D_FullRange").c_str()));
+    auto *slice_canvas = dynamic_cast<TCanvas *>(file.Get((base + "rout2_rside2/Canvas_Slice2D").c_str()));
+    auto *slice_full_canvas = dynamic_cast<TCanvas *>(file.Get((base + "rout2_rside2/Canvas_Slice2D_FullRange").c_str()));
+    Expect(profile_canvas != nullptr && profile_full_canvas != nullptr
+               && slice_canvas != nullptr && slice_full_canvas != nullptr,
+           "threshold/full-range profile and fixed-nuisance slice canvases must all persist");
+    auto *profile_likelihood_pad = dynamic_cast<TPad *>(profile_canvas->GetPrimitive("Canvas_2D_1"));
+    auto *profile_status_pad = dynamic_cast<TPad *>(profile_canvas->GetPrimitive("Canvas_2D_2"));
+    Expect(profile_likelihood_pad != nullptr && profile_status_pad != nullptr,
+           "profile 2D canvas must persist separate likelihood and status panels");
+    Expect(profile_likelihood_pad->GetPrimitive("Canvas_2D_Annotation") != nullptr,
+           "profile 2D canvas must persist its semantic annotation");
+    Expect(profile_status_pad->GetPrimitive("Canvas_2D_StatusLegend") != nullptr,
+           "profile status panel must persist the complete discrete legend");
+    Expect(slice_canvas->GetPrimitive("Canvas_Slice2D_Annotation") != nullptr,
+           "slice 2D canvas must persist its independent validity annotation");
     Expect(file.Get((base + "rout2_rside2/NominalPoint").c_str()) != nullptr, "2D nominal marker missing");
+    Expect((file.Get((base + "rout2_rside2/BestProfileGridPoint").c_str()) != nullptr)
+               == (finite_profile_bins > 0),
+           "2D best profile marker existence must follow finite profile availability");
+    Expect(file.Get((base + "rout2_rside2/BestSliceGridPoint").c_str()) != nullptr,
+           "2D best fixed-nuisance slice marker missing");
+    const std::string all_invalid_2d = base + "all_invalid_2d/";
+    auto *all_invalid_delta = dynamic_cast<TH2 *>(file.Get((all_invalid_2d + "DeltaNeg2LogL2D").c_str()));
+    auto *all_invalid_canvas = dynamic_cast<TCanvas *>(file.Get((all_invalid_2d + "Canvas_2D").c_str()));
+    Expect(all_invalid_delta != nullptr && all_invalid_canvas != nullptr,
+           "all-invalid 2D fixture must still persist its matrix and framed canvas");
+    Expect(file.Get((all_invalid_2d + "BestProfileGridPoint").c_str()) == nullptr,
+           "all-invalid 2D fixture must not fabricate a best profile marker");
+    for (int ix = 1; ix <= all_invalid_delta->GetNbinsX(); ++ix) {
+      for (int iy = 1; iy <= all_invalid_delta->GetNbinsY(); ++iy) {
+        Expect(!std::isfinite(all_invalid_delta->GetBinContent(ix, iy)),
+               "all-invalid 2D fixture must retain NaN likelihood bins");
+      }
+    }
     for (const std::string &removed : {"FailurePoints2D",
                                        "RefinedPoints2D",
                                        "ProfileMinimum",
@@ -490,6 +706,37 @@ namespace {
     Expect(invalid_psd_points >= 1, "an unreachable full-model cross term must classify as model_domain_invalid");
     Expect(file.Get((base + "psd_invalid/Failure_model_domain_invalid1D").c_str()) == nullptr,
            "failure category is numerical tree data and must not be duplicated as a QA graph");
+
+    const auto no_valid_range = FindResolved1DScanRange(*catalog, slice_id, "psd_all_invalid");
+    Expect(std::abs(no_valid_range.first - 1000.0) < 1.0e-12
+               && std::abs(no_valid_range.second - 1002.0) < 1.0e-12,
+           "all-invalid scan catalog must retain its explicit diagnostic subrange");
+    auto *no_valid_points = dynamic_cast<TTree *>(file.Get((base + "psd_all_invalid/ProfilePoints").c_str()));
+    auto *no_valid_attempts = dynamic_cast<TTree *>(file.Get((base + "psd_all_invalid/AttemptPoints").c_str()));
+    auto *no_valid_profile = dynamic_cast<TGraph *>(file.Get((base + "psd_all_invalid/Profile1D").c_str()));
+    auto *no_valid_nominal = dynamic_cast<TGraph *>(file.Get((base + "psd_all_invalid/NominalPoint").c_str()));
+    Expect(no_valid_points != nullptr && no_valid_attempts != nullptr && no_valid_profile != nullptr
+               && no_valid_nominal != nullptr,
+           "all-invalid 1D diagnostic objects missing");
+    Expect(no_valid_points->GetEntries() == 3 && no_valid_attempts->GetEntries() >= 3,
+           "all-invalid scan must retain every point and its failure attempts");
+    TTreeReader no_valid_reader(no_valid_points);
+    TTreeReaderValue<std::string> no_valid_status(no_valid_reader, "status");
+    TTreeReaderValue<int> no_valid_domain(no_valid_reader, "model_domain_valid");
+    while (no_valid_reader.Next()) {
+      Expect(*no_valid_status == "model_domain_invalid" && *no_valid_domain == 0,
+             "all-invalid scan must retain model-domain failure causes in ProfilePoints");
+    }
+    Expect(no_valid_profile->GetN() == 0,
+           "all-invalid scan must not fabricate profile graph points for failed coordinates");
+    ExpectPersisted1DDisplayRange(file, base + "psd_all_invalid", no_valid_range.first, no_valid_range.second,
+                                  true, false);
+    double nominal_x = std::numeric_limits<double>::quiet_NaN();
+    double nominal_y = std::numeric_limits<double>::quiet_NaN();
+    no_valid_nominal->GetPoint(0, nominal_x, nominal_y);
+    const double nominal_cross = FindProfileParameterNominalValue(*parameters, slice_id, "routside2");
+    Expect(std::abs(nominal_x - nominal_cross) < 1.0e-12 && nominal_x < no_valid_range.first,
+           "nominal point outside a diagnostic subrange must remain stored at its true coordinate");
   }
 
 }  // namespace
@@ -559,6 +806,20 @@ fixed_value = 0.65
 fixed_value = 1.20
 
 )toml";
+  const std::string bounded_profile_parameter_lines = fixed_parameter_lines + R"toml(
+[fit.parameters.rout2]
+min = 0.01
+max = 64.0
+
+[fit.parameters.rside2]
+min = 0.01
+max = 64.0
+
+[fit.parameters.rlong2]
+min = 0.01
+max = 64.0
+
+)toml";
 
   const std::string fixed_non_pml_config_path = WriteConfig(temp_dir / "fixed_non_pml.toml",
                                                             input_root,
@@ -623,6 +884,14 @@ refine = false
 id = "rout2_rside2"
 parameters = ["rout2", "rside2"]
 points = [3, 3]
+min = [390.0, 390.0]
+max = [400.0, 400.0]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "all_invalid_2d"
+parameters = ["rout2", "rside2"]
+points = [3, 3]
 min = [0.01, 0.01]
 max = [2.0, 2.0]
 refine = false
@@ -633,6 +902,14 @@ parameters = ["routside2"]
 points = [3]
 min = [-1000.0]
 max = [1000.0]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "psd_all_invalid"
+parameters = ["routside2"]
+points = [3]
+min = [1000.0]
+max = [1002.0]
 refine = false
 
 )toml";
@@ -655,6 +932,136 @@ refine = false
   Expect(profile_stats.profile_selected_slices == 1, "listed profile mode must select only its exact slice ID");
   Expect(profile_stats.profile_completed_slices == 1, "listed toy profile must complete its nominated slice");
   ExpectProfileOutput(temp_dir / "profile_enabled.root", profile_slice_id);
+
+  const std::string no_reference_parameter_lines = fixed_parameter_lines + R"toml(
+[fit.parameters.routside2]
+initial = 1000.0
+
+[fit.parameters.routlong2]
+initial = 1000.0
+
+)toml";
+  const std::string no_reference_profile_lines = R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = [")toml" + profile_slice_id + R"toml("]
+retry_strategy = "reference_only"
+write_likelihood_slice = true
+
+[[fit.profile_likelihood.scans]]
+id = "no_reference_2d"
+parameters = ["routside2", "routlong2"]
+points = [3, 3]
+min = [1000.0, 1000.0]
+max = [1002.0, 1002.0]
+refine = false
+)toml";
+  const ApplicationConfig no_reference_config = LoadApplicationConfig(WriteConfig(
+      temp_dir / "profile_no_reference.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "profile_no_reference_fit.root", "profile_no_reference.tsv", "profile_no_reference_report.root",
+      true, std::nullopt, "use_coulomb = false\n", true, no_reference_parameter_lines,
+      no_reference_profile_lines, "profile_no_reference.root"));
+  const FitRunStatistics no_reference_stats = RunFit(no_reference_config, logger);
+  Expect(no_reference_stats.profile_completed_slices == 1,
+         "no-reference fixture must complete its listed diagnostic slice");
+  {
+    TFile no_reference_output((temp_dir / "profile_no_reference.root").string().c_str(), "READ");
+    auto *no_reference_catalog =
+        dynamic_cast<TTree *>(no_reference_output.Get("meta/ProfileLikelihoodCatalog"));
+    Expect(!no_reference_output.IsZombie() && no_reference_catalog != nullptr
+               && no_reference_catalog->GetEntries() == 1,
+           "no-reference profile output and catalog must be readable");
+    TTreeReader no_reference_reader(no_reference_catalog);
+    TTreeReaderValue<double> no_reference_objective(no_reference_reader, "reference_objective");
+    TTreeReaderValue<std::string> no_reference_source(no_reference_reader, "reference_source");
+    Expect(no_reference_reader.Next() && !std::isfinite(*no_reference_objective)
+               && *no_reference_source == "none",
+           "invalid nominal and scan points must retain an unavailable common reference");
+
+    const std::string no_reference_base =
+        "profiles/" + profile_slice_id + "/no_reference_2d/";
+    auto *no_reference_delta =
+        dynamic_cast<TH2 *>(no_reference_output.Get((no_reference_base + "DeltaNeg2LogL2D").c_str()));
+    auto *no_reference_canvas =
+        dynamic_cast<TCanvas *>(no_reference_output.Get((no_reference_base + "Canvas_2D").c_str()));
+    Expect(no_reference_delta != nullptr && no_reference_canvas != nullptr,
+           "no-reference fixture must persist a framed matrix and canvas");
+    for (int ix = 1; ix <= no_reference_delta->GetNbinsX(); ++ix) {
+      for (int iy = 1; iy <= no_reference_delta->GetNbinsY(); ++iy) {
+        Expect(!std::isfinite(no_reference_delta->GetBinContent(ix, iy)),
+               "no-reference likelihood bins must remain NaN");
+      }
+    }
+    Expect(no_reference_output.Get((no_reference_base + "NominalPoint").c_str()) == nullptr
+               && no_reference_output.Get((no_reference_base + "BestProfileGridPoint").c_str()) == nullptr,
+           "no-reference output must not fabricate nominal or best markers");
+    auto *no_reference_pad =
+        dynamic_cast<TPad *>(no_reference_canvas->GetPrimitive("Canvas_2D_1"));
+    auto *no_reference_note = no_reference_pad == nullptr
+                                  ? nullptr
+                                  : dynamic_cast<TPaveText *>(
+                                        no_reference_pad->GetPrimitive("Canvas_2D_Annotation"));
+    Expect(no_reference_note != nullptr, "no-reference canvas annotation missing");
+    bool explains_missing_reference = false;
+    TIter next_line(no_reference_note->GetListOfLines());
+    while (const TObject *line = next_line()) {
+      explains_missing_reference = explains_missing_reference
+                                   || std::string(line->GetTitle()).find("common reference unavailable")
+                                          != std::string::npos;
+    }
+    Expect(explains_missing_reference,
+           "no-reference canvas must explicitly explain why likelihood colors are unavailable");
+  }
+
+  const std::string bounded_catalog_profile_lines = R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = [")toml" + profile_slice_id + R"toml("]
+retry_strategy = "reference_only"
+write_likelihood_slice = false
+
+[[fit.profile_likelihood.scans]]
+id = "psd_bound_catalog"
+parameters = ["routside2"]
+points = [3]
+min = [1000.0]
+max = [1002.0]
+
+[[fit.profile_likelihood.scans]]
+id = "display_without_slice"
+parameters = ["rout2", "rside2"]
+points = [3, 3]
+min = [0.01, 0.01]
+max = [2.0, 2.0]
+)toml";
+  const ApplicationConfig bounded_catalog_config = LoadApplicationConfig(WriteConfig(
+      temp_dir / "profile_bounded_catalog.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "profile_bounded_catalog_fit.root", "profile_bounded_catalog.tsv", "profile_bounded_catalog_report.root",
+      true, std::nullopt, "use_coulomb = false\n", true, bounded_profile_parameter_lines,
+      bounded_catalog_profile_lines, "profile_bounded_catalog.root"));
+  const FitRunStatistics bounded_catalog_stats = RunFit(bounded_catalog_config, logger);
+  Expect(bounded_catalog_stats.profile_completed_slices == 1,
+         "bounded parameter-catalog fixture must complete its listed diagnostic slice");
+  {
+    TFile bounded_catalog_output((temp_dir / "profile_bounded_catalog.root").string().c_str(), "READ");
+    auto *bounded_parameters = dynamic_cast<TTree *>(bounded_catalog_output.Get("meta/ProfileParameterCatalog"));
+    Expect(!bounded_catalog_output.IsZombie() && bounded_parameters != nullptr,
+           "bounded parameter-catalog profile output must be readable");
+    for (const std::string &radius : {"rout2", "rside2", "rlong2"}) {
+      ExpectProfileParameterBounds(*bounded_parameters, profile_slice_id, radius, 0.01, 64.0);
+    }
+    const std::string no_slice_base = "profiles/" + profile_slice_id + "/display_without_slice/";
+    Expect(bounded_catalog_output.Get((no_slice_base + "DeltaNeg2LogL2D").c_str()) != nullptr
+               && bounded_catalog_output.Get((no_slice_base + "Canvas_2D").c_str()) != nullptr,
+           "2D profile display must remain available when fixed-nuisance slice output is disabled");
+    for (const std::string &absent : {"SliceDeltaNeg2LogL2D", "BestSliceGridPoint",
+                                      "Canvas_Slice2D", "Canvas_Slice2D_FullRange"}) {
+      Expect(bounded_catalog_output.Get((no_slice_base + absent).c_str()) == nullptr,
+             "write_likelihood_slice=false must suppress " + absent);
+    }
+  }
 
   const std::string process_profile_lines = R"toml(
 [fit.profile_likelihood]
@@ -738,11 +1145,16 @@ max = 20
     Expect(!process_output.IsZombie(), "merged process profile output must be readable");
     auto *execution = dynamic_cast<TTree *>(process_output.Get("meta/ProfileExecution"));
     auto *profile_catalog_tree = dynamic_cast<TTree *>(process_output.Get("meta/ProfileLikelihoodCatalog"));
+    auto *parameter_catalog_tree = dynamic_cast<TTree *>(process_output.Get("meta/ProfileParameterCatalog"));
     auto *attempts = dynamic_cast<TTree *>(
         process_output.Get(("profiles/" + profile_slice_id + "/rout2/AttemptPoints").c_str()));
     Expect(execution != nullptr && execution->GetEntries() == 1, "process execution metadata missing");
     Expect(profile_catalog_tree != nullptr && profile_catalog_tree->GetEntries() == 10,
            "merged fit_selection catalog must contain exactly selected slices times scans");
+    Expect(parameter_catalog_tree != nullptr, "process ProfileParameterCatalog missing");
+    for (const std::string &radius : {"rout2", "rside2", "rlong2"}) {
+      ExpectProfileParameterBounds(*parameter_catalog_tree, profile_slice_id, radius, 0.01, 400.0);
+    }
     std::string *slice_scope = nullptr;
     int selected_slices = 0;
     int selected_groups = 0;
@@ -840,6 +1252,33 @@ max = [2.0]
            "final merge must prune duplicate nuisance aliases from reused checkpoint chunks");
   }
   const auto complete_profile_size = std::filesystem::file_size(temp_dir / "profile_process.root");
+  const std::filesystem::path legacy_display_sidecar =
+      temp_dir / "toy_process.work" / "toy_process_v1" / "cent0_mt0_qn-1.digest";
+  std::string current_display_digest;
+  {
+    std::ifstream sidecar(legacy_display_sidecar);
+    std::getline(sidecar, current_display_digest);
+    Expect(!current_display_digest.empty(), "v3 checkpoint sidecar must contain its contract digest");
+  }
+  {
+    std::ofstream sidecar(legacy_display_sidecar, std::ios::trunc);
+    sidecar << "legacy-profile-contract-v4|display-contract-v2|cent0_mt0_qn-1\n";
+  }
+  bool saw_display_v2_checkpoint_mismatch = false;
+  try {
+    (void)RunFit(process_config, logger, std::nullopt, std::nullopt, false, process_config_path);
+  } catch (const std::runtime_error &error) {
+    saw_display_v2_checkpoint_mismatch =
+        std::string(error.what()).find("Checkpoint contract mismatch") != std::string::npos;
+  }
+  Expect(saw_display_v2_checkpoint_mismatch,
+         "display-contract-v2 checkpoint sidecars must be rejected after the v3 display upgrade");
+  Expect(std::filesystem::file_size(temp_dir / "profile_process.root") == complete_profile_size,
+         "display-v2 checkpoint rejection must preserve the previous complete profile output");
+  {
+    std::ofstream sidecar(legacy_display_sidecar, std::ios::trunc);
+    sidecar << current_display_digest << '\n';
+  }
 
   const std::string one_group_selection = two_group_bins + R"toml(
 
@@ -911,6 +1350,93 @@ max = 0.4
   Expect(saw_missing_attempts, "resume must reject a chunk missing AttemptPoints");
   Expect(std::filesystem::file_size(temp_dir / "profile_process.root") == repaired_profile_size,
          "missing-attempt checkpoint rejection must preserve the previous complete profile output");
+
+  const std::string inherited_bound_profile_lines = R"toml(
+[fit.profile_likelihood]
+enabled = true
+execution_mode = "profile_only"
+parallel_backend = "process"
+workers = 1
+minimizer_backend = "legacy_tminuit"
+hesse_strategy = "none"
+slice_scope = "listed"
+slice_ids = [")toml" + profile_slice_id + R"toml("]
+retry_strategy = "reference_only"
+write_likelihood_slice = false
+
+[fit.profile_likelihood.checkpoint]
+enabled = true
+resume = true
+run_id = "toy_inherited_bound_v1"
+directory = "toy_inherited_bound.work"
+
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml";
+  const std::string inherited_bound_parameters = R"toml(
+[fit.parameters.alpha]
+fixed_value = 1.20
+
+[fit.parameters.rout2]
+min = 0.01
+max = 64.0
+
+)toml";
+  const std::string inherited_bound_config_path = WriteConfig(
+      temp_dir / "profile_inherited_bound.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "profile_inherited_bound_production.root", "profile_inherited_bound_production.tsv",
+      "profile_inherited_bound_report.root", true, std::nullopt, "use_coulomb = false\n", true,
+      inherited_bound_parameters, inherited_bound_profile_lines, "profile_inherited_bound.root");
+  std::filesystem::remove(temp_dir / "profile_inherited_bound.root");
+  std::filesystem::remove_all(temp_dir / "toy_inherited_bound.work" / "toy_inherited_bound_v1");
+  const ApplicationConfig inherited_bound_config = LoadApplicationConfig(inherited_bound_config_path);
+  const FitRunStatistics inherited_bound_stats =
+      RunFit(inherited_bound_config, logger, std::nullopt, std::nullopt, false, inherited_bound_config_path);
+  Expect(inherited_bound_stats.profile_completed_slices == 1,
+         "inherited-bound checkpoint fixture must complete its listed slice");
+  {
+    TFile inherited_bound_output((temp_dir / "profile_inherited_bound.root").string().c_str(), "READ");
+    auto *inherited_catalog = dynamic_cast<TTree *>(inherited_bound_output.Get("meta/ProfileLikelihoodCatalog"));
+    Expect(!inherited_bound_output.IsZombie() && inherited_catalog != nullptr,
+           "inherited-bound profile output must be readable");
+    const auto inherited_range = FindResolved1DScanRange(*inherited_catalog, profile_slice_id, "rout2");
+    Expect(std::abs(inherited_range.first - 0.01) < 1.0e-12
+               && std::abs(inherited_range.second - 64.0) < 1.0e-12,
+           "scan without explicit min/max must inherit the effective rout2 hard bounds");
+    auto *inherited_parameters = dynamic_cast<TTree *>(inherited_bound_output.Get("meta/ProfileParameterCatalog"));
+    Expect(inherited_parameters != nullptr, "inherited-bound parameter catalog missing");
+    ExpectProfileParameterBounds(*inherited_parameters, profile_slice_id, "lambda", 0.0, 1.0);
+  }
+  const auto inherited_bound_output_size = std::filesystem::file_size(temp_dir / "profile_inherited_bound.root");
+  const std::string changed_inherited_bound_parameters = R"toml(
+[fit.parameters.alpha]
+fixed_value = 1.20
+
+[fit.parameters.rout2]
+min = 0.01
+max = 63.0
+
+)toml";
+  const std::string changed_inherited_bound_config_path = WriteConfig(
+      temp_dir / "profile_inherited_bound_changed.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "profile_inherited_bound_production.root", "profile_inherited_bound_production.tsv",
+      "profile_inherited_bound_report.root", true, std::nullopt, "use_coulomb = false\n", true,
+      changed_inherited_bound_parameters, inherited_bound_profile_lines, "profile_inherited_bound.root");
+  const ApplicationConfig changed_inherited_bound_config = LoadApplicationConfig(changed_inherited_bound_config_path);
+  bool saw_inherited_bound_checkpoint_mismatch = false;
+  try {
+    (void)RunFit(changed_inherited_bound_config, logger, std::nullopt, std::nullopt, false,
+                 changed_inherited_bound_config_path);
+  } catch (const std::runtime_error &error) {
+    saw_inherited_bound_checkpoint_mismatch =
+        std::string(error.what()).find("Checkpoint contract mismatch") != std::string::npos;
+  }
+  Expect(saw_inherited_bound_checkpoint_mismatch,
+         "changing an inherited fit upper bound must reject the previous checkpoint chunk contract");
+  Expect(std::filesystem::file_size(temp_dir / "profile_inherited_bound.root") == inherited_bound_output_size,
+         "inherited-bound checkpoint rejection must preserve the previous complete profile output");
 
   const std::string empty_selection_bins = R"toml(
 
@@ -1034,12 +1560,12 @@ id = "rout2_out_of_bounds"
 parameters = ["rout2"]
 points = [3]
 min = [0.01]
-max = [401.0]
+max = [65.0]
 )toml";
   const ApplicationConfig out_of_bounds_config = LoadApplicationConfig(WriteConfig(
       temp_dir / "profile_out_of_bounds.toml", input_root, temp_dir.string(), "mapped_cf.root",
       "profile_out_of_bounds_fit.root", "profile_out_of_bounds.tsv", "profile_out_of_bounds_report.root",
-      true, std::nullopt, "use_coulomb = false\n", true, fixed_parameter_lines, out_of_bounds_lines,
+      true, std::nullopt, "use_coulomb = false\n", true, bounded_profile_parameter_lines, out_of_bounds_lines,
       "profile_out_of_bounds.root"));
   bool saw_out_of_bounds_error = false;
   try {

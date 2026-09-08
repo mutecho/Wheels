@@ -2,6 +2,44 @@
 
 ## Task Snapshot
 
+- configuration follow-up (2026-09-07):
+  `strict_parallel` now enables all six unordered 2D pairs of `lambda`,
+  `rout2`, `rside2`, and `rlong2`, alongside the four existing 1D scans.
+  Each 2D grid remains `21 x 21`, unrefined, and inherits the hard bounds;
+  worker count, fitting strategy, output name, and run ID are unchanged.
+  The targeted config build/CTest passed 1/1 in 1.25 s with `PRIMARY_OK`;
+  the prior full-suite evidence below predates this configuration expansion.
+- scope: repair generic two-parameter profile/fixed-nuisance slice diagnostics
+  without changing the PML statistic, physical model, minimizer, retry, grid,
+  or refinement strategy
+- current conclusion:
+  2D ROOT outputs now distinguish raw likelihood values, profile status, and
+  independently valid fixed-nuisance slices. Persisted axes use resolved scan
+  bounds, contours interpolate only through four-corner-valid coarse cells,
+  and threshold/full-range canvases retain explicit diagnostic annotations
+- primary evidence:
+  - `ProfileDisplay2D` provides ROOT-independent clipped-edge, stable-best, and
+    marching-squares geometry with invalid-corner and saddle handling
+  - `Canvas_2D`/`Canvas_2D_FullRange` use profile likelihood/status panels;
+    optional `SliceDeltaNeg2LogL2D` and slice canvases use their own mask
+  - invalid bins remain NaN in persisted TH2 objects and are gray on canvases;
+    best markers are omitted when no finite valid point exists
+  - checkpoint digest is now `profile-contract-v4|display-contract-v3`; an
+    injected v2 sidecar is rejected while a matching v3 resume succeeds
+- verification:
+  `verified`: `2026-09-07` O2Physics ROOT executor returned `PRIMARY_OK`; full
+  configure/build and CTest passed 8/8 in 47.52 s. ROOT-independent geometry,
+  reopened ROOT schema/bin mapping, sparse profile failures with valid slices,
+  threshold-not-reached annotations, all-invalid 2D output, slice gating, and
+  unavailable-reference handling, and checkpoint compatibility all passed. Six reopened toy canvases were exported
+  and visually checked after moving annotations outside the heatmap. Final
+  code, physics-contract, and plot reviews found no unresolved blocking issue
+- deferred:
+  the operator must manually run the new `_r2max64` OO profile job; convergence
+  quality on that new-range production result remains a separate assessment
+
+## Previous Task Snapshot
+
 - scope: support all `fit_selection` slices in process-parallel profile-only
   execution and provide a strict 10-worker operator configuration
 - current conclusion:
@@ -28,7 +66,7 @@
   153,468 maximum attempts, and 10/10 workers without creating output. No real
   strict profile scan was started
 
-## Previous Task Snapshot
+## Earlier Task Snapshot
 
 - scope: resolve the remote/local merge and combine qn-aware ME splitting,
   configurable Levy parameters, and build-side mT/phi rebin

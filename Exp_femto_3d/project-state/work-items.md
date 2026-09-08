@@ -1,5 +1,23 @@
 # Work Items
 
+## WI-004: Define And Repair Two-Parameter Profile Displays
+
+- status: complete 2026-09-07
+- owner: completed in current engineering pass
+- goal: determine the intended meaning of the `rout2_lambda` 2D diagnostic
+  objects, then align their bin edges, canvas axes, labels, and contour usage
+  without changing the PML statistic or profile definition
+- success condition:
+  - inspect a representative user-produced 2D ROOT output and identify every
+    persisted object/canvas
+  - agree on the numerical-grid versus display-edge contract
+  - add ROOT readback and visual validation specific to 2D
+  - keep failed/PSD-invalid points distinguishable from valid likelihood values
+- completion evidence:
+  `ProfileDisplay2D` geometry tests and reopened ROOT workflow smoke passed;
+  representative sparse, threshold-unreached, full-range, and all-invalid toy
+  canvases were visually inspected
+
 ## WI-002: Complete Profile ROOT Closeout Validation
 
 - status: complete 2026-09-04

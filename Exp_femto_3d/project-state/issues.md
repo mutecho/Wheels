@@ -1,5 +1,21 @@
 # Issues
 
+## ISSUE-003: Two-Parameter Profile Display Meaning Needs Separate Review
+
+- status: resolved 2026-09-07
+- severity: medium
+- description:
+  the current `rout2_lambda` 2D heatmaps/canvases have unresolved axis and
+  interpretation concerns reported by the operator
+- resolution:
+  implemented the accepted issue-2 contract: exact resolved TH2 domains,
+  independent profile/slice validity, invalid masks, four-corner-only contours,
+  threshold/full-range canvases, stable best/nominal markers, and persisted
+  annotations. Deterministic geometry, ROOT readback, and toy visual QA passed
+- remaining follow-up:
+  production convergence on a user-run `_r2max64` OO result is not inferred
+  from the toy display validation
+
 ## ISSUE-002: Profile ROOT Runtime And Canvas QA Blocked
 
 - status: resolved 2026-09-04

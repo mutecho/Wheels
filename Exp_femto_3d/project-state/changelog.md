@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-07: Complete Strict-Parallel Pair Coverage
+
+- Enabled all six unordered 2D pairs of lambda and the three diagonal radii
+  squared, preserving the four 1D scans and the existing fit/worker settings.
+- Removed the obsolete README 2D-deferred text and aligned runner help.
+- Updated config regression checks for exact pair coverage, grid settings,
+  inherited bounds, and preserved 1D refinement; targeted CTest passed 1/1
+  with `PRIMARY_OK`. No real profile job was run.
+
+## 2026-09-07: Two-Dimensional Profile Display Repair
+
+- Added resolved-bound TH2 cells, separate profile status rendering, full-range
+  canvases, independent 2D fixed-nuisance slice objects, and stable best markers.
+- Replaced ROOT automatic contouring across NaNs with tested four-corner-valid
+  marching-squares segments on exact sampling coordinates.
+- Advanced checkpoint display compatibility to v3 and expanded ROOT-independent,
+  readback, slice-gating, sparse-failure, all-invalid, unavailable-reference,
+  and visual coverage.
+- O2Physics ROOT build/CTest passed 8/8; final code, physics-contract, and plot
+  reviews had no unresolved blocker. No real OO profile job was run.
+
+## 2026-09-07
+
+- Set all four OO profile tiers to explicit diagonal-radius hard bounds
+  `[0.01,64.0] fm^2`, preserved scout's `[0.01,20.0]` diagnostic subranges,
+  and versioned profile/checkpoint names with `_r2max64`.
+- Unified persisted 1D graph and canvas axes on the resolved scan range,
+  including the zero-valid-point case, without filtering numerical failure
+  rows or fabricating graph points.
+- Upgraded checkpoint digest coverage to effective parameter domains/fixed
+  state, fit/minimizer switches, and resolved scan ranges; inherited-bound
+  changes now reject stale chunks.
+- Added ROOT-backed config, axis, invalid-point, nominal-clipping, checkpoint,
+  and regression coverage. O2Physics ROOT build and full CTest passed 7/7 in
+  41.11 s with `PRIMARY_OK`; no real OO profile was run.
+- Recorded the unresolved 2D `rout2_lambda` display/meaning work as a separate
+  issue and work item.
+- Corrected active README/guide text to the strict-parallel configuration's
+  existing `workers=8`; this is documentation/test alignment, not a runtime
+  concurrency change in this packet.
+
 ## 2026-09-05
 
 - Added all-`fit_selection` process profile-only execution with parent-side

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -5,6 +6,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "exp_femto_3d/Config.h"
@@ -32,6 +35,26 @@ namespace {
     ExpectOptionalDouble(parameter.initial, initial, name + " initial");
     ExpectOptionalDouble(parameter.min, min, name + " min");
     ExpectOptionalDouble(parameter.max, max, name + " max");
+  }
+
+  void ExpectRadiusHardBounds(const exp_femto_3d::ApplicationConfig &config,
+                              const std::string &configuration_name) {
+    for (const auto &[name, parameter] : std::vector<std::pair<std::string, const exp_femto_3d::LevyFitParameterOverride *>>{
+             {"rout2", &config.fit.options.parameters.rout2},
+             {"rside2", &config.fit.options.parameters.rside2},
+             {"rlong2", &config.fit.options.parameters.rlong2}}) {
+      ExpectOptionalDouble(parameter->min, 0.01, configuration_name + " " + name + " hard lower bound");
+      ExpectOptionalDouble(parameter->max, 64.0, configuration_name + " " + name + " hard upper bound");
+    }
+  }
+
+  const exp_femto_3d::ProfileScanConfig &FindProfileScan(
+      const exp_femto_3d::ApplicationConfig &config,
+      const std::string &id) {
+    for (const exp_femto_3d::ProfileScanConfig &scan : config.fit.profile_likelihood.scans) {
+      if (scan.id == id) return scan;
+    }
+    throw std::runtime_error("missing profile scan " + id);
   }
 
   std::string WriteFile(const std::filesystem::path &path, const std::string &contents) {
@@ -1373,9 +1396,91 @@ refinement_points = [5]
                     == ProfileMinimizerBackend::kLegacyTMinuit
              && strict_parallel.fit.profile_likelihood.slice_scope == ProfileSliceScope::kFitSelection
              && strict_parallel.fit.profile_likelihood.slice_ids.empty()
-             && strict_parallel.fit.profile_likelihood.workers == 10
-             && strict_parallel.fit.profile_likelihood.scans.size() == 5U,
-         "strict-parallel public configuration must preserve five scans and enable ten process workers");
+             && strict_parallel.fit.profile_likelihood.workers == 8
+             && strict_parallel.fit.profile_likelihood.scans.size() == 10U,
+         "strict-parallel public configuration must contain four 1D and six 2D scans with its configured process workers");
+  for (const std::string &id : {"lambda", "rout2", "rside2", "rlong2"}) {
+    const ProfileScanConfig &scan = FindProfileScan(strict_parallel, id);
+    Expect(scan.parameters == std::vector<std::string>{id}
+               && scan.points == std::vector<int>{21} && scan.refine
+               && scan.refinement_points == std::vector<int>{21},
+           "strict-parallel must retain its existing refined 1D scan: " + id);
+  }
+  for (const auto &[id, targets] : std::vector<std::pair<std::string, std::vector<std::string>>>{
+           {"rout2_lambda", {"rout2", "lambda"}},
+           {"rside2_lambda", {"rside2", "lambda"}},
+           {"rlong2_lambda", {"rlong2", "lambda"}},
+           {"rout2_rside2", {"rout2", "rside2"}},
+           {"rout2_rlong2", {"rout2", "rlong2"}},
+           {"rside2_rlong2", {"rside2", "rlong2"}}}) {
+    const ProfileScanConfig &scan = FindProfileScan(strict_parallel, id);
+    Expect(scan.parameters == targets && scan.points == std::vector<int>{21, 21}
+               && !scan.refine && scan.refinement_points.empty()
+               && scan.min.empty() && scan.max.empty(),
+           "strict-parallel must cover every pair once on an unrefined grid with inherited bounds: " + id);
+  }
+
+  const std::string public_config_directory = std::string(EXP_FEMTO_3D_SOURCE_DIR) + "/config/";
+  for (const auto &[name, profile_root_name, checkpoint_run_id] :
+       std::vector<std::tuple<std::string, std::string, std::string>>{
+           {"oo_build_and_fit_6bins_profile_scout.toml",
+            "profile_likelihood_oo_6phi_scout_r2max64.root",
+            "oo_6phi_scout_r2max64_v1"},
+           {"oo_build_and_fit_6bins_profile_focused_1d.toml",
+            "profile_likelihood_oo_6phi_focused_1d_r2max64.root",
+            "oo_6phi_focused_1d_r2max64_v1"},
+           {"oo_build_and_fit_6bins_profile_focused_2d.toml",
+            "profile_likelihood_oo_6phi_focused_2d_r2max64.root",
+            "oo_6phi_focused_2d_r2max64_v1"},
+           {"oo_build_and_fit_6bins_profile_strict_parallel.toml",
+            "profile_likelihood_oo_6phi_strict_parallel_r2max64.root",
+            "oo_6phi_strict_parallel_r2max64_v1"}}) {
+    const ApplicationConfig public_profile = LoadApplicationConfig(public_config_directory + name);
+    ExpectRadiusHardBounds(public_profile, name);
+    Expect(public_profile.output.profile_root_name == profile_root_name,
+           name + " must use the distinct r2max64 profile output name");
+    Expect(public_profile.fit.profile_likelihood.checkpoint.run_id == checkpoint_run_id,
+           name + " must use the distinct r2max64 checkpoint run ID");
+    Expect(!public_profile.fit.options.parameters.lambda.min.has_value()
+               && !public_profile.fit.options.parameters.lambda.max.has_value(),
+           name + " must retain the default lambda hard bounds rather than override them");
+  }
+
+  const ApplicationConfig scout_profile =
+      LoadApplicationConfig(public_config_directory + "oo_build_and_fit_6bins_profile_scout.toml");
+  for (const std::string &id : {"rout2", "rside2", "rlong2"}) {
+    const ProfileScanConfig &scan = FindProfileScan(scout_profile, id);
+    Expect(scan.min == std::vector<double>{0.01} && scan.max == std::vector<double>{20.0},
+           "scout radius scan must preserve its explicit 0.01--20 diagnostic subrange: " + id);
+  }
+
+  for (const std::string &name : {"oo_build_and_fit_6bins_profile_focused_1d.toml",
+                                  "oo_build_and_fit_6bins_profile_focused_2d.toml",
+                                  "oo_build_and_fit_6bins_profile_strict_parallel.toml"}) {
+    const ApplicationConfig public_profile = LoadApplicationConfig(public_config_directory + name);
+    for (const ProfileScanConfig &scan : public_profile.fit.profile_likelihood.scans) {
+      const bool targets_radius = std::find(scan.parameters.begin(), scan.parameters.end(), "rout2")
+                                      != scan.parameters.end()
+                                  || std::find(scan.parameters.begin(), scan.parameters.end(), "rside2")
+                                         != scan.parameters.end()
+                                  || std::find(scan.parameters.begin(), scan.parameters.end(), "rlong2")
+                                         != scan.parameters.end();
+      if (targets_radius) {
+        Expect(scan.min.empty() && scan.max.empty(),
+               name + " radius diagnostics must inherit the configured hard bounds");
+      }
+    }
+  }
+
+  const ApplicationConfig legacy_profile =
+      LoadApplicationConfig(public_config_directory + "oo_build_and_fit_6bins_checklikelihood.toml");
+  Expect(!legacy_profile.fit.options.parameters.rout2.min.has_value()
+             && !legacy_profile.fit.options.parameters.rout2.max.has_value()
+             && !legacy_profile.fit.options.parameters.rside2.min.has_value()
+             && !legacy_profile.fit.options.parameters.rside2.max.has_value()
+             && !legacy_profile.fit.options.parameters.rlong2.min.has_value()
+             && !legacy_profile.fit.options.parameters.rlong2.max.has_value(),
+         "unmodified legacy profile configuration must keep the code-level radius defaults");
 
   std::cout << "config_parse_validation_test passed\n";
   return 0;

@@ -1,5 +1,70 @@
 # Tests
 
+## T-023: Complete Strict-Parallel Pair Coverage
+
+- date: 2026-09-07
+- command:
+
+```bash
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d --command 'cmake --build build --target config_parse_validation_test -j 2 && ctest --test-dir build -R config_parse_validation_test --output-on-failure'
+```
+
+- result: targeted build and CTest passed 1/1 in 1.25 s; executor `PRIMARY_OK`
+  after retrying the identical command with escalation following a sandbox
+  environment-entry failure
+- coverage: all six unordered 2D pairs, exact parameter axis order, `21 x 21`
+  grids, disabled 2D refinement, inherited bounds, unchanged four refined 1D
+  scans, and eight process workers in the real strict-parallel TOML
+- scope: config-only follow-up; no real OO profile job or full-suite rerun.
+  The earlier full-suite evidence remains recorded below for the implementation.
+
+## T-022: Two-Dimensional Profile And Slice Display Contract
+
+- date: 2026-09-07
+- command: complete CMake configure/build and `ctest --test-dir build
+  --output-on-failure` through the shared O2Physics ROOT executor
+- result: passed 8/8 in 47.52 s; executor status `PRIMARY_OK`
+- coverage:
+  - ROOT-independent midpoint/clipped edges, true-coordinate contours,
+    invalid-corner holes, disconnected regions, constant fields, saddle and
+    vertex-equality handling, duplicate suppression, and stable best tie-breaks
+  - reopened TH2 ranges/titles/stats, exact `ix/iy` mapping, retained NaN bins,
+    independently valid slice bins, four canvases, discrete status legend, and
+    conditional best markers
+  - sparse nonconverged profile points beside valid fixed-nuisance slice points,
+    a finite slice surface below all 1/2/4 thresholds, an all-invalid 2D scan,
+    and an unavailable common reference with no fabricated markers or colors
+  - strict `write_likelihood_slice=false` object suppression, matching v3
+    resume, and rejection of an injected display-contract-v2 checkpoint sidecar
+- visual evidence: six canvases exported from closed/reopened toy ROOT files
+  under `/tmp/exp_femto_3d_profile_2d_qa/`; no real OO profile job was run
+
+## T-021: OO Radius Bounds, 1D Display Range, And Checkpoint Contract
+
+- date: 2026-09-07
+- command:
+  `ctest --test-dir build --output-on-failure` through the shared O2Physics ROOT
+  executor after a complete `cmake --build build -j 2`
+- result: passed 7/7 in 41.11 s; executor status `PRIMARY_OK`
+- coverage:
+  - parses all four OO profile tiers and checks diagonal-radius hard bounds
+    `[0.01,64.0]`, default lambda behavior, scout `[0.01,20.0]` subranges, and
+    exact `_r2max64` output/checkpoint identifiers
+  - rejects an explicit scan upper bound of `65.0` under the new hard domain;
+    an unmodified legacy fixture still reports `[0.01,400.0]`
+  - reads back `ProfileLikelihoodCatalog`, `ProfileParameterCatalog`, every
+    present 1D graph, all named nuisance trajectories, and the canvas frame to
+    verify one resolved X range
+  - covers a fully PSD-invalid 1D scan with an empty `Profile1D`, retained
+    `ProfilePoints`/`AttemptPoints` failure causes, no synthetic points, an
+    explicit no-valid-points annotation, and an unchanged out-of-range nominal
+    coordinate
+  - changes only an inherited radius upper bound and confirms old checkpoint
+    rejection plus preservation of the last complete profile ROOT output
+  - preserves existing 2D grid-center, PSD-invalid, and `profile <= slice`
+    regression checks without asserting 2D display semantics
+- scope note: no real OO profile job was run; production rerun is operator-owned
+
 ## T-020: All-Selection Strict Parallel Profile-Only
 
 - date: 2026-09-05

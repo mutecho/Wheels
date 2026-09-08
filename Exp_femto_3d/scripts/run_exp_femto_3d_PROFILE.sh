@@ -20,8 +20,9 @@ Options:
   -h, --help                 Show this help.
 
 The strict tier is the preserved LIKELYHOODTEST configuration. strict-parallel
-runs the same strict scan contract as profile_only over all fit_selection slices
-with isolated legacy-TMinuit processes. The other tiers are reduced-cost
+runs four 1D scans and all six 2D pairs of lambda/rout2/rside2/rlong2 as
+profile_only over all fit_selection slices with isolated legacy-TMinuit
+processes. The other tiers are reduced-cost
 profile_only runs with separate output and checkpoint names.
 USAGE
 }

@@ -55,6 +55,7 @@ endif()
 add_library(exp_femto_3d_core
   src/Config.cpp
   src/Logging.cpp
+  src/ProfileDisplay2D.cpp
   src/ProfileLikelihood.cpp
   src/Workflow.cpp
 )
@@ -163,6 +164,21 @@ target_include_directories(profile_likelihood_driver_test
 add_test(
   NAME profile_likelihood_driver_test
   COMMAND profile_likelihood_driver_test
+)
+
+add_executable(profile_display_2d_test
+  tests/ProfileDisplay2DTest.cpp
+  src/ProfileDisplay2D.cpp
+)
+
+target_include_directories(profile_display_2d_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_test(
+  NAME profile_display_2d_test
+  COMMAND profile_display_2d_test
 )
 
 add_executable(progress_render_test

@@ -161,6 +161,36 @@ points = [21, 21]
 refine = false
 ```
 
+`[fit.parameters.<name>].min/max` are hard fit bounds: they apply to the
+nominal PML fit and every nuisance re-minimization. A scan's optional
+`min`/`max` is only a diagnostic subrange; when omitted, it inherits the
+effective hard fit bounds. The OO profile tiers `scout`, `focused_1d`,
+`focused_2d`, and `strict_parallel` explicitly constrain
+`rout2`/`rside2`/`rlong2` to `[0.01, 64.0] fm^2`; scout keeps its narrower
+`[0.01, 20.0] fm^2` scan windows. Every persisted 1D display object and its
+`Canvas_1D` uses the resolved scan bounds, so a nominal marker outside a
+narrower diagnostic subrange remains stored but is clipped on that canvas. A
+minimum at `64 fm^2` is a constrained boundary optimum, not evidence for a
+localized unconstrained minimum.
+
+For every 2D scan, `DeltaNeg2LogL2D` stores the coarse profile delta and
+`PointStatus2D` stores the six-state minimizer classification. Their outer
+edges are the resolved scan bounds; interior edges are adjacent sampling-point
+midpoints, so `ProfilePoints` remains the source of exact coordinates. Invalid
+profile bins remain NaN and are rendered with an opaque gray mask. `Canvas_2D`
+and `Canvas_2D_FullRange` use a likelihood/status two-panel layout; contours
+are built only in cells whose four sampling corners are valid and finite.
+
+When `write_likelihood_slice = true`, the same directory also contains
+`SliceDeltaNeg2LogL2D`, `BestSliceGridPoint`, `Canvas_Slice2D`, and
+`Canvas_Slice2D_FullRange`. Slice availability is evaluated independently of
+profile convergence. `BestProfileGridPoint` and `BestSliceGridPoint` may come
+from coarse or refined points, while heatmaps and contours remain coarse-only.
+Threshold canvases saturate colors to `[0,max(contour_levels)]` without changing
+stored values; full-range canvases show the complete finite range. These are
+diagnostic thresholds, not confidence-level regions. The current checkpoint
+display contract is `display-contract-v3`; v2 chunks are rejected on resume.
+
 Finite scan bounds may be omitted to inherit the active fit bounds. Parameters
 without finite default bounds, including full-model off-diagonal radii, require
 explicit `min`/`max`. Targets must exist in the active `diag`/`full` model and
@@ -181,10 +211,14 @@ scripts/run_exp_femto_3d_PROFILE.sh --tier strict-parallel --profile-estimate-on
 ```
 
 `strict-parallel` uses
-`config/oo_build_and_fit_6bins_profile_strict_parallel.toml`: it preserves the
-strict scan grids and finite-source model, runs profile-only over the complete
-configured `fit_selection`, and uses 10 isolated legacy-TMinuit processes at
-most (effective workers are capped by the number of selected groups).
+`config/oo_build_and_fit_6bins_profile_strict_parallel.toml`: it retains the
+four 1D scans and enables all six unordered 2D pairs of `lambda`, `rout2`,
+`rside2`, and `rlong2`. Every 2D scan uses `21 x 21` points, `refine = false`,
+and inherited hard bounds. It keeps the finite-source model, runs profile-only
+over the complete configured `fit_selection`, and uses 8 isolated legacy-TMinuit
+processes at most (effective workers are capped by the number of selected groups).
+Expanding the scan list changes the checkpoint contract; chunks from the earlier
+five-scan configuration cannot be reused with this ten-scan configuration.
 
 TOML progress control:
 

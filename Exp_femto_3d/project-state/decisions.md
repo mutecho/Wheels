@@ -1,5 +1,44 @@
 # Decisions
 
+## DEC-013: Separate 2D Numerical Truth, Validity, And Display Geometry
+
+- date: 2026-09-07
+- decision:
+  keep `ProfilePoints`/`AttemptPoints` as exact numerical truth; use TH2 only as
+  clipped display cells, compute contours on true coarse coordinates only when
+  all four corners are valid, and give fixed-nuisance slices their own validity
+  mask and objects
+- display policy:
+  threshold canvases saturate colors without modifying stored deltas; full-range
+  canvases show all finite values; invalid regions are opaque gray; profile
+  status is a separate six-color panel; best points may come from refinement but
+  heatmaps and contours remain coarse-only
+- compatibility:
+  checkpoint display contract advances to v3. The PML reference, statistic,
+  physical model, minimizer/retry behavior, and production fit outputs are
+  unchanged
+
+## DEC-012: Separate Hard Fit Bounds From Diagnostic Scan Subranges
+
+- date: 2026-09-07
+- decision:
+  use `[fit.parameters.<name>].min/max` as the single hard domain for the
+  nominal fit and profile nuisance re-minimization; treat scan-level `min/max`
+  only as an optional contained diagnostic subrange and inherit the hard domain
+  when it is omitted
+- OO profile application:
+  `scout`, `focused_1d`, `focused_2d`, and `strict_parallel` set the three
+  diagonal radii squared to `[0.01,64.0] fm^2`; scout retains its narrower
+  `[0.01,20.0] fm^2` scan. A solution at `64 fm^2` is a constrained boundary
+  optimum, not evidence of an unconstrained localized minimum
+- compatibility:
+  code-wide defaults and configurations outside these four tiers remain
+  `[0.01,400.0] fm^2`; output/checkpoint identifiers are versioned so the new
+  contract cannot overwrite or reuse the old generation
+- deferred:
+  2D histogram/canvas axes and `rout2_lambda` plot interpretation are not part
+  of this decision; that later scope is now resolved by DEC-013
+
 ## DEC-011: Parallelize Complete Groups In Processes, Keep Scans Sequential
 
 - date: 2026-09-04

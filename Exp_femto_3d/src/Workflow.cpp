@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <optional>
@@ -30,6 +31,7 @@
 #include <unistd.h>
 
 #include "TAxis.h"
+#include "TBox.h"
 #include "TCanvas.h"
 #include "TDirectory.h"
 #include "TF1.h"
@@ -58,6 +60,7 @@
 #include "CATSconstants.h"
 #endif
 #include "exp_femto_3d/Config.h"
+#include "ProfileDisplay2D.h"
 #include "ProfileLikelihood.h"
 
 extern char **environ;
@@ -483,42 +486,12 @@ namespace exp_femto_3d {
       return hash;
     }
 
+    struct ResolvedProfileScan;
     std::string BuildProfileContractDigest(const std::string &cf_root_path,
                                            const ApplicationConfig &config,
                                            const FitModel model,
-                                           const std::vector<const SliceCatalogEntry *> &entries) {
-      constexpr std::uint64_t kOffset = 14695981039346656037ULL;
-      std::uint64_t hash = kOffset;
-      std::ifstream input(cf_root_path, std::ios::binary);
-      if (!input) throw std::runtime_error("Cannot hash profile CF input: " + cf_root_path);
-      std::array<char, 1U << 16U> buffer{};
-      while (input) {
-        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        hash = Fnv1aUpdate(hash, buffer.data(), static_cast<std::size_t>(input.gcount()));
-      }
-      std::ostringstream contract;
-      contract << "profile-schema-v2|" << ToString(model) << '|'
-               << static_cast<int>(config.fit.options.coulomb_mode) << '|'
-               << static_cast<int>(config.fit.options.finite_source_mode) << '|'
-               << static_cast<int>(config.fit.profile_likelihood.retry_strategy) << '|'
-               << static_cast<int>(config.fit.profile_likelihood.hesse_strategy) << '|'
-               << config.fit.profile_likelihood.write_likelihood_slice << '|';
-      for (const SliceCatalogEntry *entry : entries) contract << entry->slice_id << '|';
-      for (const ProfileScanConfig &scan : config.fit.profile_likelihood.scans) {
-        contract << scan.id << ':' << scan.refine << ':';
-        for (const std::string &parameter : scan.parameters) contract << parameter << ',';
-        for (const int points : scan.points) contract << points << ',';
-        for (const double value : scan.min) contract << std::setprecision(17) << value << ',';
-        for (const double value : scan.max) contract << std::setprecision(17) << value << ',';
-        for (const int points : scan.refinement_points) contract << points << ',';
-        contract << '|';
-      }
-      const std::string text = contract.str();
-      hash = Fnv1aUpdate(hash, text.data(), text.size());
-      std::ostringstream encoded;
-      encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
-      return encoded.str();
-    }
+                                           const std::vector<const SliceCatalogEntry *> &entries,
+                                           const std::vector<ResolvedProfileScan> &resolved_scans);
 
     bool ValidateProfileChunk(const std::string &path,
                               const std::vector<const SliceCatalogEntry *> &expected_entries,
@@ -3831,30 +3804,6 @@ namespace exp_femto_3d {
       return point.status == profile_likelihood::PointStatus::kValid && std::isfinite(delta);
     }
 
-    std::vector<double> MakeCenteredEdges(std::vector<double> centers) {
-      std::sort(centers.begin(), centers.end());
-      centers.erase(std::unique(centers.begin(), centers.end(), [](const double left, const double right) {
-                      return NearlyEqual(left, right, 1.0e-12);
-                    }),
-                    centers.end());
-      std::vector<double> edges;
-      if (centers.empty()) {
-        return edges;
-      }
-      edges.resize(centers.size() + 1U);
-      if (centers.size() == 1U) {
-        edges[0] = centers[0] - 0.5;
-        edges[1] = centers[0] + 0.5;
-        return edges;
-      }
-      for (std::size_t index = 1; index < centers.size(); ++index) {
-        edges[index] = 0.5 * (centers[index - 1U] + centers[index]);
-      }
-      edges.front() = centers.front() - 0.5 * (centers[1] - centers.front());
-      edges.back() = centers.back() + 0.5 * (centers.back() - centers[centers.size() - 2U]);
-      return edges;
-    }
-
     std::unique_ptr<TGraph> MakeSinglePointGraph(const std::string &name,
                                                  const std::string &title,
                                                  const double x,
@@ -3883,11 +3832,22 @@ namespace exp_femto_3d {
       graph.SetLineWidth(2);
     }
 
+    // Persisted 1D diagnostic graphs share their resolved scan domain, including empty graphs.
+    // This is a display contract only: numerical point coordinates remain untouched in the TTrees.
+    void ApplyResolvedProfileXAxisLimits(TGraph &graph, const double lower, const double upper) {
+      if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
+        throw std::runtime_error("Resolved 1D profile display range must be finite and ordered.");
+      }
+      graph.GetXaxis()->SetLimits(lower, upper);
+    }
+
     struct ResolvedProfileScan {
       const ProfileScanConfig *config = nullptr;
       std::vector<int> target_indices;
       std::vector<double> lower;
       std::vector<double> upper;
+      std::vector<double> fit_lower;
+      std::vector<double> fit_upper;
     };
 
     std::vector<ResolvedProfileScan> ResolveProfileScans(const ApplicationConfig &config, const FitModel model) {
@@ -3907,6 +3867,8 @@ namespace exp_femto_3d {
           double lower = 0.0;
           double upper = 0.0;
           function->GetParLimits(index, lower, upper);
+          const double effective_fit_lower = upper > lower ? lower : std::numeric_limits<double>::quiet_NaN();
+          const double effective_fit_upper = upper > lower ? upper : std::numeric_limits<double>::quiet_NaN();
           if (scan.min.empty()) {
             if (!(upper > lower) || !std::isfinite(lower) || !std::isfinite(upper)) {
               throw std::runtime_error("Profile target '" + scan.parameters[axis]
@@ -3927,10 +3889,120 @@ namespace exp_femto_3d {
           item.target_indices.push_back(index);
           item.lower.push_back(lower);
           item.upper.push_back(upper);
+          item.fit_lower.push_back(effective_fit_lower);
+          item.fit_upper.push_back(effective_fit_upper);
         }
         resolved.push_back(std::move(item));
       }
       return resolved;
+    }
+
+    // Checkpoint reuse is valid only when the resolved numerical and display contracts agree.
+    // In particular, a scan that inherits a fit bound must be invalidated when that bound changes.
+    std::string BuildProfileContractDigest(const std::string &cf_root_path,
+                                           const ApplicationConfig &config,
+                                           const FitModel model,
+                                           const std::vector<const SliceCatalogEntry *> &entries,
+                                           const std::vector<ResolvedProfileScan> &resolved_scans) {
+      constexpr std::uint64_t kOffset = 14695981039346656037ULL;
+      std::uint64_t hash = kOffset;
+      std::ifstream input(cf_root_path, std::ios::binary);
+      if (!input) throw std::runtime_error("Cannot hash profile CF input: " + cf_root_path);
+      std::array<char, 1U << 16U> buffer{};
+      while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        hash = Fnv1aUpdate(hash, buffer.data(), static_cast<std::size_t>(input.gcount()));
+      }
+
+      std::ostringstream contract;
+      contract.imbue(std::locale::classic());
+      contract << std::setprecision(17);
+      const auto append_value = [&contract](const double value) {
+        if (std::isfinite(value)) {
+          contract << value;
+        } else {
+          contract << (value < 0.0 ? "-inf" : value > 0.0 ? "+inf" : "nan");
+        }
+      };
+      const auto append_values = [&append_value, &contract](const std::vector<double> &values) {
+        for (const double value : values) {
+          append_value(value);
+          contract << ',';
+        }
+      };
+      const auto append_ints = [&contract](const std::vector<int> &values) {
+        for (const int value : values) contract << value << ',';
+      };
+
+      contract << "profile-contract-v4|display-contract-v3|model=" << ToString(model)
+               << "|coulomb=" << static_cast<int>(config.fit.options.coulomb_mode)
+               << "|finite_source=" << static_cast<int>(config.fit.options.finite_source_mode)
+               << "|core_halo_lambda=" << config.fit.options.use_core_halo_lambda
+               << "|q2_baseline=" << config.fit.options.use_q2_baseline
+               << "|use_pml=" << config.fit.options.use_pml << "|fit_q_max=";
+      append_value(config.fit.options.fit_q_max);
+      contract << "|minimizer_backend=" << static_cast<int>(config.fit.profile_likelihood.minimizer_backend)
+               << "|retry=" << static_cast<int>(config.fit.profile_likelihood.retry_strategy)
+               << "|hesse=" << static_cast<int>(config.fit.profile_likelihood.hesse_strategy)
+               << "|write_slice=" << config.fit.profile_likelihood.write_likelihood_slice << '|';
+
+      std::unique_ptr<TF3> parameter_function(
+          model == FitModel::kFull ? BuildFullLevyFitFunction("profile_contract_full", config.fit.options)
+                                   : BuildLevyFitFunction("profile_contract_diag", config.fit.options));
+      const int physical_parameter_count = model == FitModel::kFull ? 10 : 7;
+      for (int index = 0; index < physical_parameter_count; ++index) {
+        double lower = 0.0;
+        double upper = 0.0;
+        parameter_function->GetParLimits(index, lower, upper);
+        const bool has_finite_limits = std::isfinite(lower) && std::isfinite(upper) && upper > lower;
+        const bool fixed = IsPMLParameterFixed(index, model == FitModel::kFull, config.fit.options);
+        const double effective_value = parameter_function->GetParameter(index);
+        contract << "parameter=" << ProfileParameterCanonicalName(index, model) << ':' << index << ':';
+        append_value(effective_value);
+        contract << ':';
+        if (fixed) {
+          // ROOT represents fixed parameters with coincident limits; serialize their physical point domain directly.
+          contract << "fixed_domain=";
+          append_value(effective_value);
+          contract << ',';
+          append_value(effective_value);
+        } else if (has_finite_limits) {
+          contract << "finite=";
+          append_value(lower);
+          contract << ',';
+          append_value(upper);
+        } else {
+          contract << "unbounded=";
+        }
+        contract << ":fixed=" << fixed << ":fixed_value=";
+        if (fixed) append_value(effective_value);
+        else contract << "free";
+        contract << '|';
+      }
+
+      for (const SliceCatalogEntry *entry : entries) contract << "slice=" << entry->slice_id << '|';
+      for (const ResolvedProfileScan &scan : resolved_scans) {
+        contract << "scan=" << scan.config->id << ":refine=" << scan.config->refine << ":parameters=";
+        for (const std::string &parameter : scan.config->parameters) contract << parameter << ',';
+        contract << ":indices=";
+        append_ints(scan.target_indices);
+        contract << ":lower=";
+        append_values(scan.lower);
+        contract << ":upper=";
+        append_values(scan.upper);
+        contract << ":points=";
+        append_ints(scan.config->points);
+        contract << ":refinement_points=";
+        append_ints(scan.config->refinement_points);
+        contract << '|';
+      }
+      contract << "contour_levels=";
+      append_values(config.fit.profile_likelihood.contour_levels);
+      const std::string text = contract.str();
+      hash = Fnv1aUpdate(hash, text.data(), text.size());
+      std::ostringstream encoded;
+      encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
+      return encoded.str();
     }
 
     void ConfigurePMLContextForEvaluation(TH3D *h_se_raw,
@@ -4291,6 +4363,391 @@ namespace exp_femto_3d {
       (void)slice_output;
     }
 
+    struct ProfileDisplay2DData {
+      std::vector<double> x_coordinates;
+      std::vector<double> y_coordinates;
+      std::vector<double> x_edges;
+      std::vector<double> y_edges;
+      std::vector<double> values;
+      std::vector<bool> finite;
+      std::vector<int> status_codes;
+      std::vector<profile_display_2d::ContourLevel> contours;
+      std::optional<profile_display_2d::BestCandidate> best;
+      std::size_t coarse_total = 0;
+      std::size_t profile_valid = 0;
+      std::size_t finite_count = 0;
+      std::size_t negative_count = 0;
+      double finite_min = std::numeric_limits<double>::quiet_NaN();
+      double finite_max = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    ProfileDisplay2DData BuildProfileDisplay2DData(const ProfileSliceScanOutput &scan,
+                                                   const std::vector<double> &contour_levels,
+                                                   const bool likelihood_slice) {
+      const int nx = scan.scan.config->points[0];
+      const int ny = scan.scan.config->points[1];
+      ProfileDisplay2DData output;
+      output.x_coordinates.assign(static_cast<std::size_t>(nx), std::numeric_limits<double>::quiet_NaN());
+      output.y_coordinates.assign(static_cast<std::size_t>(ny), std::numeric_limits<double>::quiet_NaN());
+      output.values.assign(static_cast<std::size_t>(nx * ny), std::numeric_limits<double>::quiet_NaN());
+      output.finite.assign(static_cast<std::size_t>(nx * ny), false);
+      output.status_codes.assign(static_cast<std::size_t>(nx * ny), 0);
+      output.coarse_total = static_cast<std::size_t>(nx * ny);
+      std::vector<profile_display_2d::BestCandidate> candidates;
+      const auto flat = [nx](const int ix, const int iy) {
+        return static_cast<std::size_t>(iy * nx + ix);
+      };
+      for (std::size_t index = 0; index < scan.result.points.size(); ++index) {
+        const profile_likelihood::PointRecord &point = scan.result.points[index];
+        if (point.coordinates.size() < 2U) continue;
+        const double delta = likelihood_slice ? scan.slice_deltas[index] : scan.deltas[index];
+        const bool point_valid = likelihood_slice
+                                     ? point.likelihood_slice_objective_valid && std::isfinite(delta)
+                                     : HasValidDelta(point, delta);
+        candidates.push_back({delta,
+                              likelihood_slice ? point.likelihood_slice_objective : point.winner.objective,
+                              point.coordinates[0],
+                              point.coordinates[1],
+                              point.stage,
+                              point.point_index,
+                              point_valid});
+        if (point.stage != 0) continue;
+        if (point.ix < 0 || point.ix >= nx || point.iy < 0 || point.iy >= ny) {
+          throw std::runtime_error("2D profile point index lies outside the configured coarse grid");
+        }
+        output.x_coordinates[static_cast<std::size_t>(point.ix)] = point.coordinates[0];
+        output.y_coordinates[static_cast<std::size_t>(point.iy)] = point.coordinates[1];
+        const std::size_t grid_index = flat(point.ix, point.iy);
+        output.status_codes[grid_index] = static_cast<int>(point.status) + 1;
+        if (point.status == profile_likelihood::PointStatus::kValid) ++output.profile_valid;
+        if (!point_valid) continue;
+        output.values[grid_index] = delta;
+        output.finite[grid_index] = true;
+        ++output.finite_count;
+        if (delta < 0.0) ++output.negative_count;
+        output.finite_min = std::isfinite(output.finite_min) ? std::min(output.finite_min, delta) : delta;
+        output.finite_max = std::isfinite(output.finite_max) ? std::max(output.finite_max, delta) : delta;
+      }
+      output.x_edges = profile_display_2d::BuildClippedEdges(
+          output.x_coordinates, scan.scan.lower[0], scan.scan.upper[0]);
+      output.y_edges = profile_display_2d::BuildClippedEdges(
+          output.y_coordinates, scan.scan.lower[1], scan.scan.upper[1]);
+      output.best = profile_display_2d::SelectBestPoint(candidates);
+      output.contours = profile_display_2d::BuildContours(
+          output.x_coordinates, output.y_coordinates, output.values, output.finite, contour_levels);
+      return output;
+    }
+
+    std::string FormatProfileDisplayNumber(const double value) {
+      if (!std::isfinite(value)) return "n/a";
+      std::ostringstream stream;
+      stream.imbue(std::locale::classic());
+      stream << std::setprecision(6) << value;
+      return stream.str();
+    }
+
+    bool InClosedRange(const double value, const double lower, const double upper) {
+      return (value > lower || NearlyEqual(value, lower, 1.0e-10))
+             && (value < upper || NearlyEqual(value, upper, 1.0e-10));
+    }
+
+    std::string DescribeProfileBestBoundary(const profile_display_2d::BestCandidate &best,
+                                            const ResolvedProfileScan &scan) {
+      std::vector<std::string> descriptions;
+      const std::array<double, 2> coordinates = {best.x, best.y};
+      for (std::size_t axis = 0; axis < coordinates.size(); ++axis) {
+        const bool at_scan = NearlyEqual(coordinates[axis], scan.lower[axis], 1.0e-10)
+                             || NearlyEqual(coordinates[axis], scan.upper[axis], 1.0e-10);
+        const bool at_fit = (std::isfinite(scan.fit_lower[axis])
+                             && NearlyEqual(coordinates[axis], scan.fit_lower[axis], 1.0e-10))
+                            || (std::isfinite(scan.fit_upper[axis])
+                                && NearlyEqual(coordinates[axis], scan.fit_upper[axis], 1.0e-10));
+        if (at_fit) descriptions.push_back("axis " + std::to_string(axis + 1U) + " fit hard boundary");
+        else if (at_scan) descriptions.push_back("axis " + std::to_string(axis + 1U) + " scan subrange boundary");
+      }
+      if (descriptions.empty()) return "interior to resolved scan";
+      std::string joined;
+      for (const std::string &description : descriptions) joined += (joined.empty() ? "" : "; ") + description;
+      return joined;
+    }
+
+    int ProfileStatusColor(const int code) {
+      switch (code) {
+        case 1: return kGreen + 2;
+        case 2: return kOrange + 7;
+        case 3: return kRed + 1;
+        case 4: return kMagenta + 1;
+        case 5: return kBlue + 1;
+        case 6: return kGray + 2;
+        default: return kGray;
+      }
+    }
+
+    std::unique_ptr<TGraph> MakeProfileBestMarker(const char *name,
+                                                  const char *title,
+                                                  const std::optional<profile_display_2d::BestCandidate> &best) {
+      if (!best) return nullptr;
+      auto marker = MakeSinglePointGraph(name, title, best->x, best->y, kRed + 1, 24);
+      if (marker) marker->SetMarkerSize(1.5);
+      return marker;
+    }
+
+    void WriteProfile2DCanvas(const char *name,
+                              const char *title,
+                              const ProfileDisplay2DData &data,
+                              const ProfileSliceScanOutput &scan,
+                              const ProfileSliceOutput &slice_output,
+                              const std::string &slice_id,
+                              const std::vector<double> &contour_levels,
+                              const std::string &quantity_name,
+                              const std::string &z_title,
+                              const bool full_range,
+                              const bool show_status,
+                              TGraph *nominal_marker,
+                              TGraph *best_marker) {
+      const int nx = static_cast<int>(data.x_coordinates.size());
+      const int ny = static_cast<int>(data.y_coordinates.size());
+      const std::string x_title = ProfileParameterLabel(scan.scan.config->parameters[0]);
+      const std::string y_title = ProfileParameterLabel(scan.scan.config->parameters[1]);
+      const double threshold_max = contour_levels.empty()
+                                       ? 1.0
+                                       : *std::max_element(contour_levels.begin(), contour_levels.end());
+      double display_min = full_range ? data.finite_min : 0.0;
+      double display_max = full_range ? data.finite_max : threshold_max;
+      if (data.finite_count == 0U) {
+        display_min = 0.0;
+        display_max = 1.0;
+      } else if (!(display_max > display_min)) {
+        const double margin = 0.01 * std::max(1.0, std::abs(display_min));
+        display_min -= margin;
+        display_max += margin;
+      }
+
+      auto canvas = std::make_unique<TCanvas>(name, title, show_status ? 1500 : 1100, 950);
+      if (show_status) canvas->Divide(2, 1);
+      canvas->cd(1);
+      if (gPad != nullptr) {
+        gPad->SetLeftMargin(0.13);
+        // The single-panel slice may show long full-range decimal labels; its
+        // wider color-bar margin keeps both labels and the semantic Z title visible.
+        gPad->SetRightMargin(show_status ? 0.16 : 0.29);
+        // Reserve the lower canvas area for the persisted semantic contract;
+        // keeping it outside the heatmap avoids hiding sparse or invalid cells.
+        gPad->SetBottomMargin(0.39);
+      }
+      auto frame = std::make_unique<TH2D>((std::string(name) + "_Frame").c_str(),
+                                          (quantity_name + ";" + x_title + ";" + y_title).c_str(),
+                                          nx, data.x_edges.data(), ny, data.y_edges.data());
+      frame->SetDirectory(nullptr);
+      frame->SetStats(false);
+      frame->GetXaxis()->SetTitle(x_title.c_str());
+      frame->GetYaxis()->SetTitle(y_title.c_str());
+      frame->GetZaxis()->SetTitle(z_title.c_str());
+      frame->GetXaxis()->CenterTitle(true);
+      frame->GetYaxis()->CenterTitle(true);
+      frame->GetXaxis()->SetNdivisions(505);
+      frame->GetYaxis()->SetNdivisions(505);
+      std::unique_ptr<TH2D> color_map;
+      if (data.finite_count > 0U) {
+        color_map = std::make_unique<TH2D>((std::string(name) + "_ColorMap").c_str(),
+                                           (quantity_name + ";" + x_title + ";" + y_title + ";" + z_title).c_str(),
+                                           nx, data.x_edges.data(), ny, data.y_edges.data());
+        color_map->SetDirectory(nullptr);
+        color_map->SetStats(false);
+        color_map->GetXaxis()->CenterTitle(true);
+        color_map->GetYaxis()->CenterTitle(true);
+        color_map->GetXaxis()->SetNdivisions(505);
+        color_map->GetYaxis()->SetNdivisions(505);
+        color_map->GetZaxis()->SetTitleOffset(show_status ? 1.15 : 2.10);
+        for (int iy = 0; iy < ny; ++iy) {
+          for (int ix = 0; ix < nx; ++ix) {
+            const std::size_t index = static_cast<std::size_t>(iy * nx + ix);
+            double value = data.finite[index] ? data.values[index] : display_min;
+            if (!full_range) value = std::max(display_min, std::min(display_max, value));
+            color_map->SetBinContent(ix + 1, iy + 1, value);
+          }
+        }
+        color_map->SetMinimum(display_min);
+        color_map->SetMaximum(display_max);
+        color_map->Draw("COLZ");
+      } else {
+        frame->Draw("AXIS");
+      }
+
+      std::vector<std::unique_ptr<TBox>> invalid_boxes;
+      for (int iy = 0; iy < ny; ++iy) {
+        for (int ix = 0; ix < nx; ++ix) {
+          const std::size_t index = static_cast<std::size_t>(iy * nx + ix);
+          if (data.finite[index]) continue;
+          auto box = std::make_unique<TBox>(data.x_edges[static_cast<std::size_t>(ix)],
+                                            data.y_edges[static_cast<std::size_t>(iy)],
+                                            data.x_edges[static_cast<std::size_t>(ix + 1)],
+                                            data.y_edges[static_cast<std::size_t>(iy + 1)]);
+          box->SetFillColor(kGray + 1);
+          box->SetLineColor(kGray + 1);
+          box->Draw("SAME");
+          invalid_boxes.push_back(std::move(box));
+        }
+      }
+
+      std::vector<std::unique_ptr<TGraph>> contour_graphs;
+      for (std::size_t level_index = 0; level_index < data.contours.size(); ++level_index) {
+        for (std::size_t segment_index = 0;
+             segment_index < data.contours[level_index].segments.size(); ++segment_index) {
+          const profile_display_2d::Segment2D &segment = data.contours[level_index].segments[segment_index];
+          auto graph = std::make_unique<TGraph>(2);
+          graph->SetName((std::string(name) + "_Contour_" + std::to_string(level_index)
+                          + "_" + std::to_string(segment_index)).c_str());
+          graph->SetPoint(0, segment.first.x, segment.first.y);
+          graph->SetPoint(1, segment.second.x, segment.second.y);
+          graph->SetLineColor(static_cast<int>(kBlack + level_index % 4U));
+          graph->SetLineStyle(1 + static_cast<int>(level_index % 3U));
+          graph->SetLineWidth(2);
+          graph->Draw("L SAME");
+          contour_graphs.push_back(std::move(graph));
+        }
+      }
+      if (nominal_marker) nominal_marker->Draw("P SAME");
+      if (best_marker) best_marker->Draw("P SAME");
+
+      auto legend = std::make_unique<TLegend>(0.58, 0.82, 0.88, 0.93);
+      legend->SetName((std::string(name) + "_MarkerLegend").c_str());
+      legend->SetBorderSize(0);
+      legend->SetFillStyle(0);
+      if (nominal_marker) legend->AddEntry(nominal_marker, "Nominal", "p");
+      if (best_marker) legend->AddEntry(best_marker, "Best scan point", "p");
+      if (legend->GetNRows() > 0) legend->Draw();
+
+      auto note = std::make_unique<TPaveText>(0.02, 0.01, 0.98, 0.31, "NDC");
+      note->SetName((std::string(name) + "_Annotation").c_str());
+      note->SetFillColorAlpha(kWhite, 0.86);
+      note->SetBorderSize(1);
+      note->SetTextAlign(12);
+      note->SetTextSize(0.017);
+      note->AddText(("slice=" + slice_id + "; scan=" + scan.scan.config->id).c_str());
+      note->AddText(quantity_name.c_str());
+      note->AddText(("reference=" + slice_output.reference_source).c_str());
+      if (data.finite_count > 0U) {
+        note->AddText(("coarse finite range=[" + FormatProfileDisplayNumber(data.finite_min) + ", "
+                       + FormatProfileDisplayNumber(data.finite_max) + "]").c_str());
+      } else {
+        note->AddText(std::isfinite(slice_output.reference_objective)
+                          ? "no finite display values"
+                          : "no finite display values: common reference unavailable");
+      }
+      if (show_status) {
+        note->AddText(("coarse total=" + std::to_string(data.coarse_total)
+                       + ", status valid=" + std::to_string(data.profile_valid)
+                       + ", finite delta=" + std::to_string(data.finite_count)
+                       + ", failed=" + std::to_string(data.coarse_total - data.profile_valid)).c_str());
+      } else {
+        note->AddText(("coarse total=" + std::to_string(data.coarse_total)
+                       + ", slice finite=" + std::to_string(data.finite_count)
+                       + ", unavailable=" + std::to_string(data.coarse_total - data.finite_count)).c_str());
+      }
+      if (!full_range) {
+        note->AddText(("display range=[0, " + FormatProfileDisplayNumber(threshold_max)
+                       + "]; saturated only in color mapping").c_str());
+      }
+      if (data.negative_count > 0U) {
+        note->AddText((std::to_string(data.negative_count) + " finite values below display lower bound").c_str());
+      }
+      if (data.best) {
+        note->AddText(("best stage=" + std::to_string(data.best->stage)
+                       + ", point=" + std::to_string(data.best->point_index)
+                       + ", (" + FormatProfileDisplayNumber(data.best->x) + ", "
+                       + FormatProfileDisplayNumber(data.best->y) + ")").c_str());
+        note->AddText(("best objective=" + FormatProfileDisplayNumber(data.best->objective)
+                       + ", delta=" + FormatProfileDisplayNumber(data.best->delta)).c_str());
+        note->AddText(DescribeProfileBestBoundary(*data.best, scan.scan).c_str());
+      } else {
+        note->AddText("best unavailable; no marker fabricated");
+      }
+      if (nominal_marker) {
+        double nominal_x = 0.0;
+        double nominal_y = 0.0;
+        nominal_marker->GetPoint(0, nominal_x, nominal_y);
+        const bool clipped = !InClosedRange(nominal_x, scan.scan.lower[0], scan.scan.upper[0])
+                             || !InClosedRange(nominal_y, scan.scan.lower[1], scan.scan.upper[1]);
+        note->AddText(("nominal=(" + FormatProfileDisplayNumber(nominal_x) + ", "
+                       + FormatProfileDisplayNumber(nominal_y) + ")"
+                       + (clipped ? "; clipped by frame" : "")).c_str());
+        const double nominal_delta = std::isfinite(slice_output.reference_objective)
+                                         ? slice_output.nominal_objective - slice_output.reference_objective
+                                         : std::numeric_limits<double>::quiet_NaN();
+        note->AddText(("nominal objective=" + FormatProfileDisplayNumber(slice_output.nominal_objective)
+                       + ", delta=" + FormatProfileDisplayNumber(nominal_delta)).c_str());
+      } else {
+        note->AddText("nominal unavailable");
+      }
+      for (const profile_display_2d::ContourLevel &contour : data.contours) {
+        std::string contour_status;
+        if (!contour.segments.empty()) contour_status = "drawn";
+        else if (contour.supported_cell_count == 0U) contour_status = "no complete valid cell supports it";
+        else contour_status = "finite field did not cross threshold";
+        note->AddText(("contour " + FormatProfileDisplayNumber(contour.level) + ": " + contour_status).c_str());
+      }
+      if (scan.result.refinement_performed) {
+        note->AddText("heatmap/contour are coarse; refined points remain in ProfilePoints");
+      }
+      note->AddText("diagnostic only; no confidence-level interpretation");
+      note->Draw();
+
+      std::unique_ptr<TH2D> status_frame;
+      std::vector<std::unique_ptr<TBox>> status_boxes;
+      std::vector<std::unique_ptr<TBox>> status_samples;
+      std::unique_ptr<TLegend> status_legend;
+      if (show_status) {
+        canvas->cd(2);
+        if (gPad != nullptr) {
+          gPad->SetLeftMargin(0.13);
+          gPad->SetRightMargin(0.05);
+          gPad->SetBottomMargin(0.12);
+        }
+        status_frame = std::make_unique<TH2D>((std::string(name) + "_StatusFrame").c_str(),
+                                              ("Profile minimization status;" + x_title + ";" + y_title).c_str(),
+                                              nx, data.x_edges.data(), ny, data.y_edges.data());
+        status_frame->SetDirectory(nullptr);
+        status_frame->SetStats(false);
+        status_frame->GetXaxis()->CenterTitle(true);
+        status_frame->GetYaxis()->CenterTitle(true);
+        status_frame->GetXaxis()->SetNdivisions(505);
+        status_frame->GetYaxis()->SetNdivisions(505);
+        status_frame->Draw("AXIS");
+        for (int iy = 0; iy < ny; ++iy) {
+          for (int ix = 0; ix < nx; ++ix) {
+            const int code = data.status_codes[static_cast<std::size_t>(iy * nx + ix)];
+            auto box = std::make_unique<TBox>(data.x_edges[static_cast<std::size_t>(ix)],
+                                              data.y_edges[static_cast<std::size_t>(iy)],
+                                              data.x_edges[static_cast<std::size_t>(ix + 1)],
+                                              data.y_edges[static_cast<std::size_t>(iy + 1)]);
+            box->SetFillColor(ProfileStatusColor(code));
+            box->SetLineColor(kWhite);
+            box->Draw("SAME");
+            status_boxes.push_back(std::move(box));
+          }
+        }
+        status_frame->Draw("AXIS SAME");
+        if (nominal_marker) nominal_marker->Draw("P SAME");
+        if (best_marker) best_marker->Draw("P SAME");
+        status_legend = std::make_unique<TLegend>(0.57, 0.63, 0.94, 0.91);
+        status_legend->SetName((std::string(name) + "_StatusLegend").c_str());
+        status_legend->SetBorderSize(0);
+        status_legend->SetFillColorAlpha(kWhite, 0.86);
+        const std::array<const char *, 6> labels = {
+            "valid", "nonconverged", "minimizer error", "model-domain invalid",
+            "objective invalid", "no valid attempt"};
+        for (int code = 1; code <= 6; ++code) {
+          auto sample = std::make_unique<TBox>();
+          sample->SetFillColor(ProfileStatusColor(code));
+          status_legend->AddEntry(sample.get(), labels[static_cast<std::size_t>(code - 1)], "f");
+          status_samples.push_back(std::move(sample));
+        }
+        status_legend->Draw();
+      }
+      canvas->Write();
+    }
+
     void WriteProfileDisplay(TDirectory &directory,
                              const ProfileSliceScanOutput &scan,
                              const ProfileSliceOutput &slice_output,
@@ -4325,7 +4782,7 @@ namespace exp_femto_3d {
         profile->SetName("Profile1D");
         profile->SetTitle(("Profile likelihood;" + ProfileParameterLabel(config.parameters[0]) + ";" + y_title).c_str());
         StyleProfileGraph(*profile, kBlue + 1, 20);
-        profile->GetXaxis()->SetLimits(scan.scan.lower[0], scan.scan.upper[0]);
+        ApplyResolvedProfileXAxisLimits(*profile, scan.scan.lower[0], scan.scan.upper[0]);
         profile->SetMinimum(0.0);
         profile->SetMaximum(y_max);
         profile->Write();
@@ -4336,6 +4793,7 @@ namespace exp_femto_3d {
                            + ";" + y_title)
                               .c_str());
           StyleProfileGraph(*slice, kGray + 2, 25);
+          ApplyResolvedProfileXAxisLimits(*slice, scan.scan.lower[0], scan.scan.upper[0]);
           slice->Write();
           slice_for_canvas = std::move(slice);
         }
@@ -4349,17 +4807,33 @@ namespace exp_femto_3d {
                                      : std::numeric_limits<double>::quiet_NaN();
         auto nominal_marker = MakeSinglePointGraph(
             "NominalPoint", "Nominal point", nominal_x, nominal_y, kBlack, 29);
-        if (nominal_marker) nominal_marker->Write();
+        if (nominal_marker) {
+          ApplyResolvedProfileXAxisLimits(*nominal_marker, scan.scan.lower[0], scan.scan.upper[0]);
+          nominal_marker->Write();
+        }
 
+        // A detached frame fixes the canvas domain even if every profile minimization failed.
+        auto frame = std::make_unique<TH1D>(
+            "Canvas_1D_Frame",
+            ("Profile likelihood;" + ProfileParameterLabel(config.parameters[0]) + ";" + y_title).c_str(),
+            1,
+            scan.scan.lower[0],
+            scan.scan.upper[0]);
+        frame->SetDirectory(nullptr);
+        frame->SetStats(false);
+        frame->SetMinimum(0.0);
+        frame->SetMaximum(y_max);
         auto canvas = std::make_unique<TCanvas>("Canvas_1D", "Profile likelihood diagnostic only", 850, 650);
-        profile->Draw("ALP");
+        frame->Draw("AXIS");
+        if (profile->GetN() > 0) profile->Draw("LP SAME");
         if (slice_for_canvas && slice_for_canvas->GetN() > 0) slice_for_canvas->Draw("LP SAME");
         if (nominal_marker) nominal_marker->Draw("P SAME");
         auto legend = std::make_unique<TLegend>(0.58, 0.73, 0.88, 0.88);
-        legend->SetBorderSize(0); legend->AddEntry(profile.get(), "Profile", "l");
+        legend->SetBorderSize(0);
+        if (profile->GetN() > 0) legend->AddEntry(profile.get(), "Profile", "l");
         if (slice_for_canvas && slice_for_canvas->GetN() > 0) legend->AddEntry(slice_for_canvas.get(), "Slice", "l");
         if (nominal_marker) legend->AddEntry(nominal_marker.get(), "Nominal", "p");
-        legend->Draw();
+        if (legend->GetNRows() > 0) legend->Draw();
         auto diagnostic_note = std::make_unique<TPaveText>(0.14, 0.86, 0.50, 0.92, "NDC");
         diagnostic_note->SetName("DiagnosticOnlyNote");
         diagnostic_note->SetFillStyle(0);
@@ -4367,6 +4841,16 @@ namespace exp_femto_3d {
         diagnostic_note->SetTextAlign(12);
         diagnostic_note->AddText("diagnostic only; no confidence-level interpretation");
         diagnostic_note->Draw();
+        std::unique_ptr<TPaveText> no_valid_points_note;
+        if (profile->GetN() == 0) {
+          no_valid_points_note = std::make_unique<TPaveText>(0.14, 0.77, 0.50, 0.83, "NDC");
+          no_valid_points_note->SetName("NoValidProfilePointsNote");
+          no_valid_points_note->SetFillStyle(0);
+          no_valid_points_note->SetBorderSize(0);
+          no_valid_points_note->SetTextAlign(12);
+          no_valid_points_note->AddText("no valid profile points; see ProfilePoints/AttemptPoints");
+          no_valid_points_note->Draw();
+        }
         canvas->Write();
         // Named nuisance trajectories remain directly inspectable without duplicate p<N> aliases.
         const std::size_t physical_parameter_count = model == FitModel::kFull ? 10U : 7U;
@@ -4391,103 +4875,107 @@ namespace exp_femto_3d {
                                      .c_str());
             StyleProfileGraph(*trajectory, static_cast<int>(kAzure + (parameter % 7U)), 20 + static_cast<int>(parameter % 10U));
             trajectory->Sort();
+            ApplyResolvedProfileXAxisLimits(*trajectory, scan.scan.lower[0], scan.scan.upper[0]);
             trajectory->Write();
           }
         }
       } else {
-        std::vector<double> x_centers;
-        std::vector<double> y_centers;
-        for (const auto &point : scan.result.points) {
-          if (point.stage != 0 || point.coordinates.size() < 2U) continue;
-          x_centers.push_back(point.coordinates[0]);
-          y_centers.push_back(point.coordinates[1]);
-        }
-        std::vector<double> x_edges = MakeCenteredEdges(x_centers);
-        std::vector<double> y_edges = MakeCenteredEdges(y_centers);
-        if (x_edges.size() < 2U || y_edges.size() < 2U) {
-          x_edges = {scan.scan.lower[0], scan.scan.upper[0]};
-          y_edges = {scan.scan.lower[1], scan.scan.upper[1]};
-        }
-        const int nx = static_cast<int>(x_edges.size() - 1U);
-        const int ny = static_cast<int>(y_edges.size() - 1U);
+        const ProfileDisplay2DData profile_data = BuildProfileDisplay2DData(scan, contour_levels, false);
+        const std::string display_slice_id = directory.GetMotherDir() != nullptr
+                                                 ? directory.GetMotherDir()->GetName()
+                                                 : "unknown";
+        const int nx = static_cast<int>(profile_data.x_coordinates.size());
+        const int ny = static_cast<int>(profile_data.y_coordinates.size());
         auto delta = std::make_unique<TH2D>(
             "DeltaNeg2LogL2D",
-            ("diagnostic only; no confidence-level interpretation;" + ProfileParameterLabel(config.parameters[0])
-             + ";" + ProfileParameterLabel(config.parameters[1]) + ";" + y_title)
-                .c_str(),
-            nx,
-            x_edges.data(),
-            ny,
-            y_edges.data());
+            ("Profile likelihood diagnostic;" + ProfileParameterLabel(config.parameters[0])
+             + ";" + ProfileParameterLabel(config.parameters[1]) + ";" + y_title).c_str(),
+            nx, profile_data.x_edges.data(), ny, profile_data.y_edges.data());
+        delta->SetStats(false);
+        delta->GetXaxis()->SetTitle(ProfileParameterLabel(config.parameters[0]).c_str());
+        delta->GetYaxis()->SetTitle(ProfileParameterLabel(config.parameters[1]).c_str());
+        delta->GetZaxis()->SetTitle(y_title.c_str());
         auto status = std::make_unique<TH2I>(
             "PointStatus2D",
-            ("Point status;" + ProfileParameterLabel(config.parameters[0]) + ";" + ProfileParameterLabel(config.parameters[1]))
-                .c_str(),
-            nx,
-            x_edges.data(),
-            ny,
-            y_edges.data());
+            ("Profile minimization status;" + ProfileParameterLabel(config.parameters[0])
+             + ";" + ProfileParameterLabel(config.parameters[1]) + ";status code").c_str(),
+            nx, profile_data.x_edges.data(), ny, profile_data.y_edges.data());
+        status->SetStats(false);
+        status->GetXaxis()->SetTitle(ProfileParameterLabel(config.parameters[0]).c_str());
+        status->GetYaxis()->SetTitle(ProfileParameterLabel(config.parameters[1]).c_str());
         status->GetZaxis()->SetTitle(
             "1 valid; 2 nonconverged; 3 minimizer error; 4 model domain invalid; 5 objective invalid; 6 no valid attempt");
-        for (int bx = 1; bx <= nx; ++bx) {
-          for (int by = 1; by <= ny; ++by) {
-            delta->SetBinContent(bx, by, std::numeric_limits<double>::quiet_NaN());
+        for (int iy = 0; iy < ny; ++iy) {
+          for (int ix = 0; ix < nx; ++ix) {
+            const std::size_t index = static_cast<std::size_t>(iy * nx + ix);
+            delta->SetBinContent(ix + 1, iy + 1,
+                                 profile_data.finite[index]
+                                     ? profile_data.values[index]
+                                     : std::numeric_limits<double>::quiet_NaN());
+            status->SetBinContent(ix + 1, iy + 1, profile_data.status_codes[index]);
           }
         }
-        for (std::size_t index = 0; index < scan.result.points.size(); ++index) {
-          const auto &point = scan.result.points[index];
-          if (point.coordinates.size() < 2U) continue;
-          if (point.stage == 0) {
-            const int bx = point.ix + 1;
-            const int by = point.iy + 1;
-            // Store one-based status codes so valid samples are distinguishable from an unwritten bin.
-            status->SetBinContent(bx, by, static_cast<int>(point.status) + 1);
-            if (HasValidDelta(point, scan.deltas[index])) {
-              delta->SetBinContent(bx, by, scan.deltas[index]);
-            }
-          }
-        }
-        if (!contour_levels.empty()) {
-          delta->SetContour(static_cast<int>(contour_levels.size()), contour_levels.data());
-        }
-        delta->Write(); status->Write();
+        delta->Write();
+        status->Write();
+
         std::unique_ptr<TGraph> nominal_marker;
         if (slice_output.nominal_valid) {
           nominal_marker = MakeSinglePointGraph(
-              "NominalPoint",
-              "Nominal point",
-              !scan.scan.target_indices.empty()
-                  && static_cast<std::size_t>(scan.scan.target_indices[0]) < slice_output.nominal_values.size()
+              "NominalPoint", "Nominal point",
+              static_cast<std::size_t>(scan.scan.target_indices[0]) < slice_output.nominal_values.size()
                   ? slice_output.nominal_values[static_cast<std::size_t>(scan.scan.target_indices[0])]
                   : std::numeric_limits<double>::quiet_NaN(),
-              scan.scan.target_indices.size() > 1U
-                  && static_cast<std::size_t>(scan.scan.target_indices[1]) < slice_output.nominal_values.size()
+              static_cast<std::size_t>(scan.scan.target_indices[1]) < slice_output.nominal_values.size()
                   ? slice_output.nominal_values[static_cast<std::size_t>(scan.scan.target_indices[1])]
                   : std::numeric_limits<double>::quiet_NaN(),
-              kBlack,
-              29);
+              kBlack, 29);
         }
         if (nominal_marker) nominal_marker->Write();
-        auto canvas = std::make_unique<TCanvas>("Canvas_2D", "Profile likelihood diagnostic only", 850, 700);
-        delta->Draw("COLZ");
-        if (!contour_levels.empty()) {
-          delta->Draw("CONT3 SAME");
+        auto best_profile = MakeProfileBestMarker(
+            "BestProfileGridPoint", "Best finite profile scan point", profile_data.best);
+        if (best_profile) best_profile->Write();
+        WriteProfile2DCanvas("Canvas_2D", "Profile likelihood diagnostic only",
+                             profile_data, scan, slice_output, display_slice_id, contour_levels,
+                             "profile likelihood", y_title, false, true,
+                             nominal_marker.get(), best_profile.get());
+        WriteProfile2DCanvas("Canvas_2D_FullRange", "Profile likelihood full finite range",
+                             profile_data, scan, slice_output, display_slice_id, contour_levels,
+                             "profile likelihood", y_title, true, true,
+                             nominal_marker.get(), best_profile.get());
+
+        if (write_likelihood_slice) {
+          const ProfileDisplay2DData slice_data = BuildProfileDisplay2DData(scan, contour_levels, true);
+          auto slice_delta = std::make_unique<TH2D>(
+              "SliceDeltaNeg2LogL2D",
+              ("Fixed-nuisance likelihood slice;" + ProfileParameterLabel(config.parameters[0])
+               + ";" + ProfileParameterLabel(config.parameters[1]) + ";" + y_title).c_str(),
+              nx, slice_data.x_edges.data(), ny, slice_data.y_edges.data());
+          slice_delta->SetStats(false);
+          slice_delta->GetXaxis()->SetTitle(ProfileParameterLabel(config.parameters[0]).c_str());
+          slice_delta->GetYaxis()->SetTitle(ProfileParameterLabel(config.parameters[1]).c_str());
+          slice_delta->GetZaxis()->SetTitle(y_title.c_str());
+          for (int iy = 0; iy < ny; ++iy) {
+            for (int ix = 0; ix < nx; ++ix) {
+              const std::size_t index = static_cast<std::size_t>(iy * nx + ix);
+              slice_delta->SetBinContent(ix + 1, iy + 1,
+                                         slice_data.finite[index]
+                                             ? slice_data.values[index]
+                                             : std::numeric_limits<double>::quiet_NaN());
+            }
+          }
+          slice_delta->Write();
+          auto best_slice = MakeProfileBestMarker(
+              "BestSliceGridPoint", "Best finite fixed-nuisance slice point", slice_data.best);
+          if (best_slice) best_slice->Write();
+          WriteProfile2DCanvas("Canvas_Slice2D", "Fixed-nuisance likelihood slice diagnostic only",
+                               slice_data, scan, slice_output, display_slice_id, contour_levels,
+                               "fixed-nuisance likelihood slice", y_title, false, false,
+                               nominal_marker.get(), best_slice.get());
+          WriteProfile2DCanvas("Canvas_Slice2D_FullRange", "Fixed-nuisance slice full finite range",
+                               slice_data, scan, slice_output, display_slice_id, contour_levels,
+                               "fixed-nuisance likelihood slice", y_title, true, false,
+                               nominal_marker.get(), best_slice.get());
         }
-        if (nominal_marker) nominal_marker->Draw("P SAME");
-        if (nominal_marker) {
-          auto legend = std::make_unique<TLegend>(0.68, 0.82, 0.88, 0.88);
-          legend->SetBorderSize(0);
-          legend->AddEntry(nominal_marker.get(), "Nominal", "p");
-          legend->Draw();
-        }
-        auto diagnostic_note = std::make_unique<TPaveText>(0.14, 0.86, 0.58, 0.92, "NDC");
-        diagnostic_note->SetName("DiagnosticOnlyNote");
-        diagnostic_note->SetFillStyle(0);
-        diagnostic_note->SetBorderSize(0);
-        diagnostic_note->SetTextAlign(12);
-        diagnostic_note->AddText("diagnostic only; no confidence-level interpretation");
-        diagnostic_note->Draw();
-        canvas->Write();
       }
     }
 
@@ -5266,7 +5754,8 @@ namespace exp_femto_3d {
       for (const SliceCatalogEntry *entry : profile_entries) {
         grouped[{entry->centrality_index, entry->mt_index, entry->qn_index}].push_back(entry);
       }
-      const std::string contract_digest = BuildProfileContractDigest(cf_root_path, config, model, profile_entries);
+      const std::string contract_digest = BuildProfileContractDigest(
+          cf_root_path, config, model, profile_entries, resolved_profile_scans);
       const std::string checkpoint_base = config.fit.profile_likelihood.checkpoint.enabled
                                               ? ResolvePath(config.output.output_directory,
                                                             config.fit.profile_likelihood.checkpoint.directory)

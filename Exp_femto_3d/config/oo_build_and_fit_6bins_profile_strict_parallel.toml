@@ -28,7 +28,7 @@ fit_report_directory = "/Users/allenzhou/Research_software/Code_base/Exp_femto_3
 # fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_nocol.root"
 # fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul.root"
 fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul_sel8_6phi.root"
-profile_root_name = "profile_likelihood_oo_6phi_strict_parallel.root"
+profile_root_name = "profile_likelihood_oo_6phi_strict_parallel_r2max64.root"
 # fit_report_root_name = "fit_report_3d_25ae_pass2_small_nonfold.root"
 log_level = "warn"
 
@@ -49,6 +49,18 @@ enabled = true
 
 [fit.parameters.alpha]
 fixed_value = 2.0
+
+[fit.parameters.rout2]
+min = 0.01
+max = 64.0
+
+[fit.parameters.rside2]
+min = 0.01
+max = 64.0
+
+[fit.parameters.rlong2]
+min = 0.01
+max = 64.0
 
 
 [fit]
@@ -79,13 +91,13 @@ hesse_strategy = "all_attempts"
 slice_scope = "fit_selection" # "listed" | "fit_selection"
 # slice_ids = ["replace_with_exact_slice_id"] # forbidden for fit_selection
 retry_strategy = "reference_and_bidirectional_neighbors"   # "reference_and_bidirectional_neighbors" | "reference_only"
-write_likelihood_slice = true  # "true" | "Slice1D"
+write_likelihood_slice = true  # Write fixed-nuisance Slice1D and Slice2D diagnostics.
 contour_levels = [1.0, 2.0, 4.0]
 
 [fit.profile_likelihood.checkpoint]
 enabled = true
 resume = true
-run_id = "oo_6phi_strict_parallel_v1"
+run_id = "oo_6phi_strict_parallel_r2max64_v1"
 directory = "profile_likelihood_strict_parallel.work"
 
 # [[fit.profile_likelihood.scans]]
@@ -166,9 +178,41 @@ refinement_points = [21]
 # refine = true
 # refinement_points = [21]
 
+# All six unordered pairs of lambda, rout2, rside2, and rlong2.
+# Axis order follows parameters; omitted min/max inherit the hard fit bounds.
 [[fit.profile_likelihood.scans]]
 id = "rout2_lambda"
 parameters = ["rout2", "lambda"]
+points = [21, 21]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "rside2_lambda"
+parameters = ["rside2", "lambda"]
+points = [21, 21]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "rlong2_lambda"
+parameters = ["rlong2", "lambda"]
+points = [21, 21]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "rout2_rside2"
+parameters = ["rout2", "rside2"]
+points = [21, 21]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "rout2_rlong2"
+parameters = ["rout2", "rlong2"]
+points = [21, 21]
+refine = false
+
+[[fit.profile_likelihood.scans]]
+id = "rside2_rlong2"
+parameters = ["rside2", "rlong2"]
 points = [21, 21]
 refine = false
 

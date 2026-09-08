@@ -2,6 +2,60 @@
 
 ## Latest Durable Handoff
 
+- configuration follow-up completed on 2026-09-07:
+  - strict-parallel now has four 1D scans plus all six 2D pairs of
+    `lambda`, `rout2`, `rside2`, and `rlong2`; each 2D scan uses an
+    unrefined `21 x 21` grid with inherited hard bounds
+  - removed the stale README statement that 2D display work remained deferred;
+    synchronized runner help and the configuration coverage assertions
+  - targeted config build/CTest passed 1/1 with O2Physics `PRIMARY_OK`;
+    no real profile job or full-suite rerun was performed for this follow-up
+  - adding scans changes the existing digest: earlier five-scan chunks are
+    incompatible even if their display contract is already v3; use a fresh
+    run ID if that old checkpoint generation exists
+
+- completed on 2026-09-07 (issue 2):
+  - added ROOT-independent `ProfileDisplay2D` geometry for clipped TH2 edges,
+    stable coarse/refined best selection, and four-corner-valid marching-squares
+  - replaced automatic NaN-contaminated contours with disconnected explicit
+    segments and added gray invalid masks plus a fixed six-category status panel
+  - added full-range profile canvases and independent 2D fixed-nuisance slice
+    matrices/canvases, with persisted reference/count/boundary/contour annotations
+  - advanced checkpoint compatibility to `display-contract-v3`; matching v3
+    resume passes and v2 sidecars are rejected
+  - O2Physics ROOT `PRIMARY_OK`; full CTest passed 8/8 in 47.52 s and six
+    closed/reopened toy canvases passed visual QA
+  - final code, physics-contract, and plot reviews found no unresolved blocker
+- operator-owned next steps:
+  - manually run the intended `_r2max64` OO profile configuration; do not reuse
+    a same-name v2 chunk (choose a new `_displayv3` run ID if needed)
+  - assess new-range real-data convergence separately; toy QA validates display
+    semantics, not production minimizer quality
+
+- completed on 2026-09-07:
+  - set the four OO profile tiers to hard diagonal-radius bounds
+    `[0.01,64.0] fm^2`, while preserving scout's explicit `[0.01,20.0]`
+    diagnostic scan subrange and the code-wide legacy `[0.01,400]` defaults
+  - versioned all four profile ROOT names and checkpoint `run_id`s with
+    `_r2max64`
+  - unified every persisted 1D graph and `Canvas_1D` on the resolved scan
+    range; empty valid-point sets now retain the axis and show an explicit
+    diagnostic note without fabricated points
+  - upgraded checkpoint reuse to hash effective parameter domains/fixed state,
+    fit/minimizer settings, and resolved scan ranges
+- verified:
+  - O2Physics ROOT executor build and full CTest passed 7/7 in 41.11 s with
+    `PRIMARY_OK`
+  - ROOT toy coverage reads catalogs, graphs, canvas frames, nuisance
+    trajectories, invalid-point trees, and inherited-bound checkpoint mismatch
+  - `git diff --check` passed
+- intentionally pending:
+  - the operator will run the real OO profile jobs manually
+  - convergence quality in the new `[0.01,64]` production range remains to be
+    assessed from that user-run output
+
+## Previous Durable Handoff
+
 - completed on 2026-09-05:
   - enabled `profile_only + process` for parent-side materialized
     `slice_scope="fit_selection"`; child workers are narrowed to their exact
@@ -89,7 +143,16 @@
     executor; all six registered tests passed in 32.06 seconds with
     `PRIMARY_OK`
 
-## Recommended Owner Action
+## Superseded Issue-1 Owner Action
+
+- rerun the desired OO profile tier manually; the new output/checkpoint
+  generation is identified by `_r2max64`, so the prior generation is preserved
+- interpret a best-fit radius at `64 fm^2` only as an optimum on the imposed
+  constraint boundary, not as a localized unconstrained minimum
+- the former instruction to defer 2D interpretation was completed by the
+  issue-2 handoff above; use the v3 canvases and annotations for new outputs
+
+## Previous Recommended Owner Action
 
 - inspect the all-selection strict contract without creating output:
 
