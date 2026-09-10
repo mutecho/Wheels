@@ -82,6 +82,48 @@ namespace {
     return path.string();
   }
 
+  std::string WriteSharedLambdaToyInput(const std::filesystem::path &path) {
+    TFile output(path.string().c_str(), "RECREATE");
+    auto *task = output.mkdir("task");
+    auto *same_dir = task->mkdir("Same");
+    auto *mixed_dir = task->mkdir("Mixed");
+    const int bins[7] = {6, 6, 6, 2, 2, 1, 4};
+    const double min[7] = {-0.15, -0.15, -0.15, 0.2, 0.0, -0.5, 0.0};
+    const double max[7] = {0.15, 0.15, 0.15, 0.6, 20.0, 0.5, TMath::Pi()};
+    auto same = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
+    auto mixed = std::make_unique<THnSparseF>("sparse", "sparse", 7, bins, min, max);
+    constexpr double lambda = 0.55;
+    constexpr double hbarc = 0.1973269804;
+    const std::vector<double> q = {-0.125, -0.075, -0.025, 0.025, 0.075, 0.125};
+    const std::vector<double> phi = {0.3, 1.1, 2.0, 2.8};
+    for (const double mt : {0.3, 0.5}) {
+      for (std::size_t phi_index = 0; phi_index < phi.size(); ++phi_index) {
+        const double mt_shift = mt > 0.4 ? 2.0 : 0.0;
+        const double rout2 = 18.0 + mt_shift + 1.5 * static_cast<double>(phi_index);
+        const double rside2 = 16.0 + mt_shift - 0.8 * static_cast<double>(phi_index);
+        const double rlong2 = 22.0 + mt_shift + 0.5 * static_cast<double>(phi_index);
+        for (const double qout : q) {
+          for (const double qside : q) {
+            for (const double qlong : q) {
+              const double argument = (rout2 * qout * qout + rside2 * qside * qside
+                                       + rlong2 * qlong * qlong) / (hbarc * hbarc);
+              const double ratio = 1.0 + lambda * std::exp(-argument);
+              const double mixed_count = 200.0;
+              FillSparse(*mixed, qout, qside, qlong, mt, 5.0, phi[phi_index], mixed_count);
+              FillSparse(*same, qout, qside, qlong, mt, 5.0, phi[phi_index], mixed_count * ratio);
+            }
+          }
+        }
+      }
+    }
+    same_dir->cd();
+    same->Write("sparse");
+    mixed_dir->cd();
+    mixed->Write("sparse");
+    output.Close();
+    return path.string();
+  }
+
   std::string WriteConfig(const std::filesystem::path &path,
                           const std::string &input_root,
                           const std::string &output_dir,
@@ -97,7 +139,8 @@ namespace {
                           const std::string &profile_likelihood_lines = "",
                           const std::string &profile_root_name = "profile_likelihood.root",
                           const bool fit_progress = false,
-                          const std::string &additional_selection_bins = "") {
+                          const std::string &additional_selection_bins = "",
+                          const bool split_mixed_event_by_phi = false) {
     std::ofstream output(path);
     output << "[input]\n";
     output << "input_root = \"" << input_root << "\"\n";
@@ -118,6 +161,7 @@ namespace {
     output << "map_pair_phi_to_symmetric_range = " << (build_map_pair_phi_to_symmetric_range ? "true" : "false") << "\n";
     output << "write_normalized_se_me_1d_projections = true\n";
     output << "reopen_output_file_per_slice = false\n";
+    output << "split_mixed_event_by_phi = " << (split_mixed_event_by_phi ? "true" : "false") << "\n";
     output << "progress = false\n\n";
     output << "[fit]\n";
     output << "model = \"full\"\n";
@@ -262,6 +306,239 @@ namespace {
            "fit report should include eps vs mt graph");
     Expect(report_file.Get("eps_vs_mt/cent_0.00-10.00/epsf_vs_mt_canvas") != nullptr,
            "fit report should include eps vs mt canvas");
+  }
+
+  void ExpectSharedLambdaOutputs(const std::filesystem::path &fit_root_path,
+                                 const std::filesystem::path &report_root_path) {
+    constexpr const char *group_id = "cent_0.00-10.00__mt_0.20-0.40";
+    TFile fit_file(fit_root_path.string().c_str(), "READ");
+    auto *catalog = dynamic_cast<TTree *>(fit_file.Get("meta/SharedLambdaFitCatalog"));
+    Expect(catalog != nullptr && catalog->GetEntries() == 1, "shared fit catalog must contain one toy group");
+    Expect(catalog->GetBranch("member_slice_ids") != nullptr
+               && catalog->GetBranch("parameter_labels") != nullptr
+               && catalog->GetBranch("parameter_errors_valid") != nullptr
+               && catalog->GetBranch("fit_mode") != nullptr
+               && catalog->GetBranch("objective_kind") != nullptr
+               && catalog->GetBranch("error_def") != nullptr
+               && catalog->GetBranch("covariance_conditioning") != nullptr,
+           "shared fit catalog contract is incomplete");
+    TTreeReader reader(catalog);
+    TTreeReaderValue<std::string> fit_mode(reader, "fit_mode");
+    TTreeReaderValue<std::string> objective_kind(reader, "objective_kind");
+    TTreeReaderValue<double> error_def(reader, "error_def");
+    TTreeReaderValue<std::string> covariance_conditioning(reader, "covariance_conditioning");
+    TTreeReaderValue<int> member_count(reader, "member_count");
+    TTreeReaderValue<int> free_parameters(reader, "free_parameters");
+    TTreeReaderValue<int> errors_valid(reader, "parameter_errors_valid");
+    TTreeReaderValue<double> objective(reader, "objective");
+    Expect(reader.Next(), "shared fit catalog row missing");
+    Expect(*fit_mode == "shared_phi" && *objective_kind == "neg2logl_pml"
+               && std::abs(*error_def - 1.0) < 1.0e-12
+               && *covariance_conditioning == "frozen_coulomb_kernel",
+           "shared fit statistic or covariance-conditioning metadata are wrong");
+    Expect(*member_count == 4 && *free_parameters == 29, "unexpected dynamic shared parameter count");
+    Expect(*errors_valid != 0, "dense shared toy must produce an accurate positive-definite covariance");
+
+    const std::string base = std::string("shared_lambda/") + group_id + "/";
+    auto *parameter_map = dynamic_cast<TTree *>(fit_file.Get((base + "ParameterMap").c_str()));
+    auto *member_map = dynamic_cast<TTree *>(fit_file.Get((base + "MemberParameterMap").c_str()));
+    auto *attempts = dynamic_cast<TTree *>(fit_file.Get((base + "AttemptPoints").c_str()));
+    auto *components = dynamic_cast<TTree *>(fit_file.Get((base + "ComponentObjectives").c_str()));
+    auto *covariance = dynamic_cast<TH2 *>(fit_file.Get((base + "Covariance").c_str()));
+    Expect(parameter_map != nullptr && parameter_map->GetEntries() == 29
+               && member_map != nullptr && member_map->GetEntries() == 40
+               && attempts != nullptr && attempts->GetEntries() == 3
+               && attempts->GetBranch("parameter_values") != nullptr
+               && components != nullptr && components->GetEntries() == 4
+               && covariance != nullptr && covariance->GetNbinsX() == 29,
+           "shared group parameter, attempt, component, or covariance objects are incomplete");
+    double component_sum = 0.0;
+    TTreeReader component_reader(components);
+    TTreeReaderValue<double> component_objective(component_reader, "objective");
+    while (component_reader.Next()) component_sum += *component_objective;
+    Expect(std::abs(component_sum - *objective) < 1.0e-7 * (1.0 + std::abs(*objective)),
+           "group objective must equal the saved member contribution sum");
+
+    auto *fit_catalog = dynamic_cast<TTree *>(fit_file.Get("meta/FitCatalog"));
+    Expect(fit_catalog != nullptr, "shared member FitCatalog missing");
+    TTreeReader fit_reader(fit_catalog);
+    TTreeReaderValue<int> is_phi_integrated(fit_reader, "is_phi_integrated");
+    TTreeReaderValue<std::string> lambda_mode(fit_reader, "lambda_mode");
+    TTreeReaderValue<std::string> shared_group(fit_reader, "shared_lambda_group_id");
+    TTreeReaderValue<double> lambda(fit_reader, "lambda");
+    TTreeReaderValue<double> lambda_error(fit_reader, "lambda_err");
+    TTreeReaderValue<int> ndf(fit_reader, "ndf");
+    double shared_value = std::numeric_limits<double>::quiet_NaN();
+    double shared_error = std::numeric_limits<double>::quiet_NaN();
+    int differential_rows = 0;
+    while (fit_reader.Next()) {
+      if (*is_phi_integrated != 0) continue;
+      ++differential_rows;
+      Expect(*lambda_mode == "shared_phi" && *shared_group == group_id && *ndf == -1,
+             "shared member association or ndf semantics are wrong");
+      if (!std::isfinite(shared_value)) {
+        shared_value = *lambda;
+        shared_error = *lambda_error;
+      } else {
+        Expect(std::abs(*lambda - shared_value) < 1.0e-12
+                   && std::abs(*lambda_error - shared_error) < 1.0e-12,
+               "all phi members must reference the same lambda and group HESSE error");
+      }
+    }
+    Expect(differential_rows == 4, "shared FitCatalog must retain every phi member");
+    auto *lambda_fit = dynamic_cast<TF1 *>(fit_file.Get(
+        (std::string("summary/R2_vs_phi/") + group_id + "/lambda_phi_fit").c_str()));
+    Expect(lambda_fit != nullptr && std::abs(lambda_fit->GetParameter(0) - shared_value) < 1.0e-12
+               && std::abs(lambda_fit->GetParError(0) - shared_error) < 1.0e-12,
+           "shared lambda summary must preserve the group error without a repeated-point refit");
+
+    TFile report_file(report_root_path.string().c_str(), "READ");
+    Expect(report_file.Get("meta/SharedLambdaFitCatalog") != nullptr
+               && report_file.Get((base + "Covariance").c_str()) != nullptr,
+           "fit report must mirror shared group metadata and covariance");
+    const std::string canvas_base =
+        "source_parameters/cent_0.00-10.00/mt_0.20-0.40/";
+    Expect(report_file.Get((canvas_base + "lambda_vs_phi_canvas").c_str()) != nullptr
+               && report_file.Get((canvas_base + "shared_lambda_center").c_str()) != nullptr
+               && report_file.Get((canvas_base + "shared_lambda_hesse_band").c_str()) != nullptr,
+           "shared lambda canvas, center line, or group HESSE band missing");
+  }
+
+  void ExpectCombinedProfileOutputs(const std::filesystem::path &fit_root_path,
+                                    const std::filesystem::path &report_root_path) {
+    constexpr const char *group_id = "cent_0.00-10.00__mt_0.20-0.40";
+    TFile fit_file(fit_root_path.string().c_str(), "READ");
+    auto *catalog = dynamic_cast<TTree *>(fit_file.Get("meta/SharedLambdaFitCatalog"));
+    Expect(catalog != nullptr && catalog->GetEntries() == 1,
+           "combined-profile catalog must contain one group");
+    TTreeReader reader(catalog);
+    TTreeReaderValue<std::string> fit_mode(reader, "fit_mode");
+    TTreeReaderValue<std::string> center_method(reader, "center_method");
+    TTreeReaderValue<std::string> covariance_method(reader, "covariance_method");
+    TTreeReaderValue<int> migrad_status(reader, "migrad_status");
+    TTreeReaderValue<int> scan_complete(reader, "scan_coverage_complete");
+    TTreeReaderValue<double> lambda_profile_min(reader, "lambda_profile_min");
+    Expect(reader.Next() && *fit_mode == "combined_profile" && *center_method == "combined_profile"
+               && *covariance_method == "joint_hesse_without_migrad" && *migrad_status == -2
+               && *scan_complete != 0 && std::isfinite(*lambda_profile_min),
+           "combined-profile provenance or no-MIGRAD contract is wrong");
+    const std::string base = std::string("combined_profile/") + group_id + "/";
+    auto *stages = dynamic_cast<TTree *>(fit_file.Get((base + "StageCatalog").c_str()));
+    auto *combined = dynamic_cast<TTree *>(fit_file.Get((base + "CombinedProfilePoints").c_str()));
+    auto *profiles = dynamic_cast<TTree *>(fit_file.Get((base + "ProfilePoints").c_str()));
+    auto *attempts = dynamic_cast<TTree *>(fit_file.Get((base + "AttemptPoints").c_str()));
+    Expect(stages != nullptr && stages->GetEntries() >= 1
+               && combined != nullptr && combined->GetEntries() >= 9
+               && profiles != nullptr && profiles->GetEntries() >= 36
+               && attempts != nullptr && attempts->GetEntries() >= profiles->GetEntries(),
+           "combined-profile stage, point, member, or attempt trace is incomplete");
+    Expect(fit_file.Get((base + "CombinedProfileCanvas").c_str()) != nullptr
+               && fit_file.Get((base + "CombinedProfile").c_str()) != nullptr
+               && fit_file.Get((base + "MemberProfile_0").c_str()) != nullptr
+               && fit_file.Get((base + "SharedLambdaCenter").c_str()) != nullptr,
+           "combined/member profile overlay or shared-lambda marker is missing");
+    auto *fit_catalog = dynamic_cast<TTree *>(fit_file.Get("meta/FitCatalog"));
+    TTreeReader fit_reader(fit_catalog);
+    TTreeReaderValue<int> is_phi_integrated(fit_reader, "is_phi_integrated");
+    TTreeReaderValue<std::string> lambda_mode(fit_reader, "lambda_mode");
+    TTreeReaderValue<int> ndf(fit_reader, "ndf");
+    int members = 0;
+    while (fit_reader.Next()) {
+      if (*is_phi_integrated != 0) continue;
+      ++members;
+      Expect(*lambda_mode == "combined_profile" && *ndf == -1,
+             "combined-profile member association or ndf is wrong");
+    }
+    Expect(members == 4, "combined-profile output must retain every phi member");
+    TFile report_file(report_root_path.string().c_str(), "READ");
+    Expect(report_file.Get((base + "CombinedProfilePoints").c_str()) != nullptr,
+           "combined-profile report must retain the numerical profile trace");
+  }
+
+  void ExpectTwoGroupCombinedProcessOutput(const std::filesystem::path &fit_root_path) {
+    TFile file(fit_root_path.string().c_str(), "READ");
+    auto *catalog = dynamic_cast<TTree *>(file.Get("meta/SharedLambdaFitCatalog"));
+    Expect(catalog != nullptr && catalog->GetEntries() == 2,
+           "two-group process merge must contain exactly two group rows");
+    for (const std::string &group : {"cent_0.00-10.00__mt_0.20-0.40",
+                                     "cent_0.00-10.00__mt_0.40-0.60"}) {
+      const std::string base = "combined_profile/" + group + "/";
+      Expect(file.Get((base + "StageCatalog").c_str()) != nullptr
+                 && file.Get((base + "CombinedProfilePoints").c_str()) != nullptr
+                 && file.Get(("shared_lambda/" + group + "/Covariance").c_str()) != nullptr,
+             "process merge omitted a group trace or covariance: " + group);
+    }
+  }
+
+  struct SharedGroupNumerics {
+    double objective = std::numeric_limits<double>::quiet_NaN();
+    std::vector<double> values;
+    std::vector<double> errors;
+    std::vector<double> covariance;
+  };
+
+  SharedGroupNumerics ReadSharedGroupNumerics(const std::filesystem::path &path,
+                                               const std::string &expected_group) {
+    TFile file(path.string().c_str(), "READ");
+    auto *catalog = dynamic_cast<TTree *>(file.Get("meta/SharedLambdaFitCatalog"));
+    std::string *group_id = nullptr;
+    double objective = std::numeric_limits<double>::quiet_NaN();
+    catalog->SetBranchAddress("group_id", &group_id);
+    catalog->SetBranchAddress("objective", &objective);
+    SharedGroupNumerics result;
+    for (Long64_t row = 0; row < catalog->GetEntries(); ++row) {
+      catalog->GetEntry(row);
+      if (group_id != nullptr && *group_id == expected_group) result.objective = objective;
+    }
+    const std::string base = "shared_lambda/" + expected_group + "/";
+    auto *parameters = dynamic_cast<TTree *>(file.Get((base + "ParameterMap").c_str()));
+    double value = std::numeric_limits<double>::quiet_NaN();
+    double error = std::numeric_limits<double>::quiet_NaN();
+    parameters->SetBranchAddress("value", &value);
+    parameters->SetBranchAddress("error", &error);
+    for (Long64_t row = 0; row < parameters->GetEntries(); ++row) {
+      parameters->GetEntry(row);
+      result.values.push_back(value);
+      result.errors.push_back(error);
+    }
+    auto *covariance = dynamic_cast<TH2 *>(file.Get((base + "Covariance").c_str()));
+    for (int row = 1; row <= covariance->GetNbinsY(); ++row) {
+      for (int column = 1; column <= covariance->GetNbinsX(); ++column) {
+        result.covariance.push_back(covariance->GetBinContent(column, row));
+      }
+    }
+    return result;
+  }
+
+  void ExpectSharedAndCombinedAgree(const std::filesystem::path &shared_path,
+                                    const std::filesystem::path &combined_path) {
+    const std::string group = "cent_0.00-10.00__mt_0.20-0.40";
+    const SharedGroupNumerics shared = ReadSharedGroupNumerics(shared_path, group);
+    const SharedGroupNumerics combined = ReadSharedGroupNumerics(combined_path, group);
+    Expect(shared.values.size() == combined.values.size() && !shared.values.empty(),
+           "scheme 1/2 parameter maps must have identical stable dimensions");
+    Expect(std::abs(shared.values[0] - combined.values[0]) <= 1.0e-4,
+           "scheme 1/2 shared lambda differs beyond the synthetic-sample tolerance");
+    Expect(std::abs(shared.objective - combined.objective) <= 1.0e-3,
+           "scheme 1/2 objective differs beyond the synthetic-sample tolerance");
+    for (std::size_t index = 1; index < shared.values.size(); ++index) {
+      const double scale = std::max(std::abs(shared.errors[index]), std::abs(combined.errors[index]));
+      Expect(std::isfinite(scale) && std::abs(shared.values[index] - combined.values[index]) <= 0.05 * scale,
+             "scheme 1/2 nuisance differs by more than 5% of its uncertainty");
+    }
+    double difference2 = 0.0;
+    double reference2 = 0.0;
+    for (std::size_t index = 0; index < shared.covariance.size(); ++index) {
+      const double difference = shared.covariance[index] - combined.covariance[index];
+      difference2 += difference * difference;
+      reference2 += shared.covariance[index] * shared.covariance[index];
+    }
+    const double relative_covariance_difference = reference2 > 0.0
+                                                      ? std::sqrt(difference2 / reference2)
+                                                      : std::numeric_limits<double>::infinity();
+    Expect(relative_covariance_difference < 0.01,
+           "scheme 1/2 covariance relative Frobenius difference exceeds 1%: "
+               + std::to_string(relative_covariance_difference));
   }
 
   void ExpectProfileTreeContract(TTree &tree, const std::string &name) {
@@ -859,6 +1136,259 @@ max = 64.0
   (void)InspectFitCatalog(temp_dir / "fixed_pml_fit.root", "none", 0.65, 1.20);
   Expect(!std::filesystem::exists(temp_dir / "pml_profile_disabled.root"),
          "disabled profile mode must not create or reset its separate ROOT output");
+
+  const std::string shared_input_root = WriteSharedLambdaToyInput(temp_dir / "shared_input.root");
+  const std::string shared_parameter_lines = R"toml(
+[fit.parameters.alpha]
+fixed_value = 2.0
+
+)toml";
+  const std::string shared_config_path = WriteConfig(
+      temp_dir / "shared_lambda.toml", shared_input_root, temp_dir.string(), "shared_cf.root",
+      "shared_fit.root", "shared_fit.tsv", "shared_report.root", false, std::nullopt,
+      "use_coulomb = false\nlambda_mode = \"shared_phi\"\n", true, shared_parameter_lines,
+      "", "shared_profiles_disabled.root", false, "", true);
+  const ApplicationConfig shared_config = LoadApplicationConfig(shared_config_path);
+  const BuildCfRunStatistics shared_build_stats = RunBuildCf(shared_config, logger);
+  Expect(shared_build_stats.stored_slices == 5, "shared toy build must contain one integrated and four phi slices");
+  const FitRunStatistics shared_fit_stats = RunFit(shared_config, logger);
+  Expect(shared_fit_stats.shared_lambda_groups == 1 && shared_fit_stats.shared_lambda_valid_groups == 1
+             && shared_fit_stats.shared_lambda_failed_groups == 0,
+         "dense shared toy must complete one valid group");
+  ExpectSharedLambdaOutputs(temp_dir / "shared_fit.root", temp_dir / "shared_report.root");
+
+  const std::string combined_config_path = WriteConfig(
+      temp_dir / "combined_profile.toml", shared_input_root, temp_dir.string(), "shared_cf.root",
+      "combined_fit.root", "combined_fit.tsv", "combined_report.root", false, std::nullopt,
+      "use_coulomb = false\nlambda_mode = \"combined_profile\"\n", true, shared_parameter_lines,
+      R"toml([fit.combined_profile]
+coarse_points = 41
+refinement_points = 21
+max_refinement_rounds = 6
+lambda_tolerance = 0.0001
+objective_tolerance = 0.001
+retry_strategy = "reference_and_bidirectional_neighbors"
+parallel_backend = "serial"
+workers = 1
+)toml", "combined_profiles_disabled.root", false, "", true);
+  const ApplicationConfig combined_config = LoadApplicationConfig(combined_config_path);
+  const FitRunStatistics combined_stats = RunFit(combined_config, logger);
+  Expect(combined_stats.shared_lambda_groups == 1 && combined_stats.shared_lambda_valid_groups == 1,
+         "combined-profile toy must complete one valid group center");
+  ExpectCombinedProfileOutputs(temp_dir / "combined_fit.root", temp_dir / "combined_report.root");
+  ExpectSharedAndCombinedAgree(temp_dir / "shared_fit.root", temp_dir / "combined_fit.root");
+
+  std::filesystem::remove_all(temp_dir / "combined_checkpoint");
+  const std::string process_combined_config_path = WriteConfig(
+      temp_dir / "combined_profile_process.toml", shared_input_root, temp_dir.string(), "shared_cf.root",
+      "combined_process_fit.root", "combined_process_fit.tsv", "combined_process_report.root",
+      false, std::nullopt, "use_coulomb = false\nlambda_mode = \"combined_profile\"\n", true,
+      shared_parameter_lines, R"toml([fit.combined_profile]
+coarse_points = 9
+refinement_points = 7
+max_refinement_rounds = 3
+lambda_tolerance = 0.001
+objective_tolerance = 0.01
+parallel_backend = "process"
+workers = 2
+[fit.combined_profile.checkpoint]
+enabled = true
+resume = true
+run_id = "workflow_smoke"
+directory = "combined_checkpoint"
+)toml", "combined_process_profiles_disabled.root", false, R"toml(
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+
+[[fit_selection.mt]]
+min = 0.4
+max = 0.6
+)toml", true);
+  const ApplicationConfig process_combined_config = LoadApplicationConfig(process_combined_config_path);
+  const BuildCfRunStatistics process_combined_build = RunBuildCf(process_combined_config, logger);
+  Expect(process_combined_build.stored_slices == 10,
+         "two-group process fixture must contain two complete four-phi groups and integrated seeds");
+  const FitRunStatistics process_combined_stats = RunFit(
+      process_combined_config, logger, std::nullopt, std::nullopt, false, process_combined_config_path);
+  Expect(process_combined_stats.shared_lambda_groups == 2
+             && process_combined_stats.shared_lambda_valid_groups == 2,
+         "process combined-profile coordinator must publish two complete groups");
+  ExpectTwoGroupCombinedProcessOutput(temp_dir / "combined_process_fit.root");
+  const auto manifest_count = static_cast<int>(std::count_if(
+      std::filesystem::directory_iterator(temp_dir / "combined_checkpoint" / "workflow_smoke"),
+      std::filesystem::directory_iterator(), [](const auto &entry) {
+        return entry.path().extension() == ".manifest";
+      }));
+  Expect(manifest_count == 2, "one manifest per complete process group must be committed");
+  const FitRunStatistics resumed_combined_stats = RunFit(
+      process_combined_config, logger, std::nullopt, std::nullopt, false, process_combined_config_path);
+  Expect(resumed_combined_stats.shared_lambda_valid_groups == 2,
+         "complete process checkpoint must be reusable without re-running the group");
+  const std::filesystem::path combined_checkpoint_dir =
+      temp_dir / "combined_checkpoint" / "workflow_smoke";
+  const auto first_manifest = *std::find_if(
+      std::filesystem::directory_iterator(combined_checkpoint_dir),
+      std::filesystem::directory_iterator(), [](const auto &entry) {
+        return entry.path().extension() == ".manifest";
+      });
+  std::ifstream manifest_input(first_manifest.path());
+  const std::string original_manifest((std::istreambuf_iterator<char>(manifest_input)),
+                                      std::istreambuf_iterator<char>());
+  manifest_input.close();
+  {
+    std::ofstream corrupt_manifest(first_manifest.path(), std::ios::trunc);
+    corrupt_manifest << "corrupt-fingerprint\n";
+  }
+  bool rejected_corrupt_combined_manifest = false;
+  try {
+    (void)RunFit(process_combined_config, logger, std::nullopt, std::nullopt, false,
+                 process_combined_config_path);
+  } catch (const std::runtime_error &error) {
+    rejected_corrupt_combined_manifest =
+        std::string(error.what()).find("contract mismatch or corruption") != std::string::npos;
+  }
+  Expect(rejected_corrupt_combined_manifest,
+         "a committed combined-profile manifest with a corrupt fingerprint must be rejected");
+  {
+    std::ofstream restore_manifest(first_manifest.path(), std::ios::trunc);
+    restore_manifest << original_manifest;
+  }
+
+  const std::string changed_physics_parameter_lines = shared_parameter_lines + R"toml(
+[fit.parameters.lambda]
+min = 0.0
+max = 0.95
+
+)toml";
+  const std::string changed_physics_config_path = WriteConfig(
+      temp_dir / "combined_profile_changed_physics.toml", shared_input_root, temp_dir.string(),
+      "shared_cf.root", "combined_changed_fit.root", "combined_changed.tsv",
+      "combined_changed_report.root", false, std::nullopt,
+      "use_coulomb = false\nlambda_mode = \"combined_profile\"\n", true,
+      changed_physics_parameter_lines, R"toml([fit.combined_profile]
+coarse_points = 9
+refinement_points = 7
+max_refinement_rounds = 3
+lambda_tolerance = 0.001
+objective_tolerance = 0.01
+parallel_backend = "process"
+workers = 2
+[fit.combined_profile.checkpoint]
+enabled = true
+resume = true
+run_id = "workflow_smoke"
+directory = "combined_checkpoint"
+)toml", "combined_changed_profiles_disabled.root", false, R"toml(
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+
+[[fit_selection.mt]]
+min = 0.4
+max = 0.6
+)toml", true);
+  bool rejected_changed_physics = false;
+  try {
+    const ApplicationConfig changed_physics = LoadApplicationConfig(changed_physics_config_path);
+    (void)RunFit(changed_physics, logger, std::nullopt, std::nullopt, false,
+                 changed_physics_config_path);
+  } catch (const std::runtime_error &error) {
+    rejected_changed_physics =
+        std::string(error.what()).find("contract mismatch or corruption") != std::string::npos;
+  }
+  Expect(rejected_changed_physics,
+         "changing a physical fit setting must reject complete combined-profile checkpoints");
+
+  {
+    std::ofstream orphan(combined_checkpoint_dir / "orphan.stage.tmp", std::ios::trunc);
+    orphan << "incomplete";
+  }
+  const std::string one_worker_config_path = WriteConfig(
+      temp_dir / "combined_profile_one_worker.toml", shared_input_root, temp_dir.string(),
+      "shared_cf.root", "combined_one_worker_fit.root", "combined_one_worker.tsv",
+      "combined_one_worker_report.root", false, std::nullopt,
+      "use_coulomb = false\nlambda_mode = \"combined_profile\"\n", true,
+      shared_parameter_lines, R"toml([fit.combined_profile]
+coarse_points = 9
+refinement_points = 7
+max_refinement_rounds = 3
+lambda_tolerance = 0.001
+objective_tolerance = 0.01
+parallel_backend = "process"
+workers = 1
+[fit.combined_profile.checkpoint]
+enabled = true
+resume = true
+run_id = "workflow_smoke"
+directory = "combined_checkpoint"
+)toml", "combined_one_worker_profiles_disabled.root", false, R"toml(
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+
+[[fit_selection.mt]]
+min = 0.4
+max = 0.6
+)toml", true);
+  const ApplicationConfig one_worker_config = LoadApplicationConfig(one_worker_config_path);
+  const FitRunStatistics one_worker_stats = RunFit(
+      one_worker_config, logger, std::nullopt, std::nullopt, false, one_worker_config_path);
+  Expect(one_worker_stats.shared_lambda_valid_groups == 2,
+         "changing only worker count must reuse complete groups and ignore uncommitted temp files");
+  for (const std::string &group : {"cent_0.00-10.00__mt_0.20-0.40",
+                                   "cent_0.00-10.00__mt_0.40-0.60"}) {
+    const SharedGroupNumerics parallel =
+        ReadSharedGroupNumerics(temp_dir / "combined_process_fit.root", group);
+    const SharedGroupNumerics single =
+        ReadSharedGroupNumerics(temp_dir / "combined_one_worker_fit.root", group);
+    Expect(parallel.objective == single.objective && parallel.values == single.values
+               && parallel.errors == single.errors && parallel.covariance == single.covariance,
+           "worker count must not change deterministic combined-profile group numerics");
+  }
+  for (const auto &entry : std::filesystem::directory_iterator(combined_checkpoint_dir)) {
+    const std::string name = entry.path().filename().string();
+    if (name.find(".fit.root") != std::string::npos
+        || name.find(".report.root") != std::string::npos
+        || entry.path().extension() == ".tsv" || entry.path().extension() == ".manifest") {
+      std::filesystem::remove(entry.path());
+    }
+  }
+  const FitRunStatistics stage_resumed_stats = RunFit(
+      process_combined_config, logger, std::nullopt, std::nullopt, false, process_combined_config_path);
+  Expect(stage_resumed_stats.shared_lambda_valid_groups == 2,
+         "an uncommitted group must resume from its last complete stage checkpoint");
+
+  const std::string invalid_shared_config_path = WriteConfig(
+      temp_dir / "shared_lambda_unbinned_me.toml", input_root, temp_dir.string(), "mapped_cf.root",
+      "shared_unbinned_me_fit.root", "shared_unbinned_me.tsv", "shared_unbinned_me_report.root",
+      true, std::nullopt, "use_coulomb = false\nlambda_mode = \"shared_phi\"\n", true,
+      shared_parameter_lines, "", "shared_unbinned_me_profile.root", false, "", true);
+  std::filesystem::remove(temp_dir / "shared_unbinned_me_fit.root");
+  bool rejected_unbinned_me = false;
+  try {
+    (void)RunFit(LoadApplicationConfig(invalid_shared_config_path), logger);
+  } catch (const std::runtime_error &error) {
+    rejected_unbinned_me = std::string(error.what()).find("does not prove phi-binned mixed events")
+                           != std::string::npos;
+  }
+  Expect(rejected_unbinned_me && !std::filesystem::exists(temp_dir / "shared_unbinned_me_fit.root"),
+         "shared mode must reject unbinned-ME catalog provenance before creating fit output");
 
   const std::vector<SliceCatalogEntry> profile_catalog = LoadSliceCatalog((temp_dir / "mapped_cf.root").string());
   Expect(!profile_catalog.empty(), "toy CF must provide a slice for profile diagnostics");

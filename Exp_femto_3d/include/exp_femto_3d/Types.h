@@ -24,6 +24,13 @@ namespace exp_femto_3d {
     kFull,
   };
 
+  // The shared-phi mode performs one simultaneous PML fit per (centrality,mT,qn) group.
+  enum class LambdaMode {
+    kIndependent,
+    kSharedPhi,
+    kCombinedProfile,
+  };
+
   enum class ProgressMode {
     kAuto,
     kEnabled,
@@ -201,13 +208,39 @@ namespace exp_femto_3d {
     std::vector<ProfileScanConfig> scans;
   };
 
+  /** Stage-granular persistence settings for one combined-profile production run. */
+  struct CombinedProfileCheckpointConfig {
+    bool enabled = false;
+    bool resume = false;
+    std::string run_id;
+    std::string directory;
+  };
+
+  /**
+   * Solver policy for the group-level sum of per-member conditional PML minima.
+   * The lambda interval is deliberately inherited from the effective fit bounds.
+   */
+  struct CombinedProfileConfig {
+    int coarse_points = 41;
+    int refinement_points = 21;
+    int max_refinement_rounds = 6;
+    double lambda_tolerance = 1.0e-4;
+    double objective_tolerance = 1.0e-3;
+    ProfileRetryStrategy retry_strategy = ProfileRetryStrategy::kReferenceAndBidirectionalNeighbors;
+    ProfileParallelBackend parallel_backend = ProfileParallelBackend::kSerial;
+    int workers = 1;
+    CombinedProfileCheckpointConfig checkpoint;
+  };
+
   struct FitConfig {
     FitModel model = FitModel::kFull;
+    LambdaMode lambda_mode = LambdaMode::kIndependent;
     LevyFitOptions options;
     std::optional<bool> map_pair_phi_to_symmetric_range;
     bool reopen_output_file_per_slice = true;
     ProgressMode progress = ProgressMode::kAuto;
     ProfileLikelihoodConfig profile_likelihood;
+    CombinedProfileConfig combined_profile;
   };
 
   struct ApplicationConfig {
@@ -322,6 +355,69 @@ namespace exp_femto_3d {
     bool uses_core_halo_lambda = true;
     bool uses_q2_baseline = false;
     bool uses_pml = false;
+    std::string lambda_mode = "independent";
+    std::string shared_lambda_group_id;
+    bool point_estimate_valid = false;
+    bool parameter_errors_valid = false;
+    bool at_parameter_boundary = false;
+    std::string fit_failure_reason;
+  };
+
+  struct SharedLambdaFitAttempt {
+    std::string seed_origin;
+    std::vector<double> parameter_values;
+    double objective = std::numeric_limits<double>::quiet_NaN();
+    double edm = std::numeric_limits<double>::quiet_NaN();
+    int migrad_status = -1;
+    int minuit_istat = -1;
+    bool objective_valid = false;
+    bool model_domain_valid = false;
+    bool point_estimate_valid = false;
+    std::string failure_reason;
+  };
+
+  /**
+   * Complete simultaneous-fit record. Covariance is row-major in parameter_labels order
+   * and is conditional on the frozen finite-source Coulomb kernel recorded below.
+   */
+  struct SharedLambdaFitResult {
+    std::string group_id;
+    int centrality_index = -1;
+    int mt_index = -1;
+    int qn_index = -1;
+    std::vector<std::string> member_slice_ids;
+    std::vector<std::string> parameter_labels;
+    std::vector<std::string> parameter_slice_ids;
+    std::vector<int> parameter_local_indices;
+    std::vector<int> member_parameter_offsets;
+    std::vector<int> member_local_to_global_indices;
+    std::vector<double> parameter_values;
+    std::vector<double> parameter_errors;
+    std::vector<double> covariance;
+    std::vector<double> component_objectives;
+    std::vector<SharedLambdaFitAttempt> attempts;
+    std::string fit_mode = "shared_phi";
+    std::string center_method = "simultaneous_migrad";
+    std::string covariance_method = "joint_hesse";
+    bool scan_coverage_complete = false;
+    bool search_converged = false;
+    bool unresolved_gap = false;
+    int completed_profile_stages = 0;
+    double lambda_profile_min = std::numeric_limits<double>::quiet_NaN();
+    double objective = std::numeric_limits<double>::quiet_NaN();
+    double edm = std::numeric_limits<double>::quiet_NaN();
+    int usable_bins = 0;
+    int free_parameters = 0;
+    int ndf = -1;
+    int migrad_status = -1;
+    int hesse_status = -1;
+    int covariance_quality = -1;
+    bool point_estimate_valid = false;
+    bool parameter_errors_valid = false;
+    bool at_parameter_boundary = false;
+    std::string failure_reason;
+    std::string finite_source_mode;
+    double finite_source_radius_fm = std::numeric_limits<double>::quiet_NaN();
   };
 
   struct CoulombKernelCatalogEntry {
@@ -381,6 +477,9 @@ namespace exp_femto_3d {
     std::size_t profile_effective_workers = 1;
     std::string profile_output_path;
     bool profile_estimate_only = false;
+    std::size_t shared_lambda_groups = 0;
+    std::size_t shared_lambda_valid_groups = 0;
+    std::size_t shared_lambda_failed_groups = 0;
   };
 
   inline bool NearlyEqual(const double lhs, const double rhs, const double tolerance = 1.0e-6) {

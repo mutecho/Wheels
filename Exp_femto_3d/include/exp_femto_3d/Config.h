@@ -13,6 +13,8 @@ namespace exp_femto_3d {
   [[nodiscard]] LogLevel ParseLogLevel(const std::string &token);
   [[nodiscard]] std::string ToString(FitModel model);
   [[nodiscard]] FitModel ParseFitModel(const std::string &token);
+  [[nodiscard]] std::string ToString(LambdaMode mode);
+  [[nodiscard]] LambdaMode ParseLambdaMode(const std::string &token);
   [[nodiscard]] std::string ToString(CoulombMode mode);
   [[nodiscard]] CoulombMode ParseCoulombMode(const std::string &token);
   [[nodiscard]] std::string ToString(FiniteSourceMode mode);

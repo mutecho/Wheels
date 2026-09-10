@@ -100,6 +100,56 @@ max = 0.4
 )toml";
   }
 
+  std::string SharedLambdaConfig(const bool use_pml = true,
+                                 const bool use_core_halo_lambda = true,
+                                 const std::string &fit_lines = "") {
+    return R"toml(
+[input]
+input_root = "/tmp/input.root"
+task_name = "task"
+same_event_subtask = "Same"
+mixed_event_subtask = "Mixed"
+sparse_object_name = "sparse"
+
+[output]
+output_directory = "/tmp/out"
+cf_root_name = "cf.root"
+fit_root_name = "fit_shared_lambda.root"
+fit_summary_name = "fit_shared_lambda.tsv"
+fit_report_root_name = "report_shared_lambda.root"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+split_mixed_event_by_phi = true
+
+[fit]
+model = "full"
+lambda_mode = "shared_phi"
+use_core_halo_lambda = )toml" + std::string(use_core_halo_lambda ? "true\n" : "false\n") + R"toml(
+use_q2_baseline = true
+use_pml = )toml" + std::string(use_pml ? "true\n" : "false\n") + R"toml(
+fit_q_max = 0.15
+)toml" + fit_lines + R"toml(
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+)toml";
+  }
+
+  std::string CombinedProfileConfigText(const std::string &combined_lines = "") {
+    std::string text = SharedLambdaConfig(true, true, combined_lines);
+    const std::string shared = "lambda_mode = \"shared_phi\"";
+    text.replace(text.find(shared), shared.size(), "lambda_mode = \"combined_profile\"");
+    return text;
+  }
+
   void ExpectConfigError(const std::filesystem::path &path,
                          const std::string &contents,
                          const std::string &message) {
@@ -174,10 +224,85 @@ max = 0.4
   Expect(config.output.fit_report_root_name == "report.root", "fit report root extension normalization failed");
   Expect(config.output.profile_root_name == "profile_likelihood.root", "profile output default mismatch");
   Expect(!config.fit.profile_likelihood.enabled, "profile likelihood must be opt-in by default");
+  Expect(config.fit.lambda_mode == LambdaMode::kIndependent, "lambda mode must default to independent");
   Expect(config.build.split_mixed_event_by_phi, "ME phi split switch should parse");
   Expect(config.build.progress == ProgressMode::kDisabled, "build progress mode mismatch");
   Expect(config.fit.progress == ProgressMode::kEnabled, "fit progress mode mismatch");
   Expect(config.fit.map_pair_phi_to_symmetric_range.has_value(), "fit phi mapping override should parse");
+
+  const ApplicationConfig shared_lambda =
+      LoadApplicationConfig(WriteFile(temp_dir / "shared_lambda.toml", SharedLambdaConfig()));
+  Expect(shared_lambda.fit.lambda_mode == LambdaMode::kSharedPhi,
+         "shared_phi lambda mode should parse");
+  const ApplicationConfig combined_defaults = LoadApplicationConfig(
+      WriteFile(temp_dir / "combined_defaults.toml", CombinedProfileConfigText()));
+  Expect(combined_defaults.fit.lambda_mode == LambdaMode::kCombinedProfile
+             && combined_defaults.fit.combined_profile.coarse_points == 41
+             && combined_defaults.fit.combined_profile.refinement_points == 21
+             && combined_defaults.fit.combined_profile.max_refinement_rounds == 6
+             && combined_defaults.fit.combined_profile.parallel_backend == ProfileParallelBackend::kSerial
+             && combined_defaults.fit.combined_profile.workers == 1
+             && !combined_defaults.fit.combined_profile.checkpoint.enabled,
+         "combined-profile API defaults are wrong");
+  ExpectConfigError(temp_dir / "combined_thread.toml",
+                    CombinedProfileConfigText("\n[fit.combined_profile]\nparallel_backend = \"thread\"\n"),
+                    "combined profile must reject unsafe thread execution");
+  ExpectConfigError(temp_dir / "combined_resume_without_checkpoint.toml",
+                    CombinedProfileConfigText(R"toml(
+[fit.combined_profile.checkpoint]
+resume = true
+)toml"),
+                    "combined profile resume must require enabled checkpointing");
+  ExpectConfigError(temp_dir / "shared_lambda_non_pml.toml",
+                    SharedLambdaConfig(false, true),
+                    "shared_phi must reject a non-PML objective");
+  ExpectConfigError(temp_dir / "shared_lambda_disabled_core_halo.toml",
+                    SharedLambdaConfig(true, false),
+                    "shared_phi must require core-halo lambda");
+  ExpectConfigError(temp_dir / "shared_lambda_fixed.toml",
+                    SharedLambdaConfig(true, true, "\n[fit.parameters.lambda]\nfixed_value = 0.5\n"),
+                    "shared_phi must reject fixed lambda");
+  ExpectConfigError(temp_dir / "shared_lambda_profile.toml",
+                    SharedLambdaConfig(true, true, R"toml(
+[fit.profile_likelihood]
+enabled = true
+slice_scope = "listed"
+slice_ids = ["slice_a"]
+[[fit.profile_likelihood.scans]]
+id = "rout2"
+parameters = ["rout2"]
+points = [3]
+)toml"),
+                    "shared_phi must reject the single-slice profile driver");
+  const ApplicationConfig public_shared_lambda = LoadApplicationConfig(
+      std::string(EXP_FEMTO_3D_SOURCE_DIR) + "/config/oo_build_and_fit_6bins_shared_lambda.toml");
+  Expect(public_shared_lambda.fit.lambda_mode == LambdaMode::kSharedPhi
+             && public_shared_lambda.fit.model == FitModel::kFull
+             && public_shared_lambda.fit.options.coulomb_mode == CoulombMode::kFiniteSource
+             && public_shared_lambda.fit.options.finite_source_mode == FiniteSourceMode::kFixed1D
+             && public_shared_lambda.fit.options.use_core_halo_lambda
+             && public_shared_lambda.fit.options.use_q2_baseline
+             && public_shared_lambda.fit.options.use_pml
+             && public_shared_lambda.fit.options.parameters.alpha.fixed_value == std::optional<double>(2.0)
+             && public_shared_lambda.build.split_mixed_event_by_phi,
+         "public shared-lambda configuration must preserve the approved physics baseline");
+  Expect(public_shared_lambda.output.fit_root_name.find("_shared_lambda.root") != std::string::npos
+             && public_shared_lambda.output.fit_summary_name.find("_shared_lambda.tsv") != std::string::npos
+             && public_shared_lambda.output.fit_report_root_name.find("_shared_lambda.root") != std::string::npos,
+         "public shared-lambda output names must be isolated from independent production outputs");
+  const ApplicationConfig public_combined = LoadApplicationConfig(
+      std::string(EXP_FEMTO_3D_SOURCE_DIR) + "/config/oo_build_and_fit_6bins_combined_profile.toml");
+  Expect(public_combined.fit.lambda_mode == LambdaMode::kCombinedProfile
+             && public_combined.fit.combined_profile.coarse_points == 41
+             && public_combined.fit.combined_profile.refinement_points == 21
+             && public_combined.fit.combined_profile.max_refinement_rounds == 6
+             && public_combined.fit.combined_profile.parallel_backend == ProfileParallelBackend::kProcess
+             && public_combined.fit.combined_profile.workers == 8
+             && public_combined.fit.combined_profile.checkpoint.enabled
+             && public_combined.fit.combined_profile.checkpoint.resume
+             && public_combined.fit.options.parameters.alpha.fixed_value == std::optional<double>(2.0)
+             && public_combined.build.split_mixed_event_by_phi,
+         "public combined-profile config must preserve solver and physics contracts");
   Expect(!*config.fit.map_pair_phi_to_symmetric_range, "fit phi mapping override should be false");
   Expect(config.fit.options.coulomb_mode == CoulombMode::kNone, "legacy use_coulomb=false should map to none");
   Expect(ToString(CoulombMode::kGamow) == "gamow", "CoulombMode string helper mismatch");

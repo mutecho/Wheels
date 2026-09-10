@@ -54,9 +54,11 @@ endif()
 
 add_library(exp_femto_3d_core
   src/Config.cpp
+  src/CombinedProfile.cpp
   src/Logging.cpp
   src/ProfileDisplay2D.cpp
   src/ProfileLikelihood.cpp
+  src/SharedLambdaFit.cpp
   src/Workflow.cpp
 )
 
@@ -179,6 +181,38 @@ target_include_directories(profile_display_2d_test
 add_test(
   NAME profile_display_2d_test
   COMMAND profile_display_2d_test
+)
+
+add_executable(shared_lambda_fit_test
+  tests/SharedLambdaFitTest.cpp
+  src/SharedLambdaFit.cpp
+)
+
+target_include_directories(shared_lambda_fit_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_test(
+  NAME shared_lambda_fit_test
+  COMMAND shared_lambda_fit_test
+)
+
+add_executable(combined_profile_driver_test
+  tests/CombinedProfileDriverTest.cpp
+  src/CombinedProfile.cpp
+  src/ProfileLikelihood.cpp
+)
+
+target_include_directories(combined_profile_driver_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_test(
+  NAME combined_profile_driver_test
+  COMMAND combined_profile_driver_test
 )
 
 add_executable(progress_render_test

@@ -305,6 +305,79 @@ Mixed-event denominator control:
   same qn interval as the current qn-specific SAME slice, while the qn-all slice
   remains integrated over the full qn axis
 
+Shared-lambda simultaneous PML fits:
+
+- set `[fit].lambda_mode = "shared_phi"`; omission keeps the historical
+  `"independent"` behavior
+- the shared mode fits every phi-differential member of one
+  `(centrality, mT, qn)` group in a single legacy-TMinuit objective, with one
+  free lambda and independent per-phi nuisance parameters
+- it requires PML, core-halo lambda, phi-binned mixed events recorded in the
+  input `SliceCatalog`, and no fixed lambda or single-slice profile-likelihood run
+- the phi-integrated dataset is excluded from the simultaneous objective and
+  remains the finite-source seed plus an ordinary independent output row
+- `meta/SharedLambdaFitCatalog` and `shared_lambda/<group_id>/` store the stable
+  member order, free-parameter map, per-member objective contributions, attempts,
+  and the complete labeled covariance matrix
+- shared member `FitCatalog`/TSV rows use `ndf = -1`; the meaningful value is
+  the group `ndf = sum(usable bins) - group free parameters`
+- harmonic coefficients and `epsilon_f = 2 B_side / A_side` use generalized
+  least squares with the complete cross-phi covariance; an invalid covariance
+  produces an explicit invalid derived result and never an equal-weight fallback
+- the HESSE covariance is conditional on the frozen finite-source Coulomb kernel;
+  it does not include uncertainty in the kernel estimate
+
+The ready-to-run configuration is
+`config/oo_build_and_fit_6bins_shared_lambda.toml`. It reuses the existing CF:
+
+```bash
+bash scripts/run_exp_femto_3d.sh \
+  --stage fit \
+  --config config/oo_build_and_fit_6bins_shared_lambda.toml
+```
+
+Combined-profile shared lambda:
+
+- set `[fit].lambda_mode = "combined_profile"`; this is a production mode
+  independent of the simultaneous `shared_phi` solver
+- every member is conditionally minimized at the same lambda coordinates and
+  the unweighted PML objectives are summed; invalid members invalidate that
+  coordinate and remain present with their status and parameter trace
+- the final center comes from the combined profile. A joint HESSE with lambda
+  free evaluates the complete local covariance at that center; it runs no
+  group-level MIGRAD and records `migrad_status = -2`
+- `coarse_points`, `refinement_points`, `max_refinement_rounds`,
+  `lambda_tolerance`, and `objective_tolerance` control the deterministic
+  multi-candidate refinement. The scan always inherits the effective lambda
+  fit bounds
+- `parallel_backend = "process"` assigns complete groups to isolated worker
+  processes and keeps each group serial. Effective concurrency is capped by
+  the selected group count; OMP, OpenBLAS, Accelerate, and MKL thread pools are
+  capped at one in every worker
+- checkpoint manifests commit only complete groups. A separate atomic binary
+  checkpoint records the frozen Coulomb-kernel catalog/table, every complete
+  scan stage, and all attempts and winners, so an interrupted group resumes
+  from its last complete stage. Input, physical model, parameter bounds, scan
+  policy, and numerical implementation are fingerprinted; `workers` and output
+  paths are not
+- `combined_profile/<group_id>/` stores `StageCatalog`,
+  `CombinedProfilePoints`, `ProfilePoints`, `AttemptPoints`, the combined/member
+  overlay canvas, invalid-coordinate markers, and the shared center/HESSE band
+- `scan_coverage_complete`, `search_converged`, `unresolved_gap`, and boundary
+  state are separate. A finite grid does not establish a unique global minimum,
+  and the profile curves remain diagnostic rather than confidence-level claims
+
+The public process/checkpoint configuration reuses the existing 6-phi CF:
+
+```bash
+scripts/run_exp_femto_3d_combined_profile.sh
+```
+
+For a serial comparison, copy the configuration and set
+`parallel_backend = "serial"`, `workers = 1`. Errors and GLS harmonics are
+conditional on the frozen Coulomb kernel; no uncertainty from kernel
+preparation is propagated.
+
 ## Output Contract
 
 - `build-cf` writes `meta/SliceCatalog` plus `slices/<slice_id>/...`; the
@@ -318,6 +391,11 @@ Mixed-event denominator control:
   and `fit_summary.tsv`; `FitCatalog`, `CoulombKernelCatalog`, and TSV rows
   carry the same qn metadata, and `FitCatalog`/TSV rows carry the same rebin
   metadata and final physical phi ranges
+- shared-lambda fits additionally write `meta/SharedLambdaFitCatalog` and
+  `shared_lambda/<group_id>/{ParameterMap,MemberParameterMap,AttemptPoints,ComponentObjectives,Covariance}`
+- combined-profile fits use the same shared-group map/covariance contract and
+  additionally write the full numerical and display trace under
+  `combined_profile/<group_id>/`
 - `fit` also writes the standalone report ROOT file configured by
   `fit_report_directory` and `fit_report_root_name`; this report mirrors
   `meta/FitCatalog` and `summary/R2_vs_phi/...`, adds
@@ -325,6 +403,9 @@ Mixed-event denominator control:
   `eps_vs_mt/<cent>/epsf_vs_mt(_canvas)` summaries. qn-specific report
   summaries are written below an extra `<qn_label>` directory, while qn-all
   summaries keep the historical paths.
+- shared-lambda reports also add
+  `source_parameters/<cent>/<mt>[/<qn>]/lambda_vs_phi_canvas`, plus separately
+  readable `shared_lambda_center` and `shared_lambda_hesse_band` objects when valid
 
 ## Test Notes
 

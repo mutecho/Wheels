@@ -1,0 +1,106 @@
+[input]
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_3Dqn"
+mixed_event_subtask = "MixedEvent_3Dqn"
+sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
+
+[output]
+output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
+cf_root_name = "EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root"
+fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda.root"
+fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_fcoul_sel8_6phi_shared_lambda.tsv"
+fit_report_directory = "/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/res"
+fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda.root"
+log_level = "warn"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = false
+split_mixed_event_by_phi = true
+
+[build.rebin.phi]
+enabled = true
+factor = 3
+
+[build.rebin.mt]
+enabled = true
+
+[fit.parameters.alpha]
+fixed_value = 2.0
+
+[fit]
+model = "full"
+lambda_mode = "shared_phi"
+coulomb_mode = "finite_source"
+finite_source_mode = "fixed_1d"
+use_core_halo_lambda = true
+use_q2_baseline = true
+use_pml = true
+fit_q_max = 0.15
+map_pair_phi_to_symmetric_range = false
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.centrality]]
+min = 10
+max = 30
+
+[[bins.centrality]]
+min = 30
+max = 50
+
+[[bins.centrality]]
+min = 50
+max = 80
+
+[[bins.centrality]]
+min = 80
+max = 100
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+
+[[bins.mt]]
+min = 0.6
+max = 0.8
+
+[[bins.mt]]
+min = 0.8
+max = 1.1
+
+[[bins.mt]]
+min = 1.1
+max = 1.6
+
+[[fit_selection.centrality]]
+min = 0
+max = 10
+
+[[fit_selection.centrality]]
+min = 10
+max = 30
+
+[[fit_selection.centrality]]
+min = 30
+max = 50
+
+[[fit_selection.mt]]
+min = 0.4
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.6
+max = 0.8
+
+[[fit_selection.mt]]
+min = 0.8
+max = 1.1
+
+[[fit_selection.mt]]
+min = 1.1
+max = 1.6

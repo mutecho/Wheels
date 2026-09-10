@@ -53,8 +53,10 @@ fixed_value = 2.0
 [fit]
 model = "full"
 coulomb_mode = "finite_source"
+# coulomb_mode = "finite_source"
 # coulomb_mode = "none"|"gamow"|"finite_source"
-finite_source_mode = "iterative_1d"
+# finite_source_mode = "iterative_1d"
+finite_source_mode = "fixed_1d"
 # finite_source_mode = "fixed_1d"|"iterative_1d"
 use_core_halo_lambda = true
 use_q2_baseline = true

@@ -354,6 +354,56 @@ namespace exp_femto_3d {
       return config;
     }
 
+    CombinedProfileConfig ParseCombinedProfileConfig(const toml::table *table) {
+      CombinedProfileConfig config;
+      if (table == nullptr) return config;
+      const std::set<std::string> allowed = {
+          "coarse_points", "refinement_points", "max_refinement_rounds", "lambda_tolerance",
+          "objective_tolerance", "retry_strategy", "parallel_backend", "workers", "checkpoint"};
+      for (const auto &[raw_key, node] : *table) {
+        (void)node;
+        if (allowed.count(std::string(raw_key.str())) == 0U) {
+          throw ConfigError("Unsupported field in fit.combined_profile: " + std::string(raw_key.str()));
+        }
+      }
+      const auto read_integer = [&](const std::string &key, const int fallback, const int minimum) {
+        if (!table->contains(key)) return fallback;
+        const auto value = (*table)[key].value<std::int64_t>();
+        if (!value.has_value() || *value < minimum || *value > std::numeric_limits<int>::max()) {
+          throw ConfigError("fit.combined_profile." + key + " must be an integer >= "
+                            + std::to_string(minimum) + ".");
+        }
+        return static_cast<int>(*value);
+      };
+      config.coarse_points = read_integer("coarse_points", config.coarse_points, 3);
+      config.refinement_points = read_integer("refinement_points", config.refinement_points, 3);
+      config.max_refinement_rounds = read_integer("max_refinement_rounds", config.max_refinement_rounds, 0);
+      config.workers = read_integer("workers", config.workers, 1);
+      config.lambda_tolerance = ReadOptionalDouble(*table, "lambda_tolerance", config.lambda_tolerance);
+      config.objective_tolerance = ReadOptionalDouble(*table, "objective_tolerance", config.objective_tolerance);
+      config.retry_strategy = ParseProfileRetryStrategy(ReadOptionalString(
+          *table, "retry_strategy", "reference_and_bidirectional_neighbors"));
+      config.parallel_backend = ParseProfileParallelBackend(
+          ReadOptionalString(*table, "parallel_backend", "serial"));
+      if (const auto *checkpoint = (*table)["checkpoint"].as_table(); checkpoint != nullptr) {
+        const std::set<std::string> allowed_checkpoint = {"enabled", "resume", "run_id", "directory"};
+        for (const auto &[raw_key, node] : *checkpoint) {
+          (void)node;
+          if (allowed_checkpoint.count(std::string(raw_key.str())) == 0U) {
+            throw ConfigError("Unsupported field in fit.combined_profile.checkpoint: "
+                              + std::string(raw_key.str()));
+          }
+        }
+        config.checkpoint.enabled = ReadOptionalBool(*checkpoint, "enabled", false);
+        config.checkpoint.resume = ReadOptionalBool(*checkpoint, "resume", false);
+        config.checkpoint.run_id = ReadOptionalString(*checkpoint, "run_id", "");
+        config.checkpoint.directory = ReadOptionalString(*checkpoint, "directory", "");
+      } else if (table->contains("checkpoint")) {
+        throw ConfigError("fit.combined_profile.checkpoint must be a table.");
+      }
+      return config;
+    }
+
     RangeBin ParseRangeBin(const toml::table &table, const std::string &context) {
       RangeBin bin;
       if (const auto value = table["min"].value<double>(); value.has_value()) {
@@ -666,6 +716,8 @@ namespace exp_femto_3d {
     config.build.mt_rebin = ParseAxisRebinConfig(rebin, "mt");
 
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
+    config.fit.lambda_mode =
+        ParseLambdaMode(ReadOptionalString(fit, "lambda_mode", ToString(config.fit.lambda_mode)));
     const std::optional<bool> legacy_use_coulomb = ReadOptionalNullableBool(fit, "use_coulomb");
     const auto explicit_coulomb_mode = fit["coulomb_mode"].value<std::string>();
     if (explicit_coulomb_mode.has_value()) {
@@ -706,6 +758,11 @@ namespace exp_femto_3d {
       throw ConfigError("fit.profile_likelihood must be a table.");
     }
     config.fit.profile_likelihood = ParseProfileLikelihoodConfig(profile_likelihood);
+    const toml::table *combined_profile = fit["combined_profile"].as_table();
+    if (fit.contains("combined_profile") && combined_profile == nullptr) {
+      throw ConfigError("fit.combined_profile must be a table.");
+    }
+    config.fit.combined_profile = ParseCombinedProfileConfig(combined_profile);
 
     if (const auto *bins = root["bins"].as_table(); bins != nullptr) {
       config.centrality_bins = ParseRangeBinArray(GetOptionalArray(*bins, "centrality"), "bins.centrality");
@@ -819,6 +876,39 @@ namespace exp_femto_3d {
     EnsureExtension(config.output.fit_summary_name, ".tsv");
     EnsureExtension(config.output.fit_report_root_name, ".root");
     EnsureExtension(config.output.profile_root_name, ".root");
+
+    if (config.fit.lambda_mode == LambdaMode::kSharedPhi
+        || config.fit.lambda_mode == LambdaMode::kCombinedProfile) {
+      const std::string mode = ToString(config.fit.lambda_mode);
+      if (!config.fit.options.use_pml) {
+        throw ConfigError("fit.lambda_mode = '" + mode + "' requires fit.use_pml = true.");
+      }
+      if (!config.fit.options.use_core_halo_lambda) {
+        throw ConfigError("fit.lambda_mode = '" + mode + "' requires fit.use_core_halo_lambda = true.");
+      }
+      if (config.fit.options.parameters.lambda.fixed_value.has_value()) {
+        throw ConfigError("fit.lambda_mode = '" + mode + "' forbids fit.parameters.lambda.fixed_value.");
+      }
+      if (config.fit.profile_likelihood.enabled) {
+        throw ConfigError("fit.lambda_mode = '" + mode
+                          + "' cannot be combined with fit.profile_likelihood.enabled.");
+      }
+    }
+    const CombinedProfileConfig &combined = config.fit.combined_profile;
+    if (combined.lambda_tolerance <= 0.0 || !std::isfinite(combined.lambda_tolerance)
+        || combined.objective_tolerance < 0.0 || !std::isfinite(combined.objective_tolerance)) {
+      throw ConfigError("fit.combined_profile tolerances must be finite, with lambda_tolerance > 0.");
+    }
+    if (combined.parallel_backend == ProfileParallelBackend::kThread) {
+      throw ConfigError("fit.combined_profile.parallel_backend does not support thread execution.");
+    }
+    if (combined.checkpoint.resume && !combined.checkpoint.enabled) {
+      throw ConfigError("fit.combined_profile.checkpoint.resume requires checkpoint.enabled = true.");
+    }
+    if (combined.checkpoint.enabled
+        && (combined.checkpoint.run_id.empty() || combined.checkpoint.directory.empty())) {
+      throw ConfigError("Enabled fit.combined_profile.checkpoint requires non-empty run_id and directory.");
+    }
 
     const ProfileLikelihoodConfig &profile = config.fit.profile_likelihood;
     if (!profile.enabled) {
@@ -951,6 +1041,32 @@ namespace exp_femto_3d {
       return FitModel::kFull;
     }
     throw ConfigError("Unsupported fit model: " + token);
+  }
+
+  std::string ToString(const LambdaMode mode) {
+    switch (mode) {
+      case LambdaMode::kIndependent:
+        return "independent";
+      case LambdaMode::kSharedPhi:
+        return "shared_phi";
+      case LambdaMode::kCombinedProfile:
+        return "combined_profile";
+    }
+    return "independent";
+  }
+
+  LambdaMode ParseLambdaMode(const std::string &token) {
+    const std::string lowered = ToLower(token);
+    if (lowered == "independent") {
+      return LambdaMode::kIndependent;
+    }
+    if (lowered == "shared_phi" || lowered == "shared-phi") {
+      return LambdaMode::kSharedPhi;
+    }
+    if (lowered == "combined_profile" || lowered == "combined-profile") {
+      return LambdaMode::kCombinedProfile;
+    }
+    throw ConfigError("Unsupported fit.lambda_mode: " + token);
   }
 
   std::string ToString(const CoulombMode mode) {

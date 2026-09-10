@@ -1,5 +1,6 @@
 #include <exception>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -125,6 +126,39 @@ int main(int argc, char **argv) {
       config.output.profile_root_name = worker_output;
       config.fit.profile_likelihood.checkpoint.enabled = false;
       config.fit.profile_likelihood.checkpoint.resume = false;
+    }
+    const char *combined_worker_marker = std::getenv("EXP_FEMTO_3D_COMBINED_PROCESS_WORKER");
+    const char *combined_worker_group = std::getenv("EXP_FEMTO_3D_COMBINED_WORKER_GROUP");
+    const char *combined_worker_fit = std::getenv("EXP_FEMTO_3D_COMBINED_WORKER_FIT_ROOT");
+    const char *combined_worker_summary = std::getenv("EXP_FEMTO_3D_COMBINED_WORKER_SUMMARY");
+    const char *combined_worker_report = std::getenv("EXP_FEMTO_3D_COMBINED_WORKER_REPORT_ROOT");
+    const bool any_combined_worker = combined_worker_marker != nullptr || combined_worker_group != nullptr
+                                     || combined_worker_fit != nullptr || combined_worker_summary != nullptr
+                                     || combined_worker_report != nullptr;
+    const bool complete_combined_worker = combined_worker_marker != nullptr && combined_worker_group != nullptr
+                                          && combined_worker_fit != nullptr && combined_worker_summary != nullptr
+                                          && combined_worker_report != nullptr;
+    if (any_combined_worker && (!complete_combined_worker || std::string(combined_worker_marker) != "1")) {
+      throw std::runtime_error("Incomplete internal combined-profile worker environment.");
+    }
+    if (complete_combined_worker) {
+      if (config.fit.lambda_mode != LambdaMode::kCombinedProfile
+          || config.fit.combined_profile.parallel_backend != ProfileParallelBackend::kProcess
+          || std::string(combined_worker_group).empty()) {
+        throw std::runtime_error("Internal combined-profile worker requires process combined-profile mode.");
+      }
+      const std::filesystem::path fit_path(combined_worker_fit);
+      const std::filesystem::path summary_path(combined_worker_summary);
+      const std::filesystem::path report_path(combined_worker_report);
+      config.output.output_directory = fit_path.parent_path().string();
+      config.output.fit_root_name = fit_path.filename().string();
+      config.output.fit_summary_name = summary_path.filename().string();
+      config.output.fit_report_directory = report_path.parent_path().string();
+      config.output.fit_report_root_name = report_path.filename().string();
+      config.fit.combined_profile.parallel_backend = ProfileParallelBackend::kSerial;
+      config.fit.combined_profile.workers = 1;
+      config.fit.combined_profile.checkpoint.enabled = false;
+      config.fit.combined_profile.checkpoint.resume = false;
     }
     const Logger logger(config.output.log_level);
 

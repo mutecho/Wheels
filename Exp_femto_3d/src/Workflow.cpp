@@ -60,8 +60,10 @@
 #include "CATSconstants.h"
 #endif
 #include "exp_femto_3d/Config.h"
+#include "CombinedProfile.h"
 #include "ProfileDisplay2D.h"
 #include "ProfileLikelihood.h"
+#include "SharedLambdaFit.h"
 
 extern char **environ;
 
@@ -124,6 +126,133 @@ namespace exp_femto_3d {
         return y0 + fraction * (y1 - y0);
       }
     };
+
+    constexpr std::uint64_t kCombinedStageKernelMagic = 0x434f554c4b455231ULL;
+
+    template <typename T>
+    void WriteCombinedStageValue(std::ostream &output, const T &value) {
+      output.write(reinterpret_cast<const char *>(&value), sizeof(T));
+      if (!output) {
+        throw std::runtime_error("Cannot write combined-profile frozen-kernel checkpoint.");
+      }
+    }
+
+    template <typename T>
+    T ReadCombinedStageValue(std::istream &input) {
+      T value{};
+      input.read(reinterpret_cast<char *>(&value), sizeof(T));
+      if (!input) {
+        throw std::runtime_error("Truncated combined-profile frozen-kernel checkpoint.");
+      }
+      return value;
+    }
+
+    void WriteCombinedStageString(std::ostream &output, const std::string &value) {
+      WriteCombinedStageValue(output, static_cast<std::uint64_t>(value.size()));
+      output.write(value.data(), static_cast<std::streamsize>(value.size()));
+      if (!output) {
+        throw std::runtime_error("Cannot write combined-profile frozen-kernel string.");
+      }
+    }
+
+    std::string ReadCombinedStageString(std::istream &input) {
+      const std::uint64_t size = ReadCombinedStageValue<std::uint64_t>(input);
+      if (size > (1ULL << 20U)) {
+        throw std::runtime_error("Invalid combined-profile frozen-kernel string size.");
+      }
+      std::string value(static_cast<std::size_t>(size), '\0');
+      input.read(value.data(), static_cast<std::streamsize>(size));
+      if (!input) {
+        throw std::runtime_error("Truncated combined-profile frozen-kernel string.");
+      }
+      return value;
+    }
+
+    void WriteCombinedStageVector(std::ostream &output, const std::vector<double> &values) {
+      WriteCombinedStageValue(output, static_cast<std::uint64_t>(values.size()));
+      for (const double value : values) WriteCombinedStageValue(output, value);
+    }
+
+    std::vector<double> ReadCombinedStageVector(std::istream &input) {
+      const std::uint64_t size = ReadCombinedStageValue<std::uint64_t>(input);
+      if (size > (1ULL << 20U)) {
+        throw std::runtime_error("Invalid combined-profile frozen-kernel vector size.");
+      }
+      std::vector<double> values(static_cast<std::size_t>(size));
+      for (double &value : values) value = ReadCombinedStageValue<double>(input);
+      return values;
+    }
+
+    bool SameCombinedStageNumber(const double left, const double right) {
+      return left == right || (std::isnan(left) && std::isnan(right));
+    }
+
+    /** Persist the exact frozen kernel used by every stage, not only its configuration digest. */
+    void WriteCombinedStageKernel(std::ostream &output, const CoulombKernelTable *kernel) {
+      WriteCombinedStageValue(output, kCombinedStageKernelMagic);
+      WriteCombinedStageValue(output, kernel != nullptr);
+      if (kernel == nullptr) return;
+      const CoulombKernelCatalogEntry &entry = kernel->catalog_entry;
+      WriteCombinedStageString(output, entry.group_id);
+      WriteCombinedStageValue(output, entry.centrality_index);
+      WriteCombinedStageValue(output, entry.mt_index);
+      WriteCombinedStageValue(output, entry.qn_index);
+      WriteCombinedStageValue(output, entry.cent_low);
+      WriteCombinedStageValue(output, entry.cent_high);
+      WriteCombinedStageValue(output, entry.mt_low);
+      WriteCombinedStageValue(output, entry.mt_high);
+      WriteCombinedStageValue(output, entry.qn_low);
+      WriteCombinedStageValue(output, entry.qn_high);
+      WriteCombinedStageString(output, entry.qn_label);
+      WriteCombinedStageValue(output, entry.is_qn_integrated);
+      WriteCombinedStageString(output, entry.finite_source_mode);
+      WriteCombinedStageValue(output, entry.seed_radius_fm);
+      WriteCombinedStageValue(output, entry.final_radius_fm);
+      WriteCombinedStageValue(output, entry.cats_enabled);
+      WriteCombinedStageValue(output, entry.kstar_min_mev);
+      WriteCombinedStageValue(output, entry.kstar_max_mev);
+      WriteCombinedStageValue(output, entry.kstar_bin_count);
+      WriteCombinedStageVector(output, kernel->kstar_mev);
+      WriteCombinedStageVector(output, kernel->coulomb_factor);
+    }
+
+    void ValidateCombinedStageKernel(std::istream &input, const CoulombKernelTable *expected) {
+      if (ReadCombinedStageValue<std::uint64_t>(input) != kCombinedStageKernelMagic) {
+        throw std::runtime_error("Combined-profile frozen-kernel checkpoint format mismatch.");
+      }
+      const bool has_kernel = ReadCombinedStageValue<bool>(input);
+      if (has_kernel != (expected != nullptr)) {
+        throw std::runtime_error("Combined-profile frozen-kernel presence mismatch.");
+      }
+      if (!has_kernel) return;
+      const CoulombKernelCatalogEntry &entry = expected->catalog_entry;
+      const bool metadata_matches =
+          ReadCombinedStageString(input) == entry.group_id
+          && ReadCombinedStageValue<int>(input) == entry.centrality_index
+          && ReadCombinedStageValue<int>(input) == entry.mt_index
+          && ReadCombinedStageValue<int>(input) == entry.qn_index
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.cent_low)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.cent_high)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.mt_low)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.mt_high)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.qn_low)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.qn_high)
+          && ReadCombinedStageString(input) == entry.qn_label
+          && ReadCombinedStageValue<bool>(input) == entry.is_qn_integrated
+          && ReadCombinedStageString(input) == entry.finite_source_mode
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.seed_radius_fm)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.final_radius_fm)
+          && ReadCombinedStageValue<bool>(input) == entry.cats_enabled
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.kstar_min_mev)
+          && SameCombinedStageNumber(ReadCombinedStageValue<double>(input), entry.kstar_max_mev)
+          && ReadCombinedStageValue<int>(input) == entry.kstar_bin_count;
+      const std::vector<double> kstar_mev = ReadCombinedStageVector(input);
+      const std::vector<double> coulomb_factor = ReadCombinedStageVector(input);
+      if (!metadata_matches || kstar_mev != expected->kstar_mev
+          || coulomb_factor != expected->coulomb_factor) {
+        throw std::runtime_error("Combined-profile frozen Coulomb kernel content mismatch.");
+      }
+    }
 
     const CoulombKernelTable *g_active_coulomb_kernel = nullptr;
 
@@ -532,6 +661,50 @@ namespace exp_femto_3d {
       }
     }
 
+    bool ValidateCombinedProfileGroupChunk(const std::string &path,
+                                           const std::string &expected_group_id,
+                                           const std::size_t expected_members) {
+      try {
+        auto file = OpenRootFile(path, "READ");
+        auto *catalog = dynamic_cast<TTree *>(file->Get("meta/SharedLambdaFitCatalog"));
+        if (catalog == nullptr || catalog->GetEntries() != 1) return false;
+        std::string *group_id = nullptr;
+        std::string *fit_mode = nullptr;
+        std::vector<std::string> *members = nullptr;
+        catalog->SetBranchAddress("group_id", &group_id);
+        catalog->SetBranchAddress("fit_mode", &fit_mode);
+        catalog->SetBranchAddress("member_slice_ids", &members);
+        catalog->GetEntry(0);
+        if (group_id == nullptr || fit_mode == nullptr || members == nullptr
+            || *group_id != expected_group_id || *fit_mode != "combined_profile"
+            || members->size() != expected_members) return false;
+        const std::string base = "combined_profile/" + expected_group_id + "/";
+        auto *stages = dynamic_cast<TTree *>(file->Get((base + "StageCatalog").c_str()));
+        auto *combined = dynamic_cast<TTree *>(file->Get((base + "CombinedProfilePoints").c_str()));
+        auto *profiles = dynamic_cast<TTree *>(file->Get((base + "ProfilePoints").c_str()));
+        auto *attempts = dynamic_cast<TTree *>(file->Get((base + "AttemptPoints").c_str()));
+        return stages != nullptr && stages->GetEntries() > 0
+               && combined != nullptr && combined->GetEntries() > 0
+               && profiles != nullptr && profiles->GetEntries() > 0
+               && attempts != nullptr && attempts->GetEntries() > 0;
+      } catch (const std::exception &) {
+        return false;
+      }
+    }
+
+    bool CombinedProfileGroupPointEstimateValid(const std::string &path) {
+      auto file = OpenRootFile(path, "READ");
+      auto *catalog = dynamic_cast<TTree *>(file->Get("meta/SharedLambdaFitCatalog"));
+      if (catalog == nullptr || catalog->GetEntries() != 1
+          || catalog->GetBranch("point_estimate_valid") == nullptr) {
+        throw std::runtime_error("Combined-profile group chunk has no validity record.");
+      }
+      int valid = 0;
+      catalog->SetBranchAddress("point_estimate_valid", &valid);
+      catalog->GetEntry(0);
+      return valid != 0;
+    }
+
     void PruneRedundantProfileDisplayObjects(
         TFile &file,
         const std::vector<const SliceCatalogEntry *> &entries,
@@ -709,6 +882,88 @@ namespace exp_femto_3d {
         points.push_back(MakeFitResultSummaryPoint(result, result.alpha, result.alpha_err));
       }
       return points;
+    }
+
+    const SharedLambdaFitResult *FindSharedLambdaResult(
+        const std::vector<SharedLambdaFitResult> &shared_results,
+        const std::string &group_id) {
+      const auto found = std::find_if(shared_results.begin(), shared_results.end(), [&](const auto &result) {
+        return result.group_id == group_id;
+      });
+      return found == shared_results.end() ? nullptr : &*found;
+    }
+
+    int SharedGlobalParameterIndex(const SharedLambdaFitResult &shared,
+                                   const std::string &slice_id,
+                                   const int local_index) {
+      const auto member = std::find(shared.member_slice_ids.begin(), shared.member_slice_ids.end(), slice_id);
+      if (member == shared.member_slice_ids.end()) return -1;
+      const std::size_t member_index = static_cast<std::size_t>(std::distance(shared.member_slice_ids.begin(), member));
+      const std::size_t flat = static_cast<std::size_t>(shared.member_parameter_offsets[member_index])
+                               + static_cast<std::size_t>(local_index);
+      return flat < shared.member_local_to_global_indices.size()
+                 ? shared.member_local_to_global_indices[flat] : -1;
+    }
+
+    bool BuildSharedDerivedInputs(const std::vector<LevyFitResult> &group_results,
+                                  const SharedLambdaFitResult &shared,
+                                  const int local_index,
+                                  std::vector<double> &phi,
+                                  std::vector<double> &values,
+                                  std::vector<double> &covariance) {
+      if (!shared.parameter_errors_valid || shared.parameter_values.empty()
+          || shared.covariance.size() != shared.parameter_values.size() * shared.parameter_values.size()) {
+        return false;
+      }
+      std::vector<int> indices;
+      for (const LevyFitResult &result : group_results) {
+        const int global = SharedGlobalParameterIndex(shared, result.slice_id, local_index);
+        if (global < 0) return false;
+        indices.push_back(global);
+        phi.push_back(result.phi);
+        values.push_back(shared.parameter_values[static_cast<std::size_t>(global)]);
+      }
+      covariance.resize(indices.size() * indices.size());
+      const std::size_t dimension = shared.parameter_values.size();
+      for (std::size_t row = 0; row < indices.size(); ++row) {
+        for (std::size_t column = 0; column < indices.size(); ++column) {
+          covariance[row * indices.size() + column] =
+              shared.covariance[static_cast<std::size_t>(indices[row]) * dimension
+                                + static_cast<std::size_t>(indices[column])];
+        }
+      }
+      return true;
+    }
+
+    shared_lambda::HarmonicResult FitSharedHarmonic(
+        const std::vector<LevyFitResult> &group_results,
+        const SharedLambdaFitResult &shared,
+        const int local_index,
+        const bool sine_form) {
+      std::vector<double> phi;
+      std::vector<double> values;
+      std::vector<double> covariance;
+      if (!BuildSharedDerivedInputs(group_results, shared, local_index, phi, values, covariance)) {
+        shared_lambda::HarmonicResult failure;
+        failure.failure_reason = "joint covariance or local-to-global mapping is unavailable";
+        return failure;
+      }
+      return shared_lambda::FitSecondHarmonicGLS(phi, values, covariance, sine_form);
+    }
+
+    shared_lambda::ConstantResult FitSharedConstant(
+        const std::vector<LevyFitResult> &group_results,
+        const SharedLambdaFitResult &shared,
+        const int local_index) {
+      std::vector<double> phi;
+      std::vector<double> values;
+      std::vector<double> covariance;
+      if (!BuildSharedDerivedInputs(group_results, shared, local_index, phi, values, covariance)) {
+        shared_lambda::ConstantResult failure;
+        failure.failure_reason = "joint covariance or local-to-global mapping is unavailable";
+        return failure;
+      }
+      return shared_lambda::FitConstantGLS(values, covariance);
     }
 
     // The eps canvas keeps a compact statistics box for quick visual QA.
@@ -931,6 +1186,26 @@ namespace exp_femto_3d {
       return point.valid ? std::optional<EpsSummaryPoint>(point) : std::nullopt;
     }
 
+    std::optional<EpsSummaryPoint> ComputeEpsFromSharedHarmonic(
+        const shared_lambda::HarmonicResult &fit,
+        const LevyFitResult &representative_result) {
+      constexpr double kMinimumInterceptMagnitude = 1.0e-12;
+      if (!fit.valid || std::abs(fit.intercept) <= kMinimumInterceptMagnitude) return std::nullopt;
+      EpsSummaryPoint point;
+      point.mt_center = 0.5 * (representative_result.mt_low + representative_result.mt_high);
+      point.mt_error = 0.5 * (representative_result.mt_high - representative_result.mt_low);
+      point.value = 2.0 * fit.harmonic / fit.intercept;
+      const double derivative_a = -2.0 * fit.harmonic / (fit.intercept * fit.intercept);
+      const double derivative_b = 2.0 / fit.intercept;
+      const double variance = derivative_a * derivative_a * fit.intercept_variance
+                              + derivative_b * derivative_b * fit.harmonic_variance
+                              + 2.0 * derivative_a * derivative_b * fit.covariance;
+      if (!std::isfinite(variance) || variance < -1.0e-12) return std::nullopt;
+      point.error = std::sqrt(std::max(0.0, variance));
+      point.valid = std::isfinite(point.mt_center) && std::isfinite(point.value) && std::isfinite(point.error);
+      return point.valid ? std::optional<EpsSummaryPoint>(point) : std::nullopt;
+    }
+
     // Overview trend lines reuse the same constant/cosine/sine forms as R2 summary fits.
     std::unique_ptr<TF1> BuildOverviewFitFunction(const std::string &name,
                                                   const int parameter_index,
@@ -957,7 +1232,8 @@ namespace exp_femto_3d {
                            const int parameter_index,
                            const bool uses_mapped_phi_range,
                            std::vector<std::unique_ptr<TGraphErrors>> &owned_graphs,
-                           std::vector<std::unique_ptr<TF1>> &owned_fits) {
+                           std::vector<std::unique_ptr<TF1>> &owned_fits,
+                           const shared_lambda::HarmonicResult *shared_fit = nullptr) {
       if (graph == nullptr) {
         return;
       }
@@ -984,10 +1260,16 @@ namespace exp_femto_3d {
       const double phi_fit_max = uses_mapped_phi_range ? TMath::Pi() / 2.0 : TMath::Pi();
       const bool constant_panel = parameter_index < 0;
       const int minimum_points = constant_panel ? 1 : 2;
-      if (graph->GetN() >= minimum_points) {
+      if (graph->GetN() >= minimum_points && (shared_fit == nullptr || shared_fit->valid)) {
         auto fit_function = BuildOverviewFitFunction(
             std::string(graph->GetName()) + "_overview_fit", parameter_index, phi_fit_min, phi_fit_max, y);
-        graph->Fit(fit_function.get(), "QN");
+        if (shared_fit != nullptr) {
+          fit_function->SetParameters(shared_fit->intercept, shared_fit->harmonic);
+          fit_function->SetParError(0, std::sqrt(std::max(0.0, shared_fit->intercept_variance)));
+          fit_function->SetParError(1, std::sqrt(std::max(0.0, shared_fit->harmonic_variance)));
+        } else {
+          graph->Fit(fit_function.get(), "QN");
+        }
         fit_function->Draw("L SAME");
         owned_fits.push_back(std::move(fit_function));
       }
@@ -2093,16 +2375,6 @@ namespace exp_femto_3d {
       return fit_function;
     }
 
-    double EvaluateLevyModelFromParameterArray(const double q_out,
-                                               const double q_side,
-                                               const double q_long,
-                                               const double *parameters,
-                                               const bool use_full_model) {
-      double x[3] = {q_out, q_side, q_long};
-      return use_full_model ? Levy3DFullModel(x, const_cast<double *>(parameters))
-                            : Levy3DModel(x, const_cast<double *>(parameters));
-    }
-
     double ComputeRawToNormalizedCFScale(TH3D *h_se_raw, TH3D *h_me_raw) {
       if (h_se_raw == nullptr || h_me_raw == nullptr) {
         return 0.0;
@@ -2154,8 +2426,7 @@ namespace exp_femto_3d {
       PMLEvaluationStatus status = PMLEvaluationStatus::kObjectiveInvalid;
     };
 
-    void EnsurePMLBinCache() {
-      Levy3DPMLContext &context = g_levy_3d_pml_context;
+    void EnsurePMLBinCache(Levy3DPMLContext &context) {
       if (context.cached_h_se_raw == context.h_se_raw
           && context.cached_h_me_raw == context.h_me_raw
           && context.cached_coulomb_kernel == context.coulomb_kernel
@@ -2169,6 +2440,7 @@ namespace exp_femto_3d {
       context.cached_fit_q_max = context.fit_options.fit_q_max;
       context.cache_equivalence_checked = false;
       if (context.h_se_raw == nullptr || context.h_me_raw == nullptr) return;
+      ActiveCoulombKernelGuard kernel_guard(context.coulomb_kernel);
       for (int ix = 1; ix <= context.h_se_raw->GetNbinsX(); ++ix) {
         const double q_out = context.h_se_raw->GetXaxis()->GetBinCenter(ix);
         if (std::abs(q_out) > context.fit_options.fit_q_max) continue;
@@ -2231,9 +2503,10 @@ namespace exp_femto_3d {
       return femto_value * baseline;
     }
 
-    double EvaluateUncachedPMLObjectiveForRegression(const double *parameters) {
+    double EvaluateUncachedPMLObjectiveForRegression(const double *parameters,
+                                                     const Levy3DPMLContext &context) {
       double objective = 0.0;
-      const Levy3DPMLContext &context = g_levy_3d_pml_context;
+      ActiveCoulombKernelGuard kernel_guard(context.coulomb_kernel);
       for (int ix = 1; ix <= context.h_se_raw->GetNbinsX(); ++ix) {
         const double q_out = context.h_se_raw->GetXaxis()->GetBinCenter(ix);
         if (std::abs(q_out) > context.fit_options.fit_q_max) continue;
@@ -2246,8 +2519,14 @@ namespace exp_femto_3d {
             const double same_counts = context.h_se_raw->GetBinContent(ix, iy, iz);
             const double mixed_counts = context.h_me_raw->GetBinContent(ix, iy, iz);
             if (same_counts == 0.0 && mixed_counts == 0.0) continue;
-            double ratio = EvaluateLevyModelFromParameterArray(
-                q_out, q_side, q_long, parameters, context.use_full_model);
+            double ratio = context.use_full_model
+                ? EvaluateFullLevyCF(q_out, q_side, q_long,
+                                     parameters[0], parameters[1], parameters[2], parameters[3], parameters[4],
+                                     parameters[5], parameters[6], parameters[7], parameters[8], parameters[9],
+                                     context.fit_options)
+                : EvaluateDiagonalLevyCF(q_out, q_side, q_long,
+                                         parameters[0], parameters[1], parameters[2], parameters[3], parameters[4],
+                                         parameters[5], parameters[6], context.fit_options);
             ratio *= context.raw_same_to_mixed_integral_ratio;
             const double contribution = ComputePMLNeg2LogLContribution(same_counts, mixed_counts, ratio);
             if (!std::isfinite(contribution) || contribution >= kFitPenaltyValue) return kFitPenaltyValue;
@@ -2260,20 +2539,20 @@ namespace exp_femto_3d {
 
     // This is the sole PML calculation path.  Its loop order and raw-count normalization
     // intentionally match the established FCN so diagnostics cannot change the statistic.
-    PMLEvaluation EvaluatePMLObjective(const double *parameters) {
-      ++g_levy_3d_pml_context.fcn_calls;
-      if (g_levy_3d_pml_context.h_se_raw == nullptr || g_levy_3d_pml_context.h_me_raw == nullptr) {
+    PMLEvaluation EvaluatePMLObjectiveForContext(Levy3DPMLContext &context, const double *parameters) {
+      ++context.fcn_calls;
+      if (context.h_se_raw == nullptr || context.h_me_raw == nullptr) {
         return {kFitPenaltyValue, PMLEvaluationStatus::kMissingInput};
       }
-      if (g_levy_3d_pml_context.use_full_model && !HasValidFullR2MatrixFromParameterArray(parameters)) {
+      if (context.use_full_model && !HasValidFullR2MatrixFromParameterArray(parameters)) {
         return {kFitPenaltyValue, PMLEvaluationStatus::kModelDomainInvalid};
       }
 
-      EnsurePMLBinCache();
+      EnsurePMLBinCache(context);
       double neg2_log_l = 0.0;
-      for (const PMLBinCacheEntry &bin : g_levy_3d_pml_context.bin_cache) {
-        double model_ratio = EvaluateCachedLevyModel(bin, parameters, g_levy_3d_pml_context);
-        model_ratio *= g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio;
+      for (const PMLBinCacheEntry &bin : context.bin_cache) {
+        double model_ratio = EvaluateCachedLevyModel(bin, parameters, context);
+        model_ratio *= context.raw_same_to_mixed_integral_ratio;
         const double contribution = ComputePMLNeg2LogLContribution(bin.same_counts, bin.mixed_counts, model_ratio);
         if (!std::isfinite(contribution) || contribution >= kFitPenaltyValue) {
           return {kFitPenaltyValue, PMLEvaluationStatus::kObjectiveInvalid};
@@ -2281,17 +2560,23 @@ namespace exp_femto_3d {
         neg2_log_l += contribution;
       }
 
-      if (!g_levy_3d_pml_context.cache_equivalence_checked) {
-        const double uncached = EvaluateUncachedPMLObjectiveForRegression(parameters);
+      if (!context.cache_equivalence_checked) {
+        const double uncached = EvaluateUncachedPMLObjectiveForRegression(parameters, context);
         const double tolerance = std::max(1.0e-10, 1.0e-12 * std::abs(uncached));
         if (!std::isfinite(uncached) || std::abs(neg2_log_l - uncached) > tolerance) {
           throw std::runtime_error("PML bin-cache regression check failed.");
         }
-        g_levy_3d_pml_context.cache_equivalence_checked = true;
+        context.cache_equivalence_checked = true;
       }
 
       return std::isfinite(neg2_log_l) ? PMLEvaluation{neg2_log_l, PMLEvaluationStatus::kValid}
                                        : PMLEvaluation{kFitPenaltyValue, PMLEvaluationStatus::kObjectiveInvalid};
+    }
+
+    // Legacy single-slice/profile callers keep their callback ABI while the shared fit
+    // evaluates the same statistic against explicit per-dataset contexts.
+    PMLEvaluation EvaluatePMLObjective(const double *parameters) {
+      return EvaluatePMLObjectiveForContext(g_levy_3d_pml_context, parameters);
     }
 
     void Levy3DPMLFCN(Int_t &npar, Double_t *grad, Double_t &f, Double_t *parameters, Int_t flag) {
@@ -2396,6 +2681,33 @@ namespace exp_femto_3d {
       bool hesse_ran = false;
       bool parameter_errors_valid = false;
     };
+
+    profile_likelihood::MinimizationResult ToProfileResult(const PMLMinimizationResult &result);
+
+    bool IsValidPMLPointEstimate(const PMLMinimizationResult &result) {
+      return !result.setup_error && result.migrad_status == 0
+             && result.evaluation_status == PMLEvaluationStatus::kValid
+             && std::isfinite(result.final_objective) && result.final_objective < kFitPenaltyValue;
+    }
+
+    Levy3DPMLContext MakePMLContext(TH3D *h_se_raw,
+                                    TH3D *h_me_raw,
+                                    const bool use_full_model,
+                                    const LevyFitOptions &fit_options,
+                                    const CoulombKernelTable *coulomb_kernel) {
+      const double raw_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
+      if (!(raw_scale > 0.0) || !std::isfinite(raw_scale)) {
+        throw std::runtime_error("Cannot evaluate PML with invalid raw SE/ME normalization.");
+      }
+      Levy3DPMLContext context;
+      context.h_se_raw = h_se_raw;
+      context.h_me_raw = h_me_raw;
+      context.use_full_model = use_full_model;
+      context.fit_options = fit_options;
+      context.coulomb_kernel = coulomb_kernel;
+      context.raw_same_to_mixed_integral_ratio = raw_scale;
+      return context;
+    }
 
     bool ConfigurePMLMinuit(TMinuit &minuit,
                             TF3 *fit_function,
@@ -3024,10 +3336,699 @@ namespace exp_femto_3d {
                                 fit_minuit_istat,
                                 finite_source_radius_fm,
                                 output.result);
+      if (fit_options.use_pml && output.pml_minimization.has_value()) {
+        output.result.point_estimate_valid = IsValidPMLPointEstimate(*output.pml_minimization);
+        output.result.parameter_errors_valid = output.result.point_estimate_valid && run_pml_hesse
+                                               && output.pml_minimization->hesse_status == 0
+                                               && output.pml_minimization->minuit_istat == 3;
+        output.result.at_parameter_boundary =
+            std::any_of(output.pml_minimization->at_lower_bound.begin(),
+                        output.pml_minimization->at_lower_bound.end(), [](const int value) { return value != 0; })
+            || std::any_of(output.pml_minimization->at_upper_bound.begin(),
+                           output.pml_minimization->at_upper_bound.end(), [](const int value) { return value != 0; });
+        if (!output.result.point_estimate_valid) {
+          output.result.fit_failure_reason = "PML point estimate is invalid or MIGRAD did not converge";
+        } else if (run_pml_hesse && !output.result.parameter_errors_valid) {
+          output.result.fit_failure_reason = "HESSE covariance quality is not accurate";
+        }
+      } else {
+        output.result.point_estimate_valid = fit_succeeded;
+        output.result.parameter_errors_valid = fit_succeeded;
+      }
       if (!fit_succeeded) {
         return std::nullopt;
       }
       return std::optional<SingleSliceFitOutput>(std::move(output));
+    }
+
+    struct SharedPMLFCNState {
+      const shared_lambda::ParameterLayout *layout = nullptr;
+      const std::vector<std::vector<shared_lambda::LocalParameter>> *local_parameters = nullptr;
+      std::vector<Levy3DPMLContext> *contexts = nullptr;
+      std::vector<double> component_objectives;
+      bool model_domain_valid = true;
+      bool objective_valid = true;
+    };
+
+    SharedPMLFCNState *g_shared_pml_fcn_state = nullptr;
+
+    class SharedPMLFCNGuard {
+     public:
+      explicit SharedPMLFCNGuard(SharedPMLFCNState &state) : previous_(g_shared_pml_fcn_state) {
+        g_shared_pml_fcn_state = &state;
+      }
+      ~SharedPMLFCNGuard() { g_shared_pml_fcn_state = previous_; }
+
+     private:
+      SharedPMLFCNState *previous_ = nullptr;
+    };
+
+    double EvaluateSharedPMLObjective(SharedPMLFCNState &state, const double *free_values) {
+      state.component_objectives.assign(state.contexts->size(), kFitPenaltyValue);
+      state.model_domain_valid = true;
+      state.objective_valid = true;
+      double objective = 0.0;
+      for (std::size_t member = 0; member < state.contexts->size(); ++member) {
+        const std::vector<double> local = shared_lambda::ExpandLocalValues(
+            *state.layout, member, state.local_parameters->at(member), free_values);
+        const PMLEvaluation evaluation = EvaluatePMLObjectiveForContext(state.contexts->at(member), local.data());
+        state.component_objectives[member] = evaluation.objective;
+        state.model_domain_valid = state.model_domain_valid
+                                   && evaluation.status != PMLEvaluationStatus::kModelDomainInvalid;
+        state.objective_valid = state.objective_valid && evaluation.status == PMLEvaluationStatus::kValid
+                                && std::isfinite(evaluation.objective) && evaluation.objective < kFitPenaltyValue;
+        if (!state.objective_valid) return kFitPenaltyValue;
+        objective += evaluation.objective;
+      }
+      return std::isfinite(objective) ? objective : kFitPenaltyValue;
+    }
+
+    void SharedPMLFCN(Int_t &npar, Double_t *grad, Double_t &f, Double_t *parameters, Int_t flag) {
+      (void)npar;
+      (void)grad;
+      (void)flag;
+      f = g_shared_pml_fcn_state == nullptr ? kFitPenaltyValue
+                                           : EvaluateSharedPMLObjective(*g_shared_pml_fcn_state, parameters);
+    }
+
+    struct SharedMinuitResult {
+      std::vector<double> values;
+      std::vector<double> errors;
+      std::vector<double> covariance;
+      std::vector<double> component_objectives;
+      double objective = kFitPenaltyValue;
+      double edm = std::numeric_limits<double>::quiet_NaN();
+      int migrad_status = -1;
+      int hesse_status = -1;
+      int covariance_quality = -1;
+      bool objective_valid = false;
+      bool model_domain_valid = false;
+      bool point_estimate_valid = false;
+      bool parameter_errors_valid = false;
+      bool at_parameter_boundary = false;
+      std::string failure_reason;
+    };
+
+    SharedMinuitResult RunSharedMinuit(
+        const shared_lambda::ParameterLayout &layout,
+        const std::vector<std::vector<shared_lambda::LocalParameter>> &local_parameters,
+        std::vector<Levy3DPMLContext> &contexts,
+        const std::vector<double> &seed,
+        const bool run_hesse) {
+      SharedMinuitResult result;
+      if (layout.labels.empty() || seed.size() != layout.labels.size()) {
+        result.failure_reason = "invalid shared parameter layout or seed";
+        return result;
+      }
+      SharedPMLFCNState state;
+      state.layout = &layout;
+      state.local_parameters = &local_parameters;
+      state.contexts = &contexts;
+      SharedPMLFCNGuard state_guard(state);
+      TMinuit minuit(static_cast<int>(layout.labels.size()));
+      minuit.SetFCN(SharedPMLFCN);
+      minuit.SetPrintLevel(-1);
+      minuit.SetErrorDef(1.0);  // F=-2 ln L, so the saved HESSE covariance is C=2 H_F^{-1}.
+      Int_t error_code = 0;
+      for (std::size_t index = 0; index < layout.labels.size(); ++index) {
+        const std::string minuit_name = index == 0U ? "lambda" : "p" + std::to_string(index);
+        minuit.mnparm(static_cast<int>(index), minuit_name.c_str(), seed[index], layout.steps[index],
+                      layout.has_limits[index] ? layout.lower[index] : 0.0,
+                      layout.has_limits[index] ? layout.upper[index] : 0.0, error_code);
+        if (error_code != 0) {
+          result.failure_reason = "TMinuit parameter setup failed";
+          return result;
+        }
+      }
+      Double_t arglist[2] = {100000.0, 0.1};
+      minuit.mnexcm("MIGRAD", arglist, 2, error_code);
+      result.migrad_status = error_code;
+      if (run_hesse) {
+        arglist[0] = 0.0;
+        minuit.mnexcm("HESSE", arglist, 1, error_code);
+        result.hesse_status = error_code;
+      }
+      Double_t fmin = kFitPenaltyValue;
+      Double_t fedm = std::numeric_limits<double>::quiet_NaN();
+      Double_t errdef = 0.0;
+      Int_t npari = 0;
+      Int_t nparx = 0;
+      Int_t istat = 0;
+      minuit.mnstat(fmin, fedm, errdef, npari, nparx, istat);
+      (void)errdef;
+      (void)npari;
+      (void)nparx;
+      result.edm = fedm;
+      result.covariance_quality = istat;
+      result.values.resize(layout.labels.size());
+      result.errors.resize(layout.labels.size(), std::numeric_limits<double>::quiet_NaN());
+      for (std::size_t index = 0; index < layout.labels.size(); ++index) {
+        double error = 0.0;
+        minuit.GetParameter(static_cast<int>(index), result.values[index], error);
+        if (run_hesse) result.errors[index] = error;
+        if (layout.has_limits[index]) {
+          result.at_parameter_boundary = result.at_parameter_boundary
+                                         || NearlyEqual(result.values[index], layout.lower[index])
+                                         || NearlyEqual(result.values[index], layout.upper[index]);
+        }
+      }
+      result.objective = EvaluateSharedPMLObjective(state, result.values.data());
+      result.component_objectives = state.component_objectives;
+      result.objective_valid = state.objective_valid && std::isfinite(result.objective)
+                               && result.objective < kFitPenaltyValue;
+      result.model_domain_valid = state.model_domain_valid;
+      result.point_estimate_valid = result.migrad_status == 0 && result.objective_valid
+                                    && result.model_domain_valid;
+      if (run_hesse) {
+        result.covariance.assign(layout.labels.size() * layout.labels.size(),
+                                 std::numeric_limits<double>::quiet_NaN());
+        minuit.mnemat(result.covariance.data(), static_cast<int>(layout.labels.size()));
+        result.parameter_errors_valid = result.point_estimate_valid && result.hesse_status == 0
+                                        && result.covariance_quality == 3
+                                        && shared_lambda::IsPositiveDefinite(
+                                               result.covariance, layout.labels.size());
+        if (!result.parameter_errors_valid) {
+          std::fill(result.errors.begin(), result.errors.end(), std::numeric_limits<double>::quiet_NaN());
+        }
+      }
+      if (!result.point_estimate_valid) {
+        result.failure_reason = !result.model_domain_valid ? "final model domain is invalid"
+                                : !result.objective_valid ? "final PML objective is invalid"
+                                : "MIGRAD did not converge";
+      } else if (run_hesse && !result.parameter_errors_valid) {
+        result.failure_reason = "HESSE covariance is unavailable, inaccurate, or not positive definite";
+      }
+      return result;
+    }
+
+    // Evaluate the local joint covariance at a center selected by the outer profile.
+    // No command in this routine is allowed to optimize or replace that center.
+    SharedMinuitResult RunSharedHesseAtPoint(
+        const shared_lambda::ParameterLayout &layout,
+        const std::vector<std::vector<shared_lambda::LocalParameter>> &local_parameters,
+        std::vector<Levy3DPMLContext> &contexts,
+        const std::vector<double> &center) {
+      SharedMinuitResult result;
+      result.migrad_status = -2;  // Deliberate "not executed" marker for combined-profile groups.
+      if (layout.labels.empty() || center.size() != layout.labels.size()) {
+        result.failure_reason = "invalid joint-HESSE parameter layout or center";
+        return result;
+      }
+      SharedPMLFCNState state;
+      state.layout = &layout;
+      state.local_parameters = &local_parameters;
+      state.contexts = &contexts;
+      SharedPMLFCNGuard state_guard(state);
+      result.objective = EvaluateSharedPMLObjective(state, center.data());
+      result.component_objectives = state.component_objectives;
+      result.objective_valid = state.objective_valid && std::isfinite(result.objective)
+                               && result.objective < kFitPenaltyValue;
+      result.model_domain_valid = state.model_domain_valid;
+      result.point_estimate_valid = result.objective_valid && result.model_domain_valid;
+
+      TMinuit minuit(static_cast<int>(layout.labels.size()));
+      minuit.SetFCN(SharedPMLFCN);
+      minuit.SetPrintLevel(-1);
+      minuit.SetErrorDef(1.0);  // F=-2 ln L gives C=2 H_F^{-1}.
+      Int_t error_code = 0;
+      for (std::size_t index = 0; index < layout.labels.size(); ++index) {
+        const std::string name = index == 0U ? "lambda" : "p" + std::to_string(index);
+        minuit.mnparm(static_cast<int>(index), name.c_str(), center[index], layout.steps[index],
+                      layout.has_limits[index] ? layout.lower[index] : 0.0,
+                      layout.has_limits[index] ? layout.upper[index] : 0.0, error_code);
+        if (error_code != 0) {
+          result.failure_reason = "TMinuit joint-HESSE parameter setup failed";
+          return result;
+        }
+      }
+      Double_t arglist[1] = {0.0};
+      minuit.mnexcm("HESSE", arglist, 1, error_code);
+      result.hesse_status = error_code;
+      if (result.hesse_status == 0) {
+        // A second curvature pass uses the first pass' scale estimates while
+        // preserving the exact center; this stabilizes direct-HESSE finite differences.
+        minuit.mnexcm("HESSE", arglist, 1, error_code);
+        result.hesse_status = error_code;
+      }
+      Double_t fmin = kFitPenaltyValue;
+      Double_t fedm = std::numeric_limits<double>::quiet_NaN();
+      Double_t errdef = 0.0;
+      Int_t npari = 0;
+      Int_t nparx = 0;
+      Int_t istat = 0;
+      minuit.mnstat(fmin, fedm, errdef, npari, nparx, istat);
+      (void)fmin;
+      (void)errdef;
+      (void)npari;
+      (void)nparx;
+      result.edm = fedm;
+      result.covariance_quality = istat;
+      result.values.resize(layout.labels.size());
+      result.errors.resize(layout.labels.size(), std::numeric_limits<double>::quiet_NaN());
+      bool center_unchanged = true;
+      for (std::size_t index = 0; index < layout.labels.size(); ++index) {
+        minuit.GetParameter(static_cast<int>(index), result.values[index], result.errors[index]);
+        center_unchanged = center_unchanged
+                           && NearlyEqual(result.values[index], center[index], 1.0e-8);
+        if (layout.has_limits[index]) {
+          result.at_parameter_boundary = result.at_parameter_boundary
+                                         || NearlyEqual(center[index], layout.lower[index])
+                                         || NearlyEqual(center[index], layout.upper[index]);
+        }
+      }
+      const double objective_after = EvaluateSharedPMLObjective(state, result.values.data());
+      result.component_objectives = state.component_objectives;
+      const bool objective_unchanged = std::isfinite(objective_after)
+                                       && std::abs(objective_after - result.objective) <= 1.0e-8
+                                          * (1.0 + std::abs(result.objective));
+      result.covariance.assign(layout.labels.size() * layout.labels.size(),
+                               std::numeric_limits<double>::quiet_NaN());
+      minuit.mnemat(result.covariance.data(), static_cast<int>(layout.labels.size()));
+      result.parameter_errors_valid = result.point_estimate_valid && result.hesse_status == 0
+                                      && result.covariance_quality == 3 && center_unchanged
+                                      && objective_unchanged && std::isfinite(result.edm)
+                                      && result.edm <= 1.0e-3
+                                      && shared_lambda::IsPositiveDefinite(
+                                             result.covariance, layout.labels.size());
+      if (!result.parameter_errors_valid) {
+        std::fill(result.errors.begin(), result.errors.end(), std::numeric_limits<double>::quiet_NaN());
+        result.failure_reason = "joint HESSE failed covariance, stationarity, or center-invariance validation";
+      }
+      return result;
+    }
+
+    SharedLambdaFitAttempt ToSharedAttempt(const std::string &seed_origin,
+                                           const SharedMinuitResult &result) {
+      SharedLambdaFitAttempt attempt;
+      attempt.seed_origin = seed_origin;
+      attempt.parameter_values = result.values;
+      attempt.objective = result.objective;
+      attempt.edm = result.edm;
+      attempt.migrad_status = result.migrad_status;
+      attempt.minuit_istat = result.covariance_quality;
+      attempt.objective_valid = result.objective_valid;
+      attempt.model_domain_valid = result.model_domain_valid;
+      attempt.point_estimate_valid = result.point_estimate_valid;
+      attempt.failure_reason = result.failure_reason;
+      return attempt;
+    }
+
+    struct SharedLambdaGroupOutput {
+      SharedLambdaFitResult group;
+      std::vector<SingleSliceFitOutput> members;
+      std::optional<combined_profile::Result> combined_profile_scan;
+    };
+
+    SharedLambdaGroupOutput FitSharedLambdaGroup(
+        const std::vector<const SliceCatalogEntry *> &entries,
+        const std::vector<TH3D *> &h_cf,
+        const std::vector<TH3D *> &h_se_raw,
+        const std::vector<TH3D *> &h_me_raw,
+        const FitModel model,
+        const LevyFitOptions &fit_options,
+        const bool fit_uses_symmetric_phi_range,
+        const CoulombKernelTable *coulomb_kernel) {
+      if (entries.empty() || h_cf.size() != entries.size() || h_se_raw.size() != entries.size()
+          || h_me_raw.size() != entries.size()) {
+        throw std::runtime_error("Invalid simultaneous shared-lambda group input.");
+      }
+      SharedLambdaGroupOutput output;
+      output.group.group_id = entries.front()->group_id;
+      output.group.centrality_index = entries.front()->centrality_index;
+      output.group.mt_index = entries.front()->mt_index;
+      output.group.qn_index = entries.front()->qn_index;
+      output.group.finite_source_mode = fit_options.coulomb_mode == CoulombMode::kFiniteSource
+                                            ? ToString(fit_options.finite_source_mode) : "";
+      output.group.finite_source_radius_fm = coulomb_kernel == nullptr
+                                                 ? std::numeric_limits<double>::quiet_NaN()
+                                                 : coulomb_kernel->catalog_entry.final_radius_fm;
+
+      const bool use_full_model = model == FitModel::kFull;
+      const int local_parameter_count = use_full_model ? 10 : 7;
+      std::vector<std::unique_ptr<TF3>> functions;
+      std::vector<std::vector<shared_lambda::LocalParameter>> local_parameters;
+      std::vector<Levy3DPMLContext> contexts;
+      std::vector<std::string> slice_ids;
+      functions.reserve(entries.size());
+      local_parameters.reserve(entries.size());
+      contexts.reserve(entries.size());
+      for (std::size_t member = 0; member < entries.size(); ++member) {
+        const SliceCatalogEntry &entry = *entries[member];
+        output.group.member_slice_ids.push_back(entry.slice_id);
+        slice_ids.push_back(entry.slice_id);
+        functions.emplace_back(use_full_model
+                                   ? BuildFullLevyFitFunction(entry.slice_id + "_shared_lambda_fit", fit_options)
+                                   : BuildLevyFitFunction(entry.slice_id + "_shared_lambda_fit", fit_options));
+        std::vector<shared_lambda::LocalParameter> parameters;
+        parameters.reserve(static_cast<std::size_t>(local_parameter_count));
+        for (int local = 0; local < local_parameter_count; ++local) {
+          double lower = 0.0;
+          double upper = 0.0;
+          functions.back()->GetParLimits(local, lower, upper);
+          parameters.push_back({functions.back()->GetParName(local),
+                                functions.back()->GetParameter(local),
+                                EstimatePMLStepSize(local, use_full_model),
+                                lower,
+                                upper,
+                                IsPMLParameterFixed(local, use_full_model, fit_options)});
+        }
+        local_parameters.push_back(std::move(parameters));
+        contexts.push_back(MakePMLContext(h_se_raw[member], h_me_raw[member], use_full_model,
+                                          fit_options, coulomb_kernel));
+        output.group.usable_bins += CountPMLUsableBins(h_se_raw[member], h_me_raw[member], fit_options.fit_q_max);
+      }
+      const shared_lambda::ParameterLayout layout =
+          shared_lambda::BuildParameterLayout(slice_ids, local_parameters);
+      output.group.parameter_labels = layout.labels;
+      output.group.parameter_slice_ids = layout.slice_ids;
+      output.group.parameter_local_indices = layout.local_indices;
+      output.group.free_parameters = static_cast<int>(layout.labels.size());
+      output.group.ndf = output.group.usable_bins - output.group.free_parameters;
+      for (const auto &mapping : layout.local_to_global) {
+        output.group.member_parameter_offsets.push_back(
+            static_cast<int>(output.group.member_local_to_global_indices.size()));
+        output.group.member_local_to_global_indices.insert(
+            output.group.member_local_to_global_indices.end(), mapping.begin(), mapping.end());
+      }
+
+      // Independent fits are only nuisance seed generators. Their estimates are never serialized
+      // as shared production results and do not alter the frozen group Coulomb kernel.
+      std::vector<double> prefit_seed = layout.initial;
+      for (std::size_t member = 0; member < entries.size(); ++member) {
+        auto prefit = FitSingleSlice(h_cf[member], h_se_raw[member], h_me_raw[member], *entries[member],
+                                     model, fit_options, fit_uses_symmetric_phi_range, coulomb_kernel, false);
+        if (!prefit.has_value() || !prefit->pml_minimization.has_value()
+            || !IsValidPMLPointEstimate(*prefit->pml_minimization)) {
+          continue;
+        }
+        for (int local = 0; local < local_parameter_count; ++local) {
+          const int global = layout.local_to_global[member][static_cast<std::size_t>(local)];
+          if (global > 0) {
+            prefit_seed[static_cast<std::size_t>(global)] =
+                prefit->pml_minimization->values[static_cast<std::size_t>(local)];
+          }
+        }
+      }
+      // Both required candidates deliberately start lambda from the configured value.
+      prefit_seed[0] = layout.initial[0];
+      SharedMinuitResult configured =
+          RunSharedMinuit(layout, local_parameters, contexts, layout.initial, false);
+      SharedMinuitResult nuisance_prefit =
+          RunSharedMinuit(layout, local_parameters, contexts, prefit_seed, false);
+      output.group.attempts.push_back(ToSharedAttempt("configured", configured));
+      output.group.attempts.push_back(ToSharedAttempt("independent_nuisance_prefit", nuisance_prefit));
+
+      const SharedMinuitResult *winner = nullptr;
+      for (const SharedMinuitResult *candidate : {&configured, &nuisance_prefit}) {
+        if (candidate->point_estimate_valid
+            && (winner == nullptr || candidate->objective < winner->objective)) {
+          winner = candidate;
+        }
+      }
+      SharedMinuitResult final_result;
+      if (winner != nullptr) {
+        final_result = RunSharedMinuit(layout, local_parameters, contexts, winner->values, true);
+        output.group.attempts.push_back(ToSharedAttempt("selected_hesse", final_result));
+      } else {
+        final_result = configured.objective <= nuisance_prefit.objective ? configured : nuisance_prefit;
+        final_result.failure_reason = "no valid simultaneous MIGRAD candidate";
+      }
+
+      output.group.parameter_values = final_result.values;
+      output.group.parameter_errors = final_result.errors;
+      output.group.covariance = final_result.covariance;
+      output.group.component_objectives = final_result.component_objectives;
+      output.group.objective = final_result.objective;
+      output.group.edm = final_result.edm;
+      output.group.migrad_status = final_result.migrad_status;
+      output.group.hesse_status = final_result.hesse_status;
+      output.group.covariance_quality = final_result.covariance_quality;
+      output.group.point_estimate_valid = final_result.point_estimate_valid;
+      output.group.parameter_errors_valid = final_result.parameter_errors_valid;
+      output.group.at_parameter_boundary = final_result.at_parameter_boundary;
+      output.group.failure_reason = final_result.failure_reason;
+      if (!final_result.point_estimate_valid) {
+        output.group.parameter_values.assign(layout.labels.size(), std::numeric_limits<double>::quiet_NaN());
+        output.group.parameter_errors.assign(layout.labels.size(), std::numeric_limits<double>::quiet_NaN());
+        output.group.covariance.assign(layout.labels.size() * layout.labels.size(),
+                                       std::numeric_limits<double>::quiet_NaN());
+      }
+
+      output.members.reserve(entries.size());
+      const double *free_values = final_result.values.empty() ? layout.initial.data() : final_result.values.data();
+      for (std::size_t member = 0; member < entries.size(); ++member) {
+        const std::vector<double> local = shared_lambda::ExpandLocalValues(
+            layout, member, local_parameters[member], free_values);
+        for (int index = 0; index < local_parameter_count; ++index) {
+          const int global = layout.local_to_global[member][static_cast<std::size_t>(index)];
+          const double parameter_value = !final_result.point_estimate_valid && global >= 0
+                                             ? std::numeric_limits<double>::quiet_NaN()
+                                             : local[static_cast<std::size_t>(index)];
+          functions[member]->SetParameter(index, parameter_value);
+          const double error = global >= 0 && final_result.parameter_errors_valid
+                                   ? final_result.errors[static_cast<std::size_t>(global)]
+                                   : (local_parameters[member][static_cast<std::size_t>(index)].fixed
+                                          ? 0.0 : std::numeric_limits<double>::quiet_NaN());
+          functions[member]->SetParError(index, error);
+        }
+        SingleSliceFitOutput member_output;
+        member_output.fit_function = std::move(functions[member]);
+        const double component = member < final_result.component_objectives.size()
+                                     ? final_result.component_objectives[member]
+                                     : std::numeric_limits<double>::quiet_NaN();
+        FillFitResultFromFunction(*entries[member], member_output.fit_function.get(), model, fit_options,
+                                  fit_uses_symmetric_phi_range, component, -1,
+                                  final_result.migrad_status == 0 ? final_result.covariance_quality
+                                                                  : -final_result.migrad_status,
+                                  final_result.edm, final_result.covariance_quality,
+                                  output.group.finite_source_radius_fm, member_output.result);
+        member_output.result.lambda_mode = "shared_phi";
+        member_output.result.shared_lambda_group_id = output.group.group_id;
+        member_output.result.point_estimate_valid = final_result.point_estimate_valid;
+        member_output.result.parameter_errors_valid = final_result.parameter_errors_valid;
+        member_output.result.at_parameter_boundary = final_result.at_parameter_boundary;
+        member_output.result.fit_failure_reason = final_result.failure_reason;
+        output.members.push_back(std::move(member_output));
+      }
+      return output;
+    }
+
+    SharedLambdaGroupOutput FitCombinedProfileGroup(
+        const std::vector<const SliceCatalogEntry *> &entries,
+        const std::vector<TH3D *> &h_cf,
+        const std::vector<TH3D *> &h_se_raw,
+        const std::vector<TH3D *> &h_me_raw,
+        const FitModel model,
+        const LevyFitOptions &fit_options,
+        const CombinedProfileConfig &profile_config,
+        const bool fit_uses_symmetric_phi_range,
+        const CoulombKernelTable *coulomb_kernel,
+        const std::optional<std::string> &stage_checkpoint_path = std::nullopt,
+        const std::string &stage_checkpoint_digest = "",
+        const bool resume_stage_checkpoint = false) {
+      if (entries.empty() || h_cf.size() != entries.size() || h_se_raw.size() != entries.size()
+          || h_me_raw.size() != entries.size()) {
+        throw std::runtime_error("Invalid combined-profile group input.");
+      }
+      ActiveCoulombKernelGuard kernel_guard(coulomb_kernel);
+      SharedLambdaGroupOutput output;
+      output.group.group_id = entries.front()->group_id;
+      output.group.centrality_index = entries.front()->centrality_index;
+      output.group.mt_index = entries.front()->mt_index;
+      output.group.qn_index = entries.front()->qn_index;
+      output.group.fit_mode = "combined_profile";
+      output.group.center_method = "combined_profile";
+      output.group.covariance_method = "joint_hesse_without_migrad";
+      output.group.migrad_status = -2;
+      output.group.finite_source_mode = fit_options.coulomb_mode == CoulombMode::kFiniteSource
+                                            ? ToString(fit_options.finite_source_mode) : "";
+      output.group.finite_source_radius_fm = coulomb_kernel == nullptr
+                                                 ? std::numeric_limits<double>::quiet_NaN()
+                                                 : coulomb_kernel->catalog_entry.final_radius_fm;
+
+      const bool use_full_model = model == FitModel::kFull;
+      const int local_parameter_count = use_full_model ? 10 : 7;
+      std::vector<std::unique_ptr<TF3>> functions;
+      std::vector<std::vector<shared_lambda::LocalParameter>> local_parameters;
+      std::vector<Levy3DPMLContext> contexts;
+      std::vector<std::string> slice_ids;
+      std::vector<std::vector<double>> nominal_values;
+      functions.reserve(entries.size());
+      for (std::size_t member = 0; member < entries.size(); ++member) {
+        const SliceCatalogEntry &entry = *entries[member];
+        output.group.member_slice_ids.push_back(entry.slice_id);
+        slice_ids.push_back(entry.slice_id);
+        functions.emplace_back(use_full_model
+            ? BuildFullLevyFitFunction(entry.slice_id + "_combined_profile_fit", fit_options)
+            : BuildLevyFitFunction(entry.slice_id + "_combined_profile_fit", fit_options));
+        std::vector<shared_lambda::LocalParameter> parameters;
+        std::vector<double> nominal(static_cast<std::size_t>(local_parameter_count));
+        for (int local = 0; local < local_parameter_count; ++local) {
+          double lower = 0.0;
+          double upper = 0.0;
+          functions.back()->GetParLimits(local, lower, upper);
+          parameters.push_back({functions.back()->GetParName(local), functions.back()->GetParameter(local),
+                                EstimatePMLStepSize(local, use_full_model), lower, upper,
+                                IsPMLParameterFixed(local, use_full_model, fit_options)});
+          nominal[static_cast<std::size_t>(local)] = functions.back()->GetParameter(local);
+        }
+        auto prefit = FitSingleSlice(h_cf[member], h_se_raw[member], h_me_raw[member], entry,
+                                     model, fit_options, fit_uses_symmetric_phi_range,
+                                     coulomb_kernel, false);
+        if (prefit.has_value() && prefit->pml_minimization.has_value()
+            && IsValidPMLPointEstimate(*prefit->pml_minimization)) {
+          nominal = prefit->pml_minimization->values;
+        }
+        nominal_values.push_back(std::move(nominal));
+        local_parameters.push_back(std::move(parameters));
+        contexts.push_back(MakePMLContext(h_se_raw[member], h_me_raw[member], use_full_model,
+                                          fit_options, coulomb_kernel));
+        output.group.usable_bins += CountPMLUsableBins(
+            h_se_raw[member], h_me_raw[member], fit_options.fit_q_max);
+      }
+      const shared_lambda::ParameterLayout layout =
+          shared_lambda::BuildParameterLayout(slice_ids, local_parameters);
+      output.group.parameter_labels = layout.labels;
+      output.group.parameter_slice_ids = layout.slice_ids;
+      output.group.parameter_local_indices = layout.local_indices;
+      output.group.free_parameters = static_cast<int>(layout.labels.size());
+      output.group.ndf = output.group.usable_bins - output.group.free_parameters;
+      for (const auto &mapping : layout.local_to_global) {
+        output.group.member_parameter_offsets.push_back(
+            static_cast<int>(output.group.member_local_to_global_indices.size()));
+        output.group.member_local_to_global_indices.insert(
+            output.group.member_local_to_global_indices.end(), mapping.begin(), mapping.end());
+      }
+      const double lambda_lower = layout.lower.front();
+      const double lambda_upper = layout.upper.front();
+      auto minimize_member = [&](const std::size_t member, const double lambda,
+                                 const std::vector<double> &seed) {
+        std::unique_ptr<TF3> function(use_full_model
+            ? BuildFullLevyFitFunction(entries[member]->slice_id + "_combined_profile_point", fit_options)
+            : BuildLevyFitFunction(entries[member]->slice_id + "_combined_profile_point", fit_options));
+        return ToProfileResult(RunPMLMinimization(
+            function.get(), h_se_raw[member], h_me_raw[member], use_full_model, fit_options,
+            &seed, {{1, lambda}}, false));
+      };
+      std::optional<combined_profile::Result> resume_state;
+      if (resume_stage_checkpoint && stage_checkpoint_path.has_value()
+          && std::filesystem::exists(*stage_checkpoint_path)) {
+        std::ifstream checkpoint(*stage_checkpoint_path, std::ios::binary);
+        std::string stored_digest;
+        std::getline(checkpoint, stored_digest);
+        if (stored_digest != stage_checkpoint_digest) {
+          throw std::runtime_error("Combined-profile stage checkpoint fingerprint mismatch for "
+                                   + output.group.group_id + ".");
+        }
+        ValidateCombinedStageKernel(checkpoint, coulomb_kernel);
+        resume_state = combined_profile::LoadCheckpoint(checkpoint);
+      }
+      const auto commit_stage = [&](const combined_profile::Result &stage_result) {
+        if (!stage_checkpoint_path.has_value()) return;
+        const std::string temporary = *stage_checkpoint_path + ".tmp." + std::to_string(getpid());
+        {
+          std::ofstream checkpoint(temporary, std::ios::binary | std::ios::trunc);
+          if (!checkpoint) throw std::runtime_error("Cannot write combined-profile stage checkpoint.");
+          checkpoint << stage_checkpoint_digest << '\n';
+          WriteCombinedStageKernel(checkpoint, coulomb_kernel);
+          combined_profile::SaveCheckpoint(checkpoint, stage_result);
+        }
+        std::filesystem::rename(temporary, *stage_checkpoint_path);
+      };
+      output.combined_profile_scan = combined_profile::Run(
+          profile_config, lambda_lower, lambda_upper, nominal_values, minimize_member,
+          resume_state.has_value() ? &*resume_state : nullptr, commit_stage);
+      const combined_profile::Result &scan = *output.combined_profile_scan;
+      output.group.scan_coverage_complete = scan.scan_coverage_complete;
+      output.group.search_converged = scan.search_converged;
+      output.group.unresolved_gap = scan.unresolved_gap;
+      output.group.completed_profile_stages = static_cast<int>(scan.stages.size());
+      output.group.lambda_profile_min = scan.lambda_hat;
+      output.group.at_parameter_boundary = scan.at_boundary;
+
+      std::vector<double> joint_center = layout.initial;
+      if (std::isfinite(scan.lambda_hat)) joint_center[0] = scan.lambda_hat;
+      bool final_conditionals_valid = scan.final_members.size() == entries.size();
+      for (std::size_t member = 0; member < scan.final_members.size(); ++member) {
+        final_conditionals_valid = final_conditionals_valid
+                                   && profile_likelihood::IsValid(scan.final_members[member]);
+        for (int local = 0; local < local_parameter_count; ++local) {
+          const int global = layout.local_to_global[member][static_cast<std::size_t>(local)];
+          if (global > 0 && static_cast<std::size_t>(local) < scan.final_members[member].values.size()) {
+            joint_center[static_cast<std::size_t>(global)] =
+                scan.final_members[member].values[static_cast<std::size_t>(local)];
+          }
+        }
+      }
+      SharedMinuitResult covariance_result;
+      if (final_conditionals_valid) {
+        covariance_result = RunSharedHesseAtPoint(layout, local_parameters, contexts, joint_center);
+      } else {
+        covariance_result.values = joint_center;
+        covariance_result.migrad_status = -2;
+        covariance_result.failure_reason = scan.failure_reason.empty()
+                                               ? "final conditional minimization is invalid"
+                                               : scan.failure_reason;
+      }
+      output.group.parameter_values = joint_center;
+      output.group.parameter_errors = covariance_result.errors;
+      output.group.covariance = covariance_result.covariance;
+      output.group.component_objectives = covariance_result.component_objectives;
+      if (output.group.component_objectives.empty()) {
+        for (const auto &member : scan.final_members) {
+          output.group.component_objectives.push_back(member.objective);
+        }
+      }
+      output.group.objective = scan.objective_hat;
+      output.group.edm = covariance_result.edm;
+      output.group.hesse_status = covariance_result.hesse_status;
+      output.group.covariance_quality = covariance_result.covariance_quality;
+      output.group.point_estimate_valid = final_conditionals_valid && std::isfinite(scan.objective_hat);
+      output.group.parameter_errors_valid = output.group.point_estimate_valid
+                                            && covariance_result.parameter_errors_valid;
+      output.group.failure_reason = !output.group.point_estimate_valid
+                                        ? (scan.failure_reason.empty()
+                                               ? "combined-profile point estimate is invalid" : scan.failure_reason)
+                                    : !output.group.parameter_errors_valid
+                                        ? covariance_result.failure_reason
+                                    : !scan.search_converged ? scan.failure_reason : "";
+      if (!output.group.parameter_errors_valid) {
+        output.group.parameter_errors.assign(layout.labels.size(), std::numeric_limits<double>::quiet_NaN());
+        output.group.covariance.assign(layout.labels.size() * layout.labels.size(),
+                                       std::numeric_limits<double>::quiet_NaN());
+      }
+
+      output.members.reserve(entries.size());
+      for (std::size_t member = 0; member < entries.size(); ++member) {
+        const std::vector<double> local = shared_lambda::ExpandLocalValues(
+            layout, member, local_parameters[member], joint_center.data());
+        for (int index = 0; index < local_parameter_count; ++index) {
+          functions[member]->SetParameter(index, local[static_cast<std::size_t>(index)]);
+          const int global = layout.local_to_global[member][static_cast<std::size_t>(index)];
+          const double error = global >= 0 && output.group.parameter_errors_valid
+                                   ? output.group.parameter_errors[static_cast<std::size_t>(global)]
+                                   : (local_parameters[member][static_cast<std::size_t>(index)].fixed
+                                          ? 0.0 : std::numeric_limits<double>::quiet_NaN());
+          functions[member]->SetParError(index, error);
+        }
+        SingleSliceFitOutput member_output;
+        member_output.fit_function = std::move(functions[member]);
+        const double component = member < output.group.component_objectives.size()
+                                     ? output.group.component_objectives[member]
+                                     : std::numeric_limits<double>::quiet_NaN();
+        FillFitResultFromFunction(*entries[member], member_output.fit_function.get(), model, fit_options,
+                                  fit_uses_symmetric_phi_range, component, -1, -2,
+                                  output.group.edm, output.group.covariance_quality,
+                                  output.group.finite_source_radius_fm, member_output.result);
+        member_output.result.lambda_mode = "combined_profile";
+        member_output.result.shared_lambda_group_id = output.group.group_id;
+        member_output.result.point_estimate_valid = output.group.point_estimate_valid;
+        member_output.result.parameter_errors_valid = output.group.parameter_errors_valid;
+        member_output.result.at_parameter_boundary = output.group.at_parameter_boundary;
+        member_output.result.fit_failure_reason = output.group.failure_reason;
+        output.members.push_back(std::move(member_output));
+      }
+      return output;
     }
 
     void WriteSingleSliceFitArtifacts(TH3D *h_cf,
@@ -3110,7 +4111,9 @@ namespace exp_femto_3d {
 
     void WriteFitResultsSummaryTsv(const std::string &path, const std::vector<LevyFitResult> &results) {
       std::ofstream output(path);
-      output << "sliceId\tgroupId\tfitModel\tusesCoulomb\tcoulombMode\tfiniteSourceMode\tfiniteSourceRadiusFm"
+      output << "sliceId\tgroupId\tfitModel\tlambdaMode\tsharedLambdaGroupId\tpointEstimateValid"
+                "\tparameterErrorsValid\tatParameterBoundary\tfitFailureReason"
+                "\tusesCoulomb\tcoulombMode\tfiniteSourceMode\tfiniteSourceRadiusFm"
                 "\tusesCoreHaloLambda\tusesQ2Baseline\tusesPML\tcentLow\tcentHigh\tmTLow\tmTHigh"
                 "\tmTRebinEnabled\tmTRebinMode\tphiRebinEnabled\tphiRebinMode"
                 "\tqnIndex\tqnLow\tqnHigh\tqnLabel\tisQnIntegrated\tphi\tisPhiIntegrated"
@@ -3122,6 +4125,10 @@ namespace exp_femto_3d {
       output << std::fixed << std::setprecision(6);
       for (const LevyFitResult &result : results) {
         output << result.slice_id << "\t" << result.group_id << "\t" << result.fit_model << "\t"
+               << result.lambda_mode << "\t" << result.shared_lambda_group_id << "\t"
+               << (result.point_estimate_valid ? 1 : 0) << "\t"
+               << (result.parameter_errors_valid ? 1 : 0) << "\t"
+               << (result.at_parameter_boundary ? 1 : 0) << "\t" << result.fit_failure_reason << "\t"
                << (result.uses_coulomb ? 1 : 0) << "\t" << result.coulomb_mode << "\t" << result.finite_source_mode
                << "\t" << result.finite_source_radius_fm << "\t" << (result.uses_core_halo_lambda ? 1 : 0) << "\t"
                << (result.uses_q2_baseline ? 1 : 0) << "\t" << (result.uses_pml ? 1 : 0) << "\t" << result.cent_low
@@ -3208,6 +4215,12 @@ namespace exp_femto_3d {
       int uses_q2_baseline = 0;
       int uses_pml = 0;
       int has_off_diagonal = 0;
+      std::string lambda_mode;
+      std::string shared_lambda_group_id;
+      int point_estimate_valid = 0;
+      int parameter_errors_valid = 0;
+      int at_parameter_boundary = 0;
+      std::string fit_failure_reason;
 
       tree->Branch("slice_id", &slice_id);
       tree->Branch("group_id", &group_id);
@@ -3271,6 +4284,12 @@ namespace exp_femto_3d {
       tree->Branch("uses_q2_baseline", &uses_q2_baseline);
       tree->Branch("uses_pml", &uses_pml);
       tree->Branch("has_off_diagonal", &has_off_diagonal);
+      tree->Branch("lambda_mode", &lambda_mode);
+      tree->Branch("shared_lambda_group_id", &shared_lambda_group_id);
+      tree->Branch("point_estimate_valid", &point_estimate_valid);
+      tree->Branch("parameter_errors_valid", &parameter_errors_valid);
+      tree->Branch("at_parameter_boundary", &at_parameter_boundary);
+      tree->Branch("fit_failure_reason", &fit_failure_reason);
 
       for (const LevyFitResult &result : results) {
         slice_id = result.slice_id;
@@ -3332,10 +4351,478 @@ namespace exp_femto_3d {
         uses_q2_baseline = result.uses_q2_baseline ? 1 : 0;
         uses_pml = result.uses_pml ? 1 : 0;
         has_off_diagonal = result.has_off_diagonal ? 1 : 0;
+        lambda_mode = result.lambda_mode;
+        shared_lambda_group_id = result.shared_lambda_group_id;
+        point_estimate_valid = result.point_estimate_valid ? 1 : 0;
+        parameter_errors_valid = result.parameter_errors_valid ? 1 : 0;
+        at_parameter_boundary = result.at_parameter_boundary ? 1 : 0;
+        fit_failure_reason = result.fit_failure_reason;
         tree->Fill();
       }
 
       tree->Write("", TObject::kOverwrite);
+      output_file.cd();
+    }
+
+    void WriteSharedLambdaFitResults(TFile &output_file,
+                                     const std::vector<SharedLambdaFitResult> &results) {
+      auto *meta_directory = GetOrCreateDirectoryPath(output_file, "meta");
+      meta_directory->cd();
+      auto catalog = std::make_unique<TTree>("SharedLambdaFitCatalog", "SharedLambdaFitCatalog");
+      std::string group_id;
+      std::string fit_mode = "shared_phi";
+      std::string center_method;
+      std::string covariance_method;
+      std::string objective_kind = "neg2logl_pml";
+      std::string covariance_conditioning = "frozen_coulomb_kernel";
+      double error_def = 1.0;
+      int centrality_index = -1;
+      int mt_index = -1;
+      int qn_index = -1;
+      std::vector<std::string> member_slice_ids;
+      std::vector<std::string> parameter_labels;
+      int member_count = 0;
+      int usable_bins = 0;
+      int free_parameters = 0;
+      int ndf = -1;
+      double objective = std::numeric_limits<double>::quiet_NaN();
+      double edm = std::numeric_limits<double>::quiet_NaN();
+      int migrad_status = -1;
+      int hesse_status = -1;
+      int covariance_quality = -1;
+      int point_estimate_valid = 0;
+      int parameter_errors_valid = 0;
+      int at_parameter_boundary = 0;
+      int scan_coverage_complete = 0;
+      int search_converged = 0;
+      int unresolved_gap = 0;
+      int completed_profile_stages = 0;
+      double lambda_profile_min = std::numeric_limits<double>::quiet_NaN();
+      std::string failure_reason;
+      std::string finite_source_mode;
+      double finite_source_radius_fm = std::numeric_limits<double>::quiet_NaN();
+      catalog->Branch("group_id", &group_id);
+      catalog->Branch("fit_mode", &fit_mode);
+      catalog->Branch("center_method", &center_method);
+      catalog->Branch("covariance_method", &covariance_method);
+      catalog->Branch("objective_kind", &objective_kind);
+      catalog->Branch("error_def", &error_def);
+      catalog->Branch("covariance_conditioning", &covariance_conditioning);
+      catalog->Branch("centrality_index", &centrality_index);
+      catalog->Branch("mt_index", &mt_index);
+      catalog->Branch("qn_index", &qn_index);
+      catalog->Branch("member_slice_ids", &member_slice_ids);
+      catalog->Branch("parameter_labels", &parameter_labels);
+      catalog->Branch("member_count", &member_count);
+      catalog->Branch("usable_bins", &usable_bins);
+      catalog->Branch("free_parameters", &free_parameters);
+      catalog->Branch("ndf", &ndf);
+      catalog->Branch("objective", &objective);
+      catalog->Branch("edm", &edm);
+      catalog->Branch("migrad_status", &migrad_status);
+      catalog->Branch("hesse_status", &hesse_status);
+      catalog->Branch("covariance_quality", &covariance_quality);
+      catalog->Branch("point_estimate_valid", &point_estimate_valid);
+      catalog->Branch("parameter_errors_valid", &parameter_errors_valid);
+      catalog->Branch("at_parameter_boundary", &at_parameter_boundary);
+      catalog->Branch("scan_coverage_complete", &scan_coverage_complete);
+      catalog->Branch("search_converged", &search_converged);
+      catalog->Branch("unresolved_gap", &unresolved_gap);
+      catalog->Branch("completed_profile_stages", &completed_profile_stages);
+      catalog->Branch("lambda_profile_min", &lambda_profile_min);
+      catalog->Branch("failure_reason", &failure_reason);
+      catalog->Branch("finite_source_mode", &finite_source_mode);
+      catalog->Branch("finite_source_radius_fm", &finite_source_radius_fm);
+
+      for (const SharedLambdaFitResult &result : results) {
+        group_id = result.group_id;
+        fit_mode = result.fit_mode;
+        center_method = result.center_method;
+        covariance_method = result.covariance_method;
+        centrality_index = result.centrality_index;
+        mt_index = result.mt_index;
+        qn_index = result.qn_index;
+        member_slice_ids = result.member_slice_ids;
+        parameter_labels = result.parameter_labels;
+        member_count = static_cast<int>(result.member_slice_ids.size());
+        usable_bins = result.usable_bins;
+        free_parameters = result.free_parameters;
+        ndf = result.ndf;
+        objective = result.objective;
+        edm = result.edm;
+        migrad_status = result.migrad_status;
+        hesse_status = result.hesse_status;
+        covariance_quality = result.covariance_quality;
+        point_estimate_valid = result.point_estimate_valid ? 1 : 0;
+        parameter_errors_valid = result.parameter_errors_valid ? 1 : 0;
+        at_parameter_boundary = result.at_parameter_boundary ? 1 : 0;
+        scan_coverage_complete = result.scan_coverage_complete ? 1 : 0;
+        search_converged = result.search_converged ? 1 : 0;
+        unresolved_gap = result.unresolved_gap ? 1 : 0;
+        completed_profile_stages = result.completed_profile_stages;
+        lambda_profile_min = result.lambda_profile_min;
+        failure_reason = result.failure_reason;
+        finite_source_mode = result.finite_source_mode;
+        finite_source_radius_fm = result.finite_source_radius_fm;
+        catalog->Fill();
+
+        auto *directory = GetOrCreateDirectoryPath(output_file, "shared_lambda/" + result.group_id);
+        directory->cd();
+        auto parameters = std::make_unique<TTree>("ParameterMap", "Shared free-parameter map");
+        int global_index = -1;
+        int local_index = -1;
+        std::string label;
+        std::string slice_id;
+        double value = std::numeric_limits<double>::quiet_NaN();
+        double error = std::numeric_limits<double>::quiet_NaN();
+        parameters->Branch("global_index", &global_index);
+        parameters->Branch("local_index", &local_index);
+        parameters->Branch("label", &label);
+        parameters->Branch("slice_id", &slice_id);
+        parameters->Branch("value", &value);
+        parameters->Branch("error", &error);
+        for (std::size_t index = 0; index < result.parameter_labels.size(); ++index) {
+          global_index = static_cast<int>(index);
+          local_index = result.parameter_local_indices[index];
+          label = result.parameter_labels[index];
+          slice_id = result.parameter_slice_ids[index];
+          value = index < result.parameter_values.size() ? result.parameter_values[index]
+                                                         : std::numeric_limits<double>::quiet_NaN();
+          error = index < result.parameter_errors.size() ? result.parameter_errors[index]
+                                                         : std::numeric_limits<double>::quiet_NaN();
+          parameters->Fill();
+        }
+        parameters->Write("", TObject::kOverwrite);
+
+        auto mapping = std::make_unique<TTree>("MemberParameterMap", "Local-to-global parameter mapping");
+        int member_index = -1;
+        std::string member_slice_id;
+        mapping->Branch("member_index", &member_index);
+        mapping->Branch("slice_id", &member_slice_id);
+        mapping->Branch("local_index", &local_index);
+        mapping->Branch("global_index", &global_index);
+        for (std::size_t member = 0; member < result.member_slice_ids.size(); ++member) {
+          member_index = static_cast<int>(member);
+          member_slice_id = result.member_slice_ids[member];
+          const std::size_t begin = static_cast<std::size_t>(result.member_parameter_offsets[member]);
+          const std::size_t end = member + 1U < result.member_parameter_offsets.size()
+                                      ? static_cast<std::size_t>(result.member_parameter_offsets[member + 1U])
+                                      : result.member_local_to_global_indices.size();
+          for (std::size_t flat = begin; flat < end; ++flat) {
+            local_index = static_cast<int>(flat - begin);
+            global_index = result.member_local_to_global_indices[flat];
+            mapping->Fill();
+          }
+        }
+        mapping->Write("", TObject::kOverwrite);
+
+        auto attempts = std::make_unique<TTree>("AttemptPoints", "Shared-lambda minimization attempts");
+        int attempt_index = -1;
+        std::string seed_origin;
+        std::vector<double> attempt_parameter_values;
+        int objective_valid = 0;
+        int model_domain_valid = 0;
+        attempts->Branch("attempt_index", &attempt_index);
+        attempts->Branch("seed_origin", &seed_origin);
+        attempts->Branch("parameter_values", &attempt_parameter_values);
+        attempts->Branch("objective", &objective);
+        attempts->Branch("edm", &edm);
+        attempts->Branch("migrad_status", &migrad_status);
+        attempts->Branch("covariance_quality", &covariance_quality);
+        attempts->Branch("objective_valid", &objective_valid);
+        attempts->Branch("model_domain_valid", &model_domain_valid);
+        attempts->Branch("point_estimate_valid", &point_estimate_valid);
+        attempts->Branch("failure_reason", &failure_reason);
+        for (std::size_t index = 0; index < result.attempts.size(); ++index) {
+          const SharedLambdaFitAttempt &attempt = result.attempts[index];
+          attempt_index = static_cast<int>(index);
+          seed_origin = attempt.seed_origin;
+          attempt_parameter_values = attempt.parameter_values;
+          objective = attempt.objective;
+          edm = attempt.edm;
+          migrad_status = attempt.migrad_status;
+          covariance_quality = attempt.minuit_istat;
+          objective_valid = attempt.objective_valid ? 1 : 0;
+          model_domain_valid = attempt.model_domain_valid ? 1 : 0;
+          point_estimate_valid = attempt.point_estimate_valid ? 1 : 0;
+          failure_reason = attempt.failure_reason;
+          attempts->Fill();
+        }
+        attempts->Write("", TObject::kOverwrite);
+
+        auto components = std::make_unique<TTree>("ComponentObjectives", "Per-member PML contributions");
+        double component_objective = std::numeric_limits<double>::quiet_NaN();
+        components->Branch("member_index", &member_index);
+        components->Branch("slice_id", &member_slice_id);
+        components->Branch("objective", &component_objective);
+        for (std::size_t member = 0; member < result.member_slice_ids.size(); ++member) {
+          member_index = static_cast<int>(member);
+          member_slice_id = result.member_slice_ids[member];
+          component_objective = member < result.component_objectives.size()
+                                    ? result.component_objectives[member]
+                                    : std::numeric_limits<double>::quiet_NaN();
+          components->Fill();
+        }
+        components->Write("", TObject::kOverwrite);
+
+        const int dimension = static_cast<int>(result.parameter_labels.size());
+        auto covariance = std::make_unique<TH2D>("Covariance", "Free-parameter covariance",
+                                                 dimension, 0.0, static_cast<double>(dimension),
+                                                 dimension, 0.0, static_cast<double>(dimension));
+        for (int row = 0; row < dimension; ++row) {
+          covariance->GetXaxis()->SetBinLabel(row + 1, result.parameter_labels[static_cast<std::size_t>(row)].c_str());
+          covariance->GetYaxis()->SetBinLabel(row + 1, result.parameter_labels[static_cast<std::size_t>(row)].c_str());
+          for (int column = 0; column < dimension; ++column) {
+            const std::size_t flat = static_cast<std::size_t>(row * dimension + column);
+            covariance->SetBinContent(row + 1, column + 1,
+                                      flat < result.covariance.size()
+                                          ? result.covariance[flat]
+                                          : std::numeric_limits<double>::quiet_NaN());
+          }
+        }
+        covariance->Write("", TObject::kOverwrite);
+      }
+      meta_directory->cd();
+      catalog->Write("", TObject::kOverwrite);
+      output_file.cd();
+    }
+
+    void WriteCombinedProfileResults(
+        TFile &output_file,
+        const std::vector<std::pair<std::string, combined_profile::Result>> &records,
+        const std::vector<SharedLambdaFitResult> &shared_results) {
+      for (const auto &[group_id, result] : records) {
+        auto *directory = GetOrCreateDirectoryPath(output_file, "combined_profile/" + group_id);
+        directory->cd();
+        auto stages = std::make_unique<TTree>("StageCatalog", "Combined-profile committed stages");
+        int stage = -1;
+        int complete = 0;
+        double minimum_objective = std::numeric_limits<double>::quiet_NaN();
+        double minimum_lambda = std::numeric_limits<double>::quiet_NaN();
+        std::vector<double> coordinates;
+        std::vector<double> candidate_lower;
+        std::vector<double> candidate_upper;
+        std::vector<int> candidate_boundary;
+        std::vector<int> candidate_gap;
+        stages->Branch("stage", &stage);
+        stages->Branch("complete", &complete);
+        stages->Branch("coordinates", &coordinates);
+        stages->Branch("minimum_objective", &minimum_objective);
+        stages->Branch("minimum_lambda", &minimum_lambda);
+        stages->Branch("candidate_lower", &candidate_lower);
+        stages->Branch("candidate_upper", &candidate_upper);
+        stages->Branch("candidate_boundary", &candidate_boundary);
+        stages->Branch("candidate_gap", &candidate_gap);
+        for (const auto &record : result.stages) {
+          stage = record.stage;
+          complete = record.complete ? 1 : 0;
+          coordinates = record.coordinates;
+          minimum_objective = record.minimum_objective;
+          minimum_lambda = record.minimum_lambda;
+          candidate_lower.clear();
+          candidate_upper.clear();
+          candidate_boundary.clear();
+          candidate_gap.clear();
+          for (const auto &candidate : record.candidates) {
+            candidate_lower.push_back(candidate.lower);
+            candidate_upper.push_back(candidate.upper);
+            candidate_boundary.push_back(candidate.touches_lower_bound || candidate.touches_upper_bound ? 1 : 0);
+            candidate_gap.push_back(candidate.contains_failure_gap ? 1 : 0);
+          }
+          stages->Fill();
+        }
+        stages->Write("", TObject::kOverwrite);
+
+        auto combined = std::make_unique<TTree>("CombinedProfilePoints", "Unweighted combined PML profile");
+        int point_index = -1;
+        double lambda = std::numeric_limits<double>::quiet_NaN();
+        double objective = std::numeric_limits<double>::quiet_NaN();
+        double delta_objective = std::numeric_limits<double>::quiet_NaN();
+        int valid = 0;
+        std::string failure_reason;
+        combined->Branch("stage", &stage);
+        combined->Branch("point_index", &point_index);
+        combined->Branch("lambda", &lambda);
+        combined->Branch("objective", &objective);
+        combined->Branch("delta_objective", &delta_objective);
+        combined->Branch("valid", &valid);
+        combined->Branch("failure_reason", &failure_reason);
+
+        auto profiles = std::make_unique<TTree>("ProfilePoints", "Per-member conditional profile winners");
+        int member_index = -1;
+        int migrad_status = -1;
+        int minuit_istat = -1;
+        int attempt_count = 0;
+        int valid_attempt_count = 0;
+        std::string status;
+        std::string seed_origin;
+        std::vector<double> parameter_values;
+        profiles->Branch("stage", &stage);
+        profiles->Branch("point_index", &point_index);
+        profiles->Branch("member_index", &member_index);
+        profiles->Branch("lambda", &lambda);
+        profiles->Branch("objective", &objective);
+        profiles->Branch("migrad_status", &migrad_status);
+        profiles->Branch("minuit_istat", &minuit_istat);
+        profiles->Branch("status", &status);
+        profiles->Branch("winner_seed", &seed_origin);
+        profiles->Branch("attempt_count", &attempt_count);
+        profiles->Branch("valid_attempt_count", &valid_attempt_count);
+        profiles->Branch("parameter_values", &parameter_values);
+        for (const auto &point : result.points) {
+          stage = point.stage;
+          point_index = point.point_index;
+          lambda = point.lambda;
+          objective = point.objective;
+          delta_objective = point.delta_objective;
+          valid = point.valid ? 1 : 0;
+          failure_reason = point.failure_reason;
+          combined->Fill();
+          for (const auto &member : point.members) {
+            member_index = member.member_index;
+            objective = member.winner.objective;
+            migrad_status = member.winner.migrad_status;
+            minuit_istat = member.winner.minuit_istat;
+            status = profile_likelihood::ToString(member.status);
+            seed_origin = profile_likelihood::ToString(member.winner_seed);
+            attempt_count = member.attempt_count;
+            valid_attempt_count = member.valid_attempt_count;
+            parameter_values = member.winner.values;
+            profiles->Fill();
+          }
+        }
+        combined->Write("", TObject::kOverwrite);
+        profiles->Write("", TObject::kOverwrite);
+
+        auto attempts = std::make_unique<TTree>("AttemptPoints", "All per-member profile attempts");
+        int objective_valid = 0;
+        int model_domain_valid = 0;
+        attempts->Branch("stage", &stage);
+        attempts->Branch("point_index", &point_index);
+        attempts->Branch("member_index", &member_index);
+        attempts->Branch("lambda", &lambda);
+        attempts->Branch("seed_origin", &seed_origin);
+        attempts->Branch("objective", &objective);
+        attempts->Branch("migrad_status", &migrad_status);
+        attempts->Branch("minuit_istat", &minuit_istat);
+        attempts->Branch("objective_valid", &objective_valid);
+        attempts->Branch("model_domain_valid", &model_domain_valid);
+        attempts->Branch("parameter_values", &parameter_values);
+        for (const auto &attempt : result.attempts) {
+          stage = attempt.stage;
+          point_index = attempt.point_index;
+          member_index = attempt.member_index;
+          lambda = attempt.lambda;
+          seed_origin = profile_likelihood::ToString(attempt.seed_origin);
+          objective = attempt.result.objective;
+          migrad_status = attempt.result.migrad_status;
+          minuit_istat = attempt.result.minuit_istat;
+          objective_valid = attempt.result.objective_valid ? 1 : 0;
+          model_domain_valid = attempt.result.model_domain_valid ? 1 : 0;
+          parameter_values = attempt.result.values;
+          attempts->Fill();
+        }
+        attempts->Write("", TObject::kOverwrite);
+
+        std::vector<const combined_profile::CombinedPoint *> ordered_points;
+        for (const auto &point : result.points) ordered_points.push_back(&point);
+        std::sort(ordered_points.begin(), ordered_points.end(), [](const auto *left, const auto *right) {
+          return left->lambda < right->lambda
+                 || (left->lambda == right->lambda && left->stage < right->stage);
+        });
+        auto combined_graph = std::make_unique<TGraph>();
+        combined_graph->SetName("CombinedProfile");
+        combined_graph->SetTitle("Combined and member profiles;#lambda;#Delta(-2 ln L)");
+        combined_graph->SetLineColor(1);
+        combined_graph->SetLineWidth(3);
+        int graph_point = 0;
+        double y_max = 1.0;
+        for (const auto *point : ordered_points) {
+          if (!point->valid || !std::isfinite(point->delta_objective)) continue;
+          combined_graph->SetPoint(graph_point++, point->lambda, point->delta_objective);
+          y_max = std::max(y_max, point->delta_objective);
+        }
+        const std::size_t member_count = ordered_points.empty() ? 0U : ordered_points.front()->members.size();
+        std::vector<std::unique_ptr<TGraph>> member_graphs;
+        for (std::size_t member = 0; member < member_count; ++member) {
+          double member_minimum = std::numeric_limits<double>::infinity();
+          for (const auto *point : ordered_points) {
+            if (member < point->members.size()
+                && profile_likelihood::IsValid(point->members[member].winner)) {
+              member_minimum = std::min(member_minimum, point->members[member].winner.objective);
+            }
+          }
+          auto graph = std::make_unique<TGraph>();
+          graph->SetName(("MemberProfile_" + std::to_string(member)).c_str());
+          graph->SetLineColor(static_cast<int>(member) + 2);
+          graph->SetLineWidth(1);
+          int member_point = 0;
+          for (const auto *point : ordered_points) {
+            if (member >= point->members.size()
+                || !profile_likelihood::IsValid(point->members[member].winner)
+                || !std::isfinite(member_minimum)) continue;
+            const double delta = point->members[member].winner.objective - member_minimum;
+            graph->SetPoint(member_point++, point->lambda, delta);
+            y_max = std::max(y_max, delta);
+          }
+          member_graphs.push_back(std::move(graph));
+        }
+        auto invalid_graph = std::make_unique<TGraph>();
+        invalid_graph->SetName("InvalidCoordinates");
+        invalid_graph->SetMarkerStyle(5);
+        invalid_graph->SetMarkerColor(2);
+        int invalid_index = 0;
+        for (const auto *point : ordered_points) {
+          if (!point->valid) invalid_graph->SetPoint(invalid_index++, point->lambda, y_max);
+        }
+        auto canvas = std::make_unique<TCanvas>("CombinedProfileCanvas", "Combined #lambda profile", 900, 650);
+        canvas->SetTicks(1, 1);
+        combined_graph->SetMinimum(0.0);
+        combined_graph->SetMaximum(std::max(1.0, 1.08 * y_max));
+        combined_graph->Draw("AL");
+        auto legend = std::make_unique<TLegend>(0.66, 0.60, 0.92, 0.90);
+        legend->AddEntry(combined_graph.get(), "combined profile", "l");
+        for (std::size_t member = 0; member < member_graphs.size(); ++member) {
+          member_graphs[member]->Draw("L SAME");
+          legend->AddEntry(member_graphs[member].get(),
+                           ("member " + std::to_string(member)).c_str(), "l");
+        }
+        if (invalid_graph->GetN() > 0) {
+          invalid_graph->Draw("P SAME");
+          legend->AddEntry(invalid_graph.get(), "invalid coordinate", "p");
+        }
+        const SharedLambdaFitResult *shared = FindSharedLambdaResult(shared_results, group_id);
+        std::unique_ptr<TBox> hesse_band;
+        auto center_line = std::make_unique<TGraph>();
+        center_line->SetName("SharedLambdaCenter");
+        if (shared != nullptr && !shared->parameter_values.empty()
+            && std::isfinite(shared->parameter_values.front())) {
+          const double center = shared->parameter_values.front();
+          center_line->SetPoint(0, center, 0.0);
+          center_line->SetPoint(1, center, y_max);
+          center_line->SetLineStyle(2);
+          center_line->SetLineWidth(2);
+          center_line->Draw("L SAME");
+          legend->AddEntry(center_line.get(), "shared #lambda", "l");
+          if (shared->parameter_errors_valid && !shared->parameter_errors.empty()
+              && std::isfinite(shared->parameter_errors.front())) {
+            hesse_band = std::make_unique<TBox>(center - shared->parameter_errors.front(), 0.0,
+                                                center + shared->parameter_errors.front(), y_max);
+            hesse_band->SetFillColorAlpha(4, 0.12);
+            hesse_band->SetLineColor(4);
+            hesse_band->Draw("SAME");
+          }
+        }
+        legend->Draw();
+        canvas->Modified();
+        canvas->Update();
+        combined_graph->Write("", TObject::kOverwrite);
+        for (const auto &graph : member_graphs) graph->Write("", TObject::kOverwrite);
+        invalid_graph->Write("", TObject::kOverwrite);
+        center_line->Write("", TObject::kOverwrite);
+        if (hesse_band) hesse_band->Write("", TObject::kOverwrite);
+        canvas->Write("", TObject::kOverwrite);
+      }
       output_file.cd();
     }
 
@@ -3411,7 +4898,9 @@ namespace exp_femto_3d {
       output_file.cd();
     }
 
-    void WriteR2Graphs(TFile &output_file, const std::vector<LevyFitResult> &results) {
+    void WriteR2Graphs(TFile &output_file,
+                       const std::vector<LevyFitResult> &results,
+                       const std::vector<SharedLambdaFitResult> &shared_results = {}) {
       std::map<std::string, std::vector<LevyFitResult>> grouped_results;
       for (const LevyFitResult &result : results) {
         if (result.is_phi_integrated) {
@@ -3447,6 +4936,7 @@ namespace exp_femto_3d {
             std::any_of(group_results.begin(), group_results.end(), [](const LevyFitResult &result) {
               return result.uses_q2_baseline;
             });
+        const SharedLambdaFitResult *shared = FindSharedLambdaResult(shared_results, group_id);
 
         auto *g_rout2 = new TGraphErrors(n_points);
         auto *g_rside2 = new TGraphErrors(n_points);
@@ -3494,18 +4984,67 @@ namespace exp_femto_3d {
         fit_cos_rside2->SetParameters(group_results.front().rside2, 0.0);
         fit_cos_rlong2->SetParameters(group_results.front().rlong2, 0.0);
 
+        std::unique_ptr<TTree> derived_harmonics;
+        std::string derived_parameter;
+        std::string derived_failure_reason;
+        double derived_intercept = std::numeric_limits<double>::quiet_NaN();
+        double derived_harmonic = std::numeric_limits<double>::quiet_NaN();
+        double derived_intercept_variance = std::numeric_limits<double>::quiet_NaN();
+        double derived_harmonic_variance = std::numeric_limits<double>::quiet_NaN();
+        double derived_covariance = std::numeric_limits<double>::quiet_NaN();
+        int derived_valid = 0;
+        if (shared != nullptr) {
+          derived_harmonics = std::make_unique<TTree>("DerivedHarmonics", "Correlated second-harmonic results");
+          derived_harmonics->Branch("parameter", &derived_parameter);
+          derived_harmonics->Branch("intercept", &derived_intercept);
+          derived_harmonics->Branch("harmonic", &derived_harmonic);
+          derived_harmonics->Branch("intercept_variance", &derived_intercept_variance);
+          derived_harmonics->Branch("harmonic_variance", &derived_harmonic_variance);
+          derived_harmonics->Branch("covariance", &derived_covariance);
+          derived_harmonics->Branch("valid", &derived_valid);
+          derived_harmonics->Branch("failure_reason", &derived_failure_reason);
+        }
+
         g_rout2->SetName("Rout2_vs_phi");
         g_rside2->SetName("Rside2_vs_phi");
         g_rlong2->SetName("Rlong2_vs_phi");
-        g_rout2->Fit(fit_cos_rout2, "QN");
-        g_rside2->Fit(fit_cos_rside2, "QN");
-        g_rlong2->Fit(fit_cos_rlong2, "QN");
+        bool rout_fit_valid = true;
+        bool rside_fit_valid = true;
+        bool rlong_fit_valid = true;
+        const auto apply_shared_harmonic = [&](TF1 *function, const std::string &parameter_name,
+                                               const int local_index, const bool sine_form) {
+          const shared_lambda::HarmonicResult fit =
+              FitSharedHarmonic(group_results, *shared, local_index, sine_form);
+          derived_parameter = parameter_name;
+          derived_intercept = fit.intercept;
+          derived_harmonic = fit.harmonic;
+          derived_intercept_variance = fit.intercept_variance;
+          derived_harmonic_variance = fit.harmonic_variance;
+          derived_covariance = fit.covariance;
+          derived_valid = fit.valid ? 1 : 0;
+          derived_failure_reason = fit.failure_reason;
+          derived_harmonics->Fill();
+          if (!fit.valid) return false;
+          function->SetParameters(fit.intercept, fit.harmonic);
+          function->SetParError(0, std::sqrt(std::max(0.0, fit.intercept_variance)));
+          function->SetParError(1, std::sqrt(std::max(0.0, fit.harmonic_variance)));
+          return true;
+        };
+        if (shared != nullptr) {
+          rout_fit_valid = apply_shared_harmonic(fit_cos_rout2, "rout2", 2, false);
+          rside_fit_valid = apply_shared_harmonic(fit_cos_rside2, "rside2", 3, false);
+          rlong_fit_valid = apply_shared_harmonic(fit_cos_rlong2, "rlong2", 4, false);
+        } else {
+          g_rout2->Fit(fit_cos_rout2, "QN");
+          g_rside2->Fit(fit_cos_rside2, "QN");
+          g_rlong2->Fit(fit_cos_rlong2, "QN");
+        }
         g_rout2->Write("", TObject::kOverwrite);
         g_rside2->Write("", TObject::kOverwrite);
         g_rlong2->Write("", TObject::kOverwrite);
-        fit_cos_rout2->Write("Rout2_phi_fit", TObject::kOverwrite);
-        fit_cos_rside2->Write("Rside2_phi_fit", TObject::kOverwrite);
-        fit_cos_rlong2->Write("Rlong2_phi_fit", TObject::kOverwrite);
+        if (rout_fit_valid) fit_cos_rout2->Write("Rout2_phi_fit", TObject::kOverwrite);
+        if (rside_fit_valid) fit_cos_rside2->Write("Rside2_phi_fit", TObject::kOverwrite);
+        if (rlong_fit_valid) fit_cos_rlong2->Write("Rlong2_phi_fit", TObject::kOverwrite);
 
         if (has_off_diagonal) {
           auto *fit_sin_routside2 = new TF1("Routside2PhiFit", "[0]+2.0*[1]*sin(2.0*x)", phi_fit_min, phi_fit_max);
@@ -3517,15 +5056,24 @@ namespace exp_femto_3d {
           g_routside2->SetName("Routside2_vs_phi");
           g_routlong2->SetName("Routlong2_vs_phi");
           g_rsidelong2->SetName("Rsidelong2_vs_phi");
-          g_routside2->Fit(fit_sin_routside2, "QN");
-          g_routlong2->Fit(fit_cos_routlong2, "QN");
-          g_rsidelong2->Fit(fit_sin_rsidelong2, "QN");
+          bool routside_fit_valid = true;
+          bool routlong_fit_valid = true;
+          bool rsidelong_fit_valid = true;
+          if (shared != nullptr) {
+            routside_fit_valid = apply_shared_harmonic(fit_sin_routside2, "routside2", 5, true);
+            routlong_fit_valid = apply_shared_harmonic(fit_cos_routlong2, "routlong2", 6, false);
+            rsidelong_fit_valid = apply_shared_harmonic(fit_sin_rsidelong2, "rsidelong2", 7, true);
+          } else {
+            g_routside2->Fit(fit_sin_routside2, "QN");
+            g_routlong2->Fit(fit_cos_routlong2, "QN");
+            g_rsidelong2->Fit(fit_sin_rsidelong2, "QN");
+          }
           g_routside2->Write("", TObject::kOverwrite);
           g_routlong2->Write("", TObject::kOverwrite);
           g_rsidelong2->Write("", TObject::kOverwrite);
-          fit_sin_routside2->Write("Routside2_phi_fit", TObject::kOverwrite);
-          fit_cos_routlong2->Write("Routlong2_phi_fit", TObject::kOverwrite);
-          fit_sin_rsidelong2->Write("Rsidelong2_phi_fit", TObject::kOverwrite);
+          if (routside_fit_valid) fit_sin_routside2->Write("Routside2_phi_fit", TObject::kOverwrite);
+          if (routlong_fit_valid) fit_cos_routlong2->Write("Routlong2_phi_fit", TObject::kOverwrite);
+          if (rsidelong_fit_valid) fit_sin_rsidelong2->Write("Rsidelong2_phi_fit", TObject::kOverwrite);
           delete fit_sin_routside2;
           delete fit_cos_routlong2;
           delete fit_sin_rsidelong2;
@@ -3537,7 +5085,22 @@ namespace exp_femto_3d {
         auto *fit_const_alpha = new TF1("AlphaPhiFit", "[0]", phi_fit_min, phi_fit_max);
         fit_const_alpha->SetParameter(0, group_results.front().alpha);
         g_alpha->SetName("alpha_vs_phi");
-        g_alpha->Fit(fit_const_alpha, "QN");
+        if (shared != nullptr) {
+          const int alpha_local_index = group_results.front().has_off_diagonal ? 8 : 5;
+          const int alpha_global = SharedGlobalParameterIndex(
+              *shared, group_results.front().slice_id, alpha_local_index);
+          if (alpha_global >= 0) {
+            const auto fit = FitSharedConstant(group_results, *shared, alpha_local_index);
+            if (fit.valid) {
+              fit_const_alpha->SetParameter(0, fit.value);
+              fit_const_alpha->SetParError(0, std::sqrt(std::max(0.0, fit.variance)));
+            }
+          } else {
+            fit_const_alpha->SetParError(0, 0.0);
+          }
+        } else {
+          g_alpha->Fit(fit_const_alpha, "QN");
+        }
         g_alpha->Write("", TObject::kOverwrite);
         fit_const_alpha->Write("alpha_phi_fit", TObject::kOverwrite);
         delete fit_const_alpha;
@@ -3546,7 +5109,13 @@ namespace exp_femto_3d {
           auto *fit_const_lambda = new TF1("LambdaPhiFit", "[0]", phi_fit_min, phi_fit_max);
           fit_const_lambda->SetParameter(0, group_results.front().lambda);
           g_lambda->SetName("lambda_vs_phi");
-          g_lambda->Fit(fit_const_lambda, "QN");
+          if (shared != nullptr) {
+            // These graph points repeat one group estimate. Never refit them or divide its HESSE error by sqrt(Nphi).
+            fit_const_lambda->SetParameter(0, group_results.front().lambda);
+            fit_const_lambda->SetParError(0, group_results.front().lambda_err);
+          } else {
+            g_lambda->Fit(fit_const_lambda, "QN");
+          }
           g_lambda->Write("", TObject::kOverwrite);
           fit_const_lambda->Write("lambda_phi_fit", TObject::kOverwrite);
           delete fit_const_lambda;
@@ -3556,7 +5125,16 @@ namespace exp_femto_3d {
           auto *fit_const_baseline = new TF1("BaselineQ2PhiFit", "[0]", phi_fit_min, phi_fit_max);
           fit_const_baseline->SetParameter(0, group_results.front().baseline_q2);
           g_baseline_q2->SetName("baselineQ2_vs_phi");
-          g_baseline_q2->Fit(fit_const_baseline, "QN");
+          if (shared != nullptr) {
+            const int baseline_local_index = group_results.front().has_off_diagonal ? 9 : 6;
+            const auto fit = FitSharedConstant(group_results, *shared, baseline_local_index);
+            if (fit.valid) {
+              fit_const_baseline->SetParameter(0, fit.value);
+              fit_const_baseline->SetParError(0, std::sqrt(std::max(0.0, fit.variance)));
+            }
+          } else {
+            g_baseline_q2->Fit(fit_const_baseline, "QN");
+          }
           g_baseline_q2->Write("", TObject::kOverwrite);
           fit_const_baseline->Write("baselineQ2_phi_fit", TObject::kOverwrite);
           delete fit_const_baseline;
@@ -3570,12 +5148,16 @@ namespace exp_femto_3d {
         delete fit_cos_rout2;
         delete fit_cos_rside2;
         delete fit_cos_rlong2;
+        if (derived_harmonics) derived_harmonics->Write("", TObject::kOverwrite);
         output_file.cd();
       }
     }
 
     // Write one publication-style source-parameter canvas for each fitted cent/mT group.
-    void WriteSourceParameterOverviewCanvases(TDirectory &directory, const std::vector<LevyFitResult> &results) {
+    void WriteSourceParameterOverviewCanvases(
+        TDirectory &directory,
+        const std::vector<LevyFitResult> &results,
+        const std::vector<SharedLambdaFitResult> &shared_results) {
       const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
       const std::array<std::string, 6> graph_names = {
           "Rout2_vs_phi", "Rside2_vs_phi", "Rlong2_vs_phi", "Routside2_vs_phi", "Routlong2_vs_phi",
@@ -3593,6 +5175,8 @@ namespace exp_femto_3d {
         if (group_results.empty()) {
           continue;
         }
+        const SharedLambdaFitResult *shared =
+            FindSharedLambdaResult(shared_results, group_results.front().group_id);
 
         bool has_drawable_panel = HasValidSummaryPoints(BuildAlphaSummaryPoints(group_results));
         for (std::size_t radius_index = 0; radius_index < graph_names.size(); ++radius_index) {
@@ -3645,6 +5229,12 @@ namespace exp_femto_3d {
         constexpr std::array<std::size_t, 6> kOverviewRadiusOrder = {0U, 3U, 1U, 4U, 2U, 5U};
         for (std::size_t order_index = 0; order_index < kOverviewRadiusOrder.size(); ++order_index) {
           const std::size_t radius_index = kOverviewRadiusOrder[order_index];
+          shared_lambda::HarmonicResult shared_harmonic;
+          if (shared != nullptr) {
+            const bool sine_form = radius_index == 3U || radius_index == 5U;
+            shared_harmonic = FitSharedHarmonic(
+                group_results, *shared, static_cast<int>(2U + radius_index), sine_form);
+          }
           DrawOverviewGraph(*canvas,
                             static_cast<int>(order_index + 3U),
                             MakePhiSummaryGraph(BuildRadiusSummaryPoints(group_results, radius_index),
@@ -3655,7 +5245,8 @@ namespace exp_femto_3d {
                             static_cast<int>(radius_index),
                             group_results.front().fit_uses_symmetric_phi_range,
                             owned_graphs,
-                            owned_fits);
+                            owned_fits,
+                            shared != nullptr ? &shared_harmonic : nullptr);
         }
 
         canvas->Modified();
@@ -3665,8 +5256,103 @@ namespace exp_femto_3d {
       }
     }
 
+    void WriteSharedLambdaCanvases(TDirectory &directory,
+                                  const std::vector<LevyFitResult> &results,
+                                  const std::vector<SharedLambdaFitResult> &shared_results) {
+      const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
+      for (const auto &[key, group_results] : grouped_results) {
+        (void)key;
+        if (group_results.empty()) continue;
+        const SharedLambdaFitResult *shared =
+            FindSharedLambdaResult(shared_results, group_results.front().group_id);
+        if (shared == nullptr) continue;
+        TDirectory *cent_directory =
+            GetOrCreateDirectory(directory, BuildReportCentralityDirectory(group_results.front()));
+        TDirectory *mt_directory = GetOrCreateDirectory(*cent_directory, BuildReportMtDirectory(group_results.front()));
+        TDirectory *target_directory = mt_directory;
+        const std::string qn_directory_name = BuildReportQnDirectory(group_results.front());
+        if (!qn_directory_name.empty()) target_directory = GetOrCreateDirectory(*mt_directory, qn_directory_name);
+        target_directory->cd();
+
+        const bool mapped = group_results.front().fit_uses_symmetric_phi_range;
+        const double x_min = mapped ? -TMath::Pi() / 2.0 : 0.0;
+        const double x_max = mapped ? TMath::Pi() / 2.0 : TMath::Pi();
+        const double lambda = !shared->parameter_values.empty()
+                                  ? shared->parameter_values.front()
+                                  : std::numeric_limits<double>::quiet_NaN();
+        const double error = shared->parameter_errors_valid && !shared->parameter_errors.empty()
+                                 ? shared->parameter_errors.front()
+                                 : std::numeric_limits<double>::quiet_NaN();
+        double y_min = -0.05;
+        double y_max = 1.05;
+        if (std::isfinite(lambda)) {
+          const double span = std::isfinite(error) ? std::max(0.08, 2.0 * error) : 0.15;
+          y_min = std::min(y_min, lambda - span);
+          y_max = std::max(y_max, lambda + span);
+        }
+
+        auto canvas = std::make_unique<TCanvas>("lambda_vs_phi_canvas", "Shared lambda vs phi", 850, 650);
+        canvas->SetTicks(1, 1);
+        canvas->SetLeftMargin(0.13);
+        canvas->SetBottomMargin(0.12);
+        auto *frame = canvas->DrawFrame(x_min, y_min, x_max, y_max);
+        frame->SetName("lambda_vs_phi_frame");
+        frame->GetXaxis()->SetTitle(BuildRelativePhiAxisTitle().c_str());
+        frame->GetYaxis()->SetTitle("#lambda");
+
+        std::unique_ptr<TBox> band;
+        std::unique_ptr<TF1> center;
+        if (shared->point_estimate_valid && std::isfinite(lambda)) {
+          if (shared->parameter_errors_valid && std::isfinite(error)) {
+            band = std::make_unique<TBox>(x_min, lambda - error, x_max, lambda + error);
+            band->SetFillColorAlpha(kAzure - 9, 0.45);
+            band->SetLineColor(kAzure - 4);
+            band->Draw("SAME");
+          }
+          center = std::make_unique<TF1>("shared_lambda_center", "[0]", x_min, x_max);
+          center->SetParameter(0, lambda);
+          center->SetParError(0, error);
+          center->SetLineColor(kBlue + 2);
+          center->SetLineWidth(3);
+          center->Draw("L SAME");
+        }
+
+        auto status = std::make_unique<TPaveText>(0.16, 0.68, 0.62, 0.89, "NDC");
+        status->SetName("shared_lambda_status");
+        status->SetBorderSize(1);
+        status->SetFillColor(0);
+        status->SetTextAlign(12);
+        status->SetTextFont(42);
+        status->AddText(("centrality: " + FormatRangeText(group_results.front().cent_low,
+                                                           group_results.front().cent_high)).c_str());
+        status->AddText(("m_{T}: " + FormatRangeText(group_results.front().mt_low,
+                                                      group_results.front().mt_high) + " GeV/c^{2}").c_str());
+        status->AddText(("#phi bins: " + std::to_string(group_results.size())).c_str());
+        if (shared->point_estimate_valid && std::isfinite(lambda)) {
+          status->AddText(("shared #lambda = " + FormatDouble(lambda, 4)
+                           + (std::isfinite(error) ? " #pm " + FormatDouble(error, 4) : "")).c_str());
+          status->AddText(shared->parameter_errors_valid
+                              ? "band: group HESSE error, frozen Coulomb kernel"
+                              : ("error unavailable: " + shared->failure_reason).c_str());
+        } else {
+          status->AddText(("joint fit failed: " + shared->failure_reason).c_str());
+        }
+        status->AddText("local quadratic error; no confidence-coverage claim");
+        status->Draw();
+        canvas->Modified();
+        canvas->Update();
+        if (center) center->Write("shared_lambda_center", TObject::kOverwrite);
+        if (band) band->Write("shared_lambda_hesse_band", TObject::kOverwrite);
+        status->Write("shared_lambda_status", TObject::kOverwrite);
+        canvas->Write("lambda_vs_phi_canvas", TObject::kOverwrite);
+        directory.cd();
+      }
+    }
+
     // Write one epsilon_f(mT) summary graph per centrality from the side-radius harmonic fits.
-    void WriteEpsVsMtGraphs(TDirectory &directory, const std::vector<LevyFitResult> &results) {
+    void WriteEpsVsMtGraphs(TDirectory &directory,
+                            const std::vector<LevyFitResult> &results,
+                            const std::vector<SharedLambdaFitResult> &shared_results) {
       EpsSummaryMap eps_summary_points;
       std::map<std::pair<int, int>, std::string> centrality_directory_names;
       std::map<std::pair<int, int>, std::string> qn_directory_names;
@@ -3677,9 +5363,13 @@ namespace exp_femto_3d {
           continue;
         }
         constexpr std::size_t kSideRadiusIndex = 1U;
-        const std::optional<EpsSummaryPoint> eps_point =
-            ComputeEpsFromRsideSummaryPoints(BuildRadiusSummaryPoints(group_results, kSideRadiusIndex),
-                                             group_results.front());
+        const SharedLambdaFitResult *shared =
+            FindSharedLambdaResult(shared_results, group_results.front().group_id);
+        const std::optional<EpsSummaryPoint> eps_point = shared != nullptr
+            ? ComputeEpsFromSharedHarmonic(
+                  FitSharedHarmonic(group_results, *shared, 3, false), group_results.front())
+            : ComputeEpsFromRsideSummaryPoints(BuildRadiusSummaryPoints(group_results, kSideRadiusIndex),
+                                               group_results.front());
         if (eps_point.has_value() && eps_point->valid) {
           const auto summary_key = std::make_pair(group_results.front().centrality_index, group_results.front().qn_index);
           eps_summary_points[summary_key].push_back(*eps_point);
@@ -3742,19 +5432,25 @@ namespace exp_femto_3d {
     // The standalone report file is independent of the detailed per-slice fit ROOT file.
     void WriteFitReportRootFile(const std::string &fit_report_root_path,
                                 const std::vector<LevyFitResult> &fit_results,
-                                const std::vector<CoulombKernelCatalogEntry> &kernel_catalog_entries) {
+                                const std::vector<CoulombKernelCatalogEntry> &kernel_catalog_entries,
+                                const std::vector<SharedLambdaFitResult> &shared_lambda_results,
+                                const std::vector<std::pair<std::string, combined_profile::Result>>
+                                    &combined_profile_records) {
       CreateOrResetRootFile(fit_report_root_path);
       auto output_file = OpenRootFile(fit_report_root_path, "UPDATE");
 
       // The report file is summary-only: it mirrors the legacy summary products
       // and adds canvases grouped by centrality and mT.
       WriteFitCatalogTree(*output_file, fit_results);
+      WriteSharedLambdaFitResults(*output_file, shared_lambda_results);
+      WriteCombinedProfileResults(*output_file, combined_profile_records, shared_lambda_results);
       WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
-      WriteR2Graphs(*output_file, fit_results);
+      WriteR2Graphs(*output_file, fit_results, shared_lambda_results);
       auto *source_parameters_directory = GetOrCreateDirectoryPath(*output_file, "source_parameters");
-      WriteSourceParameterOverviewCanvases(*source_parameters_directory, fit_results);
+      WriteSourceParameterOverviewCanvases(*source_parameters_directory, fit_results, shared_lambda_results);
+      WriteSharedLambdaCanvases(*source_parameters_directory, fit_results, shared_lambda_results);
       auto *eps_directory = GetOrCreateDirectoryPath(*output_file, "eps_vs_mt");
-      WriteEpsVsMtGraphs(*eps_directory, fit_results);
+      WriteEpsVsMtGraphs(*eps_directory, fit_results, shared_lambda_results);
       output_file->Write();
       output_file->Close();
     }
@@ -4005,20 +5701,35 @@ namespace exp_femto_3d {
       return encoded.str();
     }
 
+    std::string BuildCombinedProfileContractDigest(
+        const std::string &cf_root_path,
+        const ApplicationConfig &config,
+        const FitModel model,
+        const std::vector<const SliceCatalogEntry *> &entries) {
+      const std::string physical = BuildProfileContractDigest(cf_root_path, config, model, entries, {});
+      std::ostringstream text;
+      text.imbue(std::locale::classic());
+      text << std::setprecision(17) << "combined-profile-contract-v2|" << physical
+           << "|coarse=" << config.fit.combined_profile.coarse_points
+           << "|refinement=" << config.fit.combined_profile.refinement_points
+           << "|rounds=" << config.fit.combined_profile.max_refinement_rounds
+           << "|lambda_tol=" << config.fit.combined_profile.lambda_tolerance
+           << "|objective_tol=" << config.fit.combined_profile.objective_tolerance
+           << "|retry=" << static_cast<int>(config.fit.combined_profile.retry_strategy);
+      constexpr std::uint64_t kOffset = 14695981039346656037ULL;
+      const std::string contract = text.str();
+      const std::uint64_t hash = Fnv1aUpdate(kOffset, contract.data(), contract.size());
+      std::ostringstream encoded;
+      encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
+      return encoded.str();
+    }
+
     void ConfigurePMLContextForEvaluation(TH3D *h_se_raw,
                                           TH3D *h_me_raw,
                                           const bool use_full_model,
                                           const LevyFitOptions &fit_options) {
-      const double raw_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
-      if (!(raw_scale > 0.0) || !std::isfinite(raw_scale)) {
-        throw std::runtime_error("Cannot evaluate a PML profile with invalid raw SE/ME normalization.");
-      }
-      g_levy_3d_pml_context.h_se_raw = h_se_raw;
-      g_levy_3d_pml_context.h_me_raw = h_me_raw;
-      g_levy_3d_pml_context.use_full_model = use_full_model;
-      g_levy_3d_pml_context.fit_options = fit_options;
-      g_levy_3d_pml_context.coulomb_kernel = g_active_coulomb_kernel;
-      g_levy_3d_pml_context.raw_same_to_mixed_integral_ratio = raw_scale;
+      g_levy_3d_pml_context =
+          MakePMLContext(h_se_raw, h_me_raw, use_full_model, fit_options, g_active_coulomb_kernel);
     }
 
     profile_likelihood::MinimizationResult ToProfileResult(const PMLMinimizationResult &result) {
@@ -5556,6 +7267,76 @@ namespace exp_femto_3d {
     return statistics;
   }
 
+  namespace {
+
+    std::map<FitResultGroupKey, std::vector<const SliceCatalogEntry *>>
+    BuildAndValidateSharedLambdaGroups(const std::vector<SliceCatalogEntry> &catalog_entries,
+                                       const std::vector<const SliceCatalogEntry *> &selected_entries,
+                                       TFile &input_file) {
+      std::map<FitResultGroupKey, std::vector<const SliceCatalogEntry *>> groups;
+      std::set<FitResultGroupKey> selected_group_keys;
+      for (const SliceCatalogEntry *entry : selected_entries) {
+        selected_group_keys.emplace(entry->centrality_index, entry->mt_index, entry->qn_index);
+        if (!entry->is_phi_integrated) {
+          groups[{entry->centrality_index, entry->mt_index, entry->qn_index}].push_back(entry);
+        }
+      }
+      if (groups.empty()) {
+        throw std::runtime_error("fit.lambda_mode='shared_phi' selected no phi-differential groups.");
+      }
+      for (const FitResultGroupKey &key : selected_group_keys) {
+        if (groups.find(key) == groups.end()) {
+          throw std::runtime_error("A selected shared-lambda group contains no phi-differential dataset.");
+        }
+      }
+      for (auto &[key, members] : groups) {
+        std::sort(members.begin(), members.end(), [](const SliceCatalogEntry *left,
+                                                     const SliceCatalogEntry *right) {
+          return std::tie(left->phi_index, left->raw_phi_low, left->slice_id)
+                 < std::tie(right->phi_index, right->raw_phi_low, right->slice_id);
+        });
+        std::set<std::string> member_ids;
+        std::set<std::string> mixed_event_paths;
+        for (std::size_t index = 0; index < members.size(); ++index) {
+          const SliceCatalogEntry &member = *members[index];
+          if (!member_ids.insert(member.slice_id).second) {
+            throw std::runtime_error("Duplicate shared-lambda slice member: " + member.slice_id);
+          }
+          if (!member.split_mixed_event_by_phi) {
+            throw std::runtime_error("Shared-lambda input metadata does not prove phi-binned mixed events for "
+                                     + member.slice_id + ".");
+          }
+          if (!mixed_event_paths.insert(member.me_object_path).second) {
+            throw std::runtime_error("Shared-lambda group reuses one mixed-event histogram across phi bins: "
+                                     + member.group_id + ".");
+          }
+          if (index > 0U && members[index - 1U]->raw_phi_high > member.raw_phi_low + 1.0e-9) {
+            throw std::runtime_error("Shared-lambda group has overlapping phi intervals: " + member.group_id + ".");
+          }
+          if (dynamic_cast<TH3D *>(input_file.Get(member.cf_object_path.c_str())) == nullptr
+              || dynamic_cast<TH3D *>(input_file.Get(member.se_object_path.c_str())) == nullptr
+              || dynamic_cast<TH3D *>(input_file.Get(member.me_object_path.c_str())) == nullptr) {
+            throw std::runtime_error("Shared-lambda member is missing required CF/SE/ME input: "
+                                     + member.slice_id + ".");
+          }
+        }
+        std::set<std::string> catalog_member_ids;
+        for (const SliceCatalogEntry &catalog : catalog_entries) {
+          if (!catalog.is_phi_integrated
+              && FitResultGroupKey{catalog.centrality_index, catalog.mt_index, catalog.qn_index} == key) {
+            catalog_member_ids.insert(catalog.slice_id);
+          }
+        }
+        if (catalog_member_ids != member_ids) {
+          throw std::runtime_error("Shared-lambda selection does not contain the complete phi-differential catalog group: "
+                                   + members.front()->group_id + ".");
+        }
+      }
+      return groups;
+    }
+
+  }  // namespace
+
   FitRunStatistics RunFit(const ApplicationConfig &config,
                           const Logger &logger,
                           const std::optional<FitModel> override_model,
@@ -5617,6 +7398,27 @@ namespace exp_femto_3d {
         selected_entries.push_back(&entry);
       }
     }
+    const char *combined_worker_group = std::getenv("EXP_FEMTO_3D_COMBINED_WORKER_GROUP");
+    const bool combined_process_worker =
+        std::getenv("EXP_FEMTO_3D_COMBINED_PROCESS_WORKER") != nullptr;
+    if (combined_process_worker) {
+      if (combined_worker_group == nullptr || std::string(combined_worker_group).empty()) {
+        throw std::runtime_error("Internal combined-profile worker has no exact group assignment.");
+      }
+      selected_entries.erase(std::remove_if(selected_entries.begin(), selected_entries.end(),
+          [&](const SliceCatalogEntry *entry) { return entry->group_id != combined_worker_group; }),
+          selected_entries.end());
+      if (selected_entries.empty()) {
+        throw std::runtime_error("Internal combined-profile worker group is absent from fit_selection.");
+      }
+    }
+
+    std::map<FitResultGroupKey, std::vector<const SliceCatalogEntry *>> shared_lambda_groups;
+    if (config.fit.lambda_mode == LambdaMode::kSharedPhi
+        || config.fit.lambda_mode == LambdaMode::kCombinedProfile) {
+      // Structural/provenance checks intentionally precede any output-directory creation or file reset.
+      shared_lambda_groups = BuildAndValidateSharedLambdaGroups(catalog_entries, selected_entries, *input_file);
+    }
 
     const FitModel model = override_model.value_or(config.fit.model);
     std::vector<const SliceCatalogEntry *> profile_entries;
@@ -5656,6 +7458,7 @@ namespace exp_femto_3d {
 
     FitRunStatistics statistics;
     statistics.catalog_slices = catalog_entries.size();
+    statistics.shared_lambda_groups = shared_lambda_groups.size();
     statistics.profile_selected_slices = profile_entries.size();
     if (config.fit.profile_likelihood.enabled) statistics.profile_output_path = profile_root_path;
     statistics.profile_configured_workers = static_cast<std::size_t>(config.fit.profile_likelihood.workers);
@@ -5728,6 +7531,7 @@ namespace exp_femto_3d {
                 + (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource
                        ? ToString(config.fit.options.finite_source_mode)
                        : std::string(""))
+                + ", lambdaMode=" + ToString(config.fit.lambda_mode)
                 + ", inputCFPhiMapping=" + std::string(input_cf_uses_symmetric_phi_range ? "symmetric" : "raw")
                 + ", fitPhiMapping=" + std::string(fit_uses_symmetric_phi_range ? "symmetric" : "raw") + ".");
     progress.Update(0);
@@ -5736,6 +7540,237 @@ namespace exp_femto_3d {
         && config.fit.profile_likelihood.parallel_backend == ProfileParallelBackend::kThread) {
       throw std::runtime_error(
           "The Minuit2 thread backend remains experimental and is not enabled until numerical A/B validation passes.");
+    }
+    const bool combined_process_coordinator =
+        config.fit.lambda_mode == LambdaMode::kCombinedProfile
+        && config.fit.combined_profile.parallel_backend == ProfileParallelBackend::kProcess
+        && !combined_process_worker;
+    if (combined_process_coordinator) {
+      if (!source_config_path.has_value()) {
+        throw std::runtime_error("Combined-profile process execution requires the source TOML path.");
+      }
+      struct CombinedProcessJob {
+        std::string group_id;
+        std::size_t member_count = 0;
+        std::string fit_path;
+        std::string summary_path;
+        std::string report_path;
+        std::string manifest_path;
+        std::string log_path;
+        std::string stage_checkpoint_path;
+        std::string expected_digest;
+        std::string temporary_fit_path;
+        std::string temporary_summary_path;
+        std::string temporary_report_path;
+        bool reused = false;
+      };
+      const std::string checkpoint_base = ResolvePath(
+          config.output.output_directory,
+          config.fit.combined_profile.checkpoint.enabled
+              ? config.fit.combined_profile.checkpoint.directory : ".combined_profile_process_work");
+      const std::string run_id = config.fit.combined_profile.checkpoint.run_id.empty()
+                                     ? "transient" : config.fit.combined_profile.checkpoint.run_id;
+      const std::filesystem::path work_directory =
+          std::filesystem::path(checkpoint_base) / SanitizeFileComponent(run_id);
+      EnsureDirectoryExists(work_directory.string());
+      const std::string contract_digest = BuildCombinedProfileContractDigest(
+          cf_root_path, config, model, selected_entries);
+      std::vector<CombinedProcessJob> jobs;
+      for (const auto &[key, entries] : shared_lambda_groups) {
+        (void)key;
+        CombinedProcessJob job;
+        job.group_id = entries.front()->group_id;
+        job.member_count = entries.size();
+        const std::string component = SanitizeFileComponent(job.group_id);
+        job.fit_path = (work_directory / (component + ".fit.root")).string();
+        job.summary_path = (work_directory / (component + ".tsv")).string();
+        job.report_path = (work_directory / (component + ".report.root")).string();
+        job.manifest_path = (work_directory / (component + ".manifest")).string();
+        job.log_path = (work_directory / (component + ".worker.log")).string();
+        job.stage_checkpoint_path = (work_directory / (component + ".stage.bin")).string();
+        job.expected_digest = contract_digest + "|group=" + job.group_id;
+        const std::string temporary_suffix = ".tmp." + std::to_string(getpid())
+                                             + "." + std::to_string(jobs.size());
+        job.temporary_fit_path = job.fit_path + temporary_suffix;
+        job.temporary_summary_path = job.summary_path + temporary_suffix;
+        job.temporary_report_path = job.report_path + temporary_suffix;
+        if (config.fit.combined_profile.checkpoint.resume) {
+          const bool manifest_exists = std::filesystem::exists(job.manifest_path);
+          const bool any_payload = std::filesystem::exists(job.fit_path)
+                                   || std::filesystem::exists(job.summary_path)
+                                   || std::filesystem::exists(job.report_path);
+          if (!manifest_exists && any_payload) {
+            throw std::runtime_error("Combined-profile checkpoint has uncommitted payloads for "
+                                     + job.group_id + ".");
+          }
+          if (manifest_exists) {
+            std::ifstream manifest(job.manifest_path);
+            std::string stored_digest;
+            std::getline(manifest, stored_digest);
+            if (stored_digest != job.expected_digest
+                || !std::filesystem::exists(job.summary_path)
+                || !std::filesystem::exists(job.report_path)
+                || !ValidateCombinedProfileGroupChunk(job.fit_path, job.group_id, job.member_count)) {
+              throw std::runtime_error("Combined-profile checkpoint contract mismatch or corruption for "
+                                       + job.group_id + ".");
+            }
+            job.reused = true;
+          }
+        }
+        jobs.push_back(std::move(job));
+      }
+      input_file->Close();
+      input_file.reset();
+      std::deque<std::size_t> pending;
+      for (std::size_t index = 0; index < jobs.size(); ++index) {
+        if (!jobs[index].reused) pending.push_back(index);
+      }
+      std::map<pid_t, std::size_t> active;
+      const std::size_t worker_limit = std::min<std::size_t>(
+          static_cast<std::size_t>(config.fit.combined_profile.workers), jobs.size());
+      bool worker_failed = false;
+      while (!pending.empty() || !active.empty()) {
+        while (!pending.empty() && active.size() < worker_limit) {
+          const std::size_t index = pending.front();
+          pending.pop_front();
+          CombinedProcessJob &job = jobs[index];
+          std::vector<std::string> argument_storage = {
+              EXP_FEMTO_3D_EXECUTABLE_PATH, "fit", "--config", *source_config_path,
+              "--model", ToString(model), "--input-cf-root", cf_root_path};
+          std::vector<char *> arguments;
+          for (std::string &argument : argument_storage) arguments.push_back(argument.data());
+          arguments.push_back(nullptr);
+          std::vector<std::string> environment_storage;
+          for (char **item = environ; item != nullptr && *item != nullptr; ++item) {
+            const std::string value(*item);
+            if (value.rfind("EXP_FEMTO_3D_COMBINED_", 0) == 0
+                || value.rfind("OMP_NUM_THREADS=", 0) == 0
+                || value.rfind("OPENBLAS_NUM_THREADS=", 0) == 0
+                || value.rfind("VECLIB_MAXIMUM_THREADS=", 0) == 0
+                || value.rfind("MKL_NUM_THREADS=", 0) == 0) continue;
+            environment_storage.push_back(value);
+          }
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_PROCESS_WORKER=1");
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_WORKER_GROUP=" + job.group_id);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_WORKER_FIT_ROOT=" + job.temporary_fit_path);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_WORKER_SUMMARY=" + job.temporary_summary_path);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_WORKER_REPORT_ROOT=" + job.temporary_report_path);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_STAGE_CHECKPOINT=" + job.stage_checkpoint_path);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_STAGE_DIGEST=" + job.expected_digest);
+          environment_storage.push_back("EXP_FEMTO_3D_COMBINED_STAGE_RESUME="
+                                        + std::string(config.fit.combined_profile.checkpoint.resume ? "1" : "0"));
+          environment_storage.push_back("OMP_NUM_THREADS=1");
+          environment_storage.push_back("OPENBLAS_NUM_THREADS=1");
+          environment_storage.push_back("VECLIB_MAXIMUM_THREADS=1");
+          environment_storage.push_back("MKL_NUM_THREADS=1");
+          std::vector<char *> environment;
+          for (std::string &value : environment_storage) environment.push_back(value.data());
+          environment.push_back(nullptr);
+          posix_spawn_file_actions_t file_actions;
+          int spawn_status = posix_spawn_file_actions_init(&file_actions);
+          const bool actions_initialized = spawn_status == 0;
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn_file_actions_addopen(
+                &file_actions, STDOUT_FILENO, job.log_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+          }
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn_file_actions_adddup2(&file_actions, STDOUT_FILENO, STDERR_FILENO);
+          }
+          pid_t pid = -1;
+          if (spawn_status == 0) {
+            spawn_status = posix_spawn(&pid, EXP_FEMTO_3D_EXECUTABLE_PATH, &file_actions, nullptr,
+                                       arguments.data(), environment.data());
+          }
+          if (actions_initialized) posix_spawn_file_actions_destroy(&file_actions);
+          if (spawn_status != 0) throw std::runtime_error("Failed to spawn combined-profile group worker.");
+          active.emplace(pid, index);
+        }
+        int status = 0;
+        const pid_t finished = waitpid(-1, &status, 0);
+        if (finished < 0) throw std::runtime_error("waitpid failed for combined-profile worker.");
+        const auto active_iter = active.find(finished);
+        if (active_iter == active.end()) throw std::runtime_error("Collected unknown combined-profile worker.");
+        CombinedProcessJob &job = jobs[active_iter->second];
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0
+            || !std::filesystem::exists(job.temporary_summary_path)
+            || !std::filesystem::exists(job.temporary_report_path)
+            || !ValidateCombinedProfileGroupChunk(
+                   job.temporary_fit_path, job.group_id, job.member_count)) {
+          logger.Error("Combined-profile worker failed; see " + job.log_path + ".");
+          worker_failed = true;
+          pending.clear();
+        } else {
+          std::filesystem::rename(job.temporary_fit_path, job.fit_path);
+          std::filesystem::rename(job.temporary_summary_path, job.summary_path);
+          std::filesystem::rename(job.temporary_report_path, job.report_path);
+          const std::string temporary_manifest = job.manifest_path + ".tmp." + std::to_string(getpid());
+          {
+            std::ofstream manifest(temporary_manifest, std::ios::trunc);
+            if (!manifest) throw std::runtime_error("Cannot write combined-profile checkpoint manifest.");
+            manifest << job.expected_digest << '\n';
+          }
+          std::filesystem::rename(temporary_manifest, job.manifest_path);
+        }
+        active.erase(active_iter);
+      }
+      if (worker_failed) {
+        throw std::runtime_error("At least one combined-profile group worker failed; committed groups were retained.");
+      }
+
+      const auto merge_root_files = [&](const std::string &destination,
+                                        const auto &path_member) {
+        const std::string temporary = destination + ".tmp." + std::to_string(getpid());
+        TFileMerger merger(false, false);
+        if (!merger.OutputFile(temporary.c_str(), "RECREATE")) {
+          throw std::runtime_error("Cannot create temporary combined-profile merged ROOT file.");
+        }
+        for (const CombinedProcessJob &job : jobs) {
+          if (!merger.AddFile((job.*path_member).c_str())) {
+            throw std::runtime_error("Cannot add combined-profile worker ROOT file to merger.");
+          }
+        }
+        if (!merger.Merge()) throw std::runtime_error("Combined-profile ROOT merge failed.");
+        std::filesystem::rename(temporary, destination);
+      };
+      merge_root_files(fit_root_path, &CombinedProcessJob::fit_path);
+      merge_root_files(fit_report_root_path, &CombinedProcessJob::report_path);
+      const std::string temporary_summary = fit_summary_path + ".tmp." + std::to_string(getpid());
+      {
+        std::ofstream output(temporary_summary, std::ios::trunc);
+        if (!output) throw std::runtime_error("Cannot create merged combined-profile TSV.");
+        bool wrote_header = false;
+        for (const CombinedProcessJob &job : jobs) {
+          std::ifstream input(job.summary_path);
+          std::string line;
+          bool first = true;
+          while (std::getline(input, line)) {
+            if (first && wrote_header) {
+              first = false;
+              continue;
+            }
+            output << line << '\n';
+            if (first) wrote_header = true;
+            first = false;
+          }
+        }
+      }
+      std::filesystem::rename(temporary_summary, fit_summary_path);
+      statistics.selected_slices = selected_entries.size();
+      statistics.fitted_slices = 0;
+      statistics.shared_lambda_valid_groups = 0;
+      statistics.shared_lambda_failed_groups = 0;
+      for (const CombinedProcessJob &job : jobs) {
+        if (CombinedProfileGroupPointEstimateValid(job.fit_path)) {
+          ++statistics.shared_lambda_valid_groups;
+          statistics.fitted_slices += job.member_count + 1U;
+        } else {
+          ++statistics.shared_lambda_failed_groups;
+          ++statistics.fitted_slices;  // The independent phi-integrated seed remains a production row.
+        }
+      }
+      progress.Finish();
+      logger.Info("Completed process combined-profile fit for " + std::to_string(jobs.size()) + " groups.");
+      return statistics;
     }
     if (process_coordinator) {
       struct ProcessJob {
@@ -6087,7 +8122,11 @@ namespace exp_femto_3d {
                                        nullptr,
                                        !profile_only || config.fit.profile_likelihood.hesse_strategy
                                                             == ProfileHesseStrategy::kAllAttempts);
-        if (!seed_fit.has_value()) {
+        if (!seed_fit.has_value()
+            || ((config.fit.lambda_mode == LambdaMode::kSharedPhi
+                 || config.fit.lambda_mode == LambdaMode::kCombinedProfile)
+                && (!seed_fit->pml_minimization.has_value()
+                    || !IsValidPMLPointEstimate(*seed_fit->pml_minimization)))) {
           throw std::runtime_error("Gamow seed fit failed for finite-source group " + seed_entry.group_id + ".");
         }
         const double seed_radius_fm = ComputeEffectiveRadiusFromResult(seed_fit->result);
@@ -6106,7 +8145,11 @@ namespace exp_femto_3d {
                                              &working_kernel,
                                              !profile_only || config.fit.profile_likelihood.hesse_strategy
                                                                   == ProfileHesseStrategy::kAllAttempts);
-          if (!iterative_fit.has_value()) {
+          if (!iterative_fit.has_value()
+              || ((config.fit.lambda_mode == LambdaMode::kSharedPhi
+                   || config.fit.lambda_mode == LambdaMode::kCombinedProfile)
+                  && (!iterative_fit->pml_minimization.has_value()
+                      || !IsValidPMLPointEstimate(*iterative_fit->pml_minimization)))) {
             throw std::runtime_error("Finite-source iterative seed fit failed for group " + seed_entry.group_id + ".");
           }
           final_radius_fm = ComputeEffectiveRadiusFromResult(iterative_fit->result);
@@ -6129,12 +8172,19 @@ namespace exp_femto_3d {
     }
 
     std::vector<LevyFitResult> fit_results;
+    std::vector<SharedLambdaFitResult> shared_lambda_results;
+    std::vector<std::pair<std::string, combined_profile::Result>> combined_profile_records;
     std::set<std::string> profile_slice_ids;
     for (const SliceCatalogEntry *profile_entry : profile_entries) profile_slice_ids.insert(profile_entry->slice_id);
     std::vector<ProfileRunRecord> profile_records;
-    const std::vector<const SliceCatalogEntry *> production_entries = profile_only
-                                                                          ? std::vector<const SliceCatalogEntry *>{}
-                                                                          : selected_entries;
+    std::vector<const SliceCatalogEntry *> production_entries;
+    if (!profile_only) {
+      for (const SliceCatalogEntry *entry : selected_entries) {
+        if (config.fit.lambda_mode == LambdaMode::kIndependent || entry->is_phi_integrated) {
+          production_entries.push_back(entry);
+        }
+      }
+    }
     for (const SliceCatalogEntry *entry_ptr : production_entries) {
       const SliceCatalogEntry &entry = *entry_ptr;
       ++statistics.selected_slices;
@@ -6217,6 +8267,101 @@ namespace exp_femto_3d {
       progress.Update(processed_selected_slices);
     }
 
+    if (!profile_only && (config.fit.lambda_mode == LambdaMode::kSharedPhi
+                          || config.fit.lambda_mode == LambdaMode::kCombinedProfile)) {
+      for (const auto &[key, entries] : shared_lambda_groups) {
+        std::vector<std::unique_ptr<TH3D>> owned_cf;
+        std::vector<std::unique_ptr<TH3D>> owned_se;
+        std::vector<std::unique_ptr<TH3D>> owned_me;
+        std::vector<TH3D *> h_cf;
+        std::vector<TH3D *> h_se;
+        std::vector<TH3D *> h_me;
+        for (const SliceCatalogEntry *entry : entries) {
+          owned_cf.emplace_back(LoadStoredHistogram3D(
+              *input_file, entry->cf_object_path, entry->slice_id + "_shared_cf"));
+          owned_se.emplace_back(LoadStoredHistogram3D(
+              *input_file, entry->se_object_path, entry->slice_id + "_shared_se"));
+          owned_me.emplace_back(LoadStoredHistogram3D(
+              *input_file, entry->me_object_path, entry->slice_id + "_shared_me"));
+          if (!owned_cf.back() || !owned_se.back() || !owned_me.back()) {
+            throw std::runtime_error("Validated shared-lambda input became unavailable for " + entry->slice_id + ".");
+          }
+          h_cf.push_back(owned_cf.back().get());
+          h_se.push_back(owned_se.back().get());
+          h_me.push_back(owned_me.back().get());
+        }
+        const CoulombKernelTable *coulomb_kernel = nullptr;
+        if (config.fit.options.coulomb_mode == CoulombMode::kFiniteSource) {
+          const auto kernel_iter = finite_source_kernels.find(key);
+          if (kernel_iter == finite_source_kernels.end()) {
+            throw std::runtime_error("Missing finite-source Coulomb kernel for shared group "
+                                     + entries.front()->group_id + ".");
+          }
+          coulomb_kernel = &kernel_iter->second;
+        }
+        std::optional<std::string> stage_checkpoint_path;
+        std::string stage_checkpoint_digest;
+        bool resume_stage_checkpoint = false;
+        if (config.fit.lambda_mode == LambdaMode::kCombinedProfile) {
+          const char *worker_stage_path = std::getenv("EXP_FEMTO_3D_COMBINED_STAGE_CHECKPOINT");
+          const char *worker_stage_digest = std::getenv("EXP_FEMTO_3D_COMBINED_STAGE_DIGEST");
+          const char *worker_stage_resume = std::getenv("EXP_FEMTO_3D_COMBINED_STAGE_RESUME");
+          if (worker_stage_path != nullptr) {
+            if (worker_stage_digest == nullptr || std::string(worker_stage_digest).empty()) {
+              throw std::runtime_error("Combined-profile worker stage checkpoint has no fingerprint.");
+            }
+            stage_checkpoint_path = worker_stage_path;
+            stage_checkpoint_digest = worker_stage_digest;
+            resume_stage_checkpoint = worker_stage_resume != nullptr
+                                      && std::string(worker_stage_resume) == "1";
+          } else if (config.fit.combined_profile.checkpoint.enabled) {
+            const std::filesystem::path checkpoint_directory =
+                std::filesystem::path(ResolvePath(config.output.output_directory,
+                    config.fit.combined_profile.checkpoint.directory))
+                / SanitizeFileComponent(config.fit.combined_profile.checkpoint.run_id);
+            EnsureDirectoryExists(checkpoint_directory.string());
+            stage_checkpoint_path = (checkpoint_directory
+                / (SanitizeFileComponent(entries.front()->group_id) + ".stage.bin")).string();
+            stage_checkpoint_digest = BuildCombinedProfileContractDigest(
+                cf_root_path, config, model, entries) + "|group=" + entries.front()->group_id;
+            resume_stage_checkpoint = config.fit.combined_profile.checkpoint.resume;
+          }
+        }
+        SharedLambdaGroupOutput group_output = config.fit.lambda_mode == LambdaMode::kCombinedProfile
+            ? FitCombinedProfileGroup(entries, h_cf, h_se, h_me, model, config.fit.options,
+                                      config.fit.combined_profile, fit_uses_symmetric_phi_range,
+                                      coulomb_kernel, stage_checkpoint_path, stage_checkpoint_digest,
+                                      resume_stage_checkpoint)
+            : FitSharedLambdaGroup(entries, h_cf, h_se, h_me, model, config.fit.options,
+                                   fit_uses_symmetric_phi_range, coulomb_kernel);
+        if (group_output.group.point_estimate_valid) {
+          ++statistics.shared_lambda_valid_groups;
+        } else {
+          ++statistics.shared_lambda_failed_groups;
+          logger.Error("Shared-lambda group failed: " + group_output.group.group_id + ": "
+                       + group_output.group.failure_reason);
+        }
+        for (std::size_t member = 0; member < entries.size(); ++member) {
+          ++statistics.selected_slices;
+          if (group_output.group.point_estimate_valid) {
+            WriteSingleSliceFitArtifacts(h_cf[member], *entries[member],
+                                         group_output.members[member].fit_function.get(),
+                                         group_output.members[member].result, fit_root_path,
+                                         shared_output_file.get(), coulomb_kernel);
+            ++statistics.fitted_slices;
+          }
+          fit_results.push_back(group_output.members[member].result);
+          ++processed_selected_slices;
+          progress.Update(processed_selected_slices);
+        }
+        if (group_output.combined_profile_scan.has_value()) {
+          combined_profile_records.emplace_back(
+              group_output.group.group_id, std::move(*group_output.combined_profile_scan));
+        }
+        shared_lambda_results.push_back(std::move(group_output.group));
+      }
+    }
+
     // Listed profiles may intentionally target catalog slices outside production fit_selection.
     // Run their nominal point privately so the established FitCatalog/TSV selection remains unchanged.
     if (config.fit.profile_likelihood.enabled) {
@@ -6275,22 +8420,27 @@ namespace exp_femto_3d {
     if (profile_only) {
       // A diagnostic-only run never creates or mutates detailed-fit ROOT, report ROOT, TSV, or FitCatalog.
     } else if (shared_output_file) {
-      WriteR2Graphs(*shared_output_file, fit_results);
+      WriteR2Graphs(*shared_output_file, fit_results, shared_lambda_results);
       WriteFitCatalogTree(*shared_output_file, fit_results);
+      WriteSharedLambdaFitResults(*shared_output_file, shared_lambda_results);
+      WriteCombinedProfileResults(*shared_output_file, combined_profile_records, shared_lambda_results);
       WriteCoulombKernelCatalogTree(*shared_output_file, kernel_catalog_entries);
       shared_output_file->Write("", TObject::kOverwrite);
       shared_output_file->Close();
       shared_output_file.reset();
     } else {
       auto output_file = OpenRootFile(fit_root_path, "UPDATE");
-      WriteR2Graphs(*output_file, fit_results);
+      WriteR2Graphs(*output_file, fit_results, shared_lambda_results);
       WriteFitCatalogTree(*output_file, fit_results);
+      WriteSharedLambdaFitResults(*output_file, shared_lambda_results);
+      WriteCombinedProfileResults(*output_file, combined_profile_records, shared_lambda_results);
       WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
       output_file->Close();
     }
     if (!profile_only) {
       WriteFitResultsSummaryTsv(fit_summary_path, fit_results);
-      WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries);
+      WriteFitReportRootFile(fit_report_root_path, fit_results, kernel_catalog_entries,
+                             shared_lambda_results, combined_profile_records);
     }
     if (config.fit.profile_likelihood.enabled) {
       WriteProfileRootFile(profile_root_path, config, model, profile_records);
