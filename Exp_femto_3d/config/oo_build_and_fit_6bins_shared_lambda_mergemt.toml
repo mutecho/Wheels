@@ -1,6 +1,5 @@
 [input]
-# input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root"
-input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_loosecut.root"
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root"
 task_name = "femto-dream-pair-task-track-track"
 same_event_subtask = "SameEvent_3Dqn"
 mixed_event_subtask = "MixedEvent_3Dqn"
@@ -8,15 +7,11 @@ sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
 
 [output]
 output_directory = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO"
-# cf_root_name = "EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root"
-cf_root_name = "EP_dependence_CF_3d_25ae_pass2_loosecut_6phi.root"
-# fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda.root"
-fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul_loosecut_6phi_shared_lambda.root"
-# fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_fcoul_sel8_6phi_shared_lambda.tsv"
-fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_fcoul_loosecut_6phi_shared_lambda.tsv"
+cf_root_name = "EP_dependence_CF_3d_25ae_pass2_sel8_6phi_mmt.root"
+fit_root_name = "EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda_mmt.root"
+fit_summary_name = "3d_25ae_pass2_fit_summary_nonfold_fcoul_sel8_6phi_shared_lambda_mmt.tsv"
 fit_report_directory = "/Users/allenzhou/Research_software/Code_base/Exp_femto_3d/res"
-fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul_loosecut_6phi_shared_lambda.root"
-# fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda.root"
+fit_report_root_name = "fit_report_3d_25ae_pass2_nonfold_fcoul_sel8_6phi_shared_lambda_mmt.root"
 log_level = "warn"
 
 [build]
@@ -67,23 +62,11 @@ min = 80
 max = 100
 
 [[bins.mt]]
-min = 0.2
-max = 0.4
-
-[[bins.mt]]
 min = 0.4
-max = 0.6
-
-[[bins.mt]]
-min = 0.6
 max = 0.8
 
 [[bins.mt]]
 min = 0.8
-max = 1.1
-
-[[bins.mt]]
-min = 1.1
 max = 1.6
 
 [[fit_selection.centrality]]
@@ -99,21 +82,9 @@ min = 30
 max = 50
 
 [[fit_selection.mt]]
-min = 0.2
-max = 0.4
-
-[[fit_selection.mt]]
 min = 0.4
-max = 0.6
-
-[[fit_selection.mt]]
-min = 0.6
 max = 0.8
 
 [[fit_selection.mt]]
 min = 0.8
-max = 1.1
-
-[[fit_selection.mt]]
-min = 1.1
 max = 1.6
