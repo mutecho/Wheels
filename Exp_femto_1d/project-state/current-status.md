@@ -43,6 +43,11 @@ Reason:
   build-cf histogram construction path by guarding error-buffer initialization
   after projections, clones, and rebinning; local build, O2Physics executor
   `ctest --output-on-failure`, and direct `workflow_smoke_test` passed
+- `2026-09-16` `build-cf` started writing one
+  `groups/<group_id>/InOutCFCanvas` per configured centrality-by-mT group;
+  complete groups show InPlane/OutOfPlane `CF1D` errors and incomplete groups
+  retain explicit missing-region annotations. O2Physics build and all 4 CTest
+  targets passed, and complete/placeholder canvases were visually checked
 - real-data equivalence to the legacy macro has not yet been run
 
 ## Active Constraints

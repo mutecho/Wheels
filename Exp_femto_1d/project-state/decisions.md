@@ -59,3 +59,10 @@
 - reason: `build.cf_rebin_factor` lets `CF1D` be built from coarser same-event
   and mixed-event operands for statistical stability, while `SE_raw1d` and
   `ME_raw1d` remain raw-window histograms for legacy comparisons and diagnosis
+
+## DEC-011 Persist one In/Out CF comparison canvas for every requested group
+
+- status: accepted
+- reason: each configured centrality-by-mT group needs a direct InPlane versus
+  OutOfPlane comparison, including an explicit diagnostic placeholder when one
+  or both region slices fail normalization and are absent from `SliceCatalog`

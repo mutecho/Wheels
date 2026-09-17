@@ -12,6 +12,8 @@
   - verifies default `cf_rebin_factor = 1` metadata
   - verifies build-only CF-by-mT canvases for two mT bins under the cent-slice
     output tree
+  - verifies the per-group InPlane/OutOfPlane `TGraphErrors` canvas in
+    reopen-per-slice output mode
 - `workflow_smoke_test`
   - runs toy `build-cf` and `fit`, then checks `SliceCatalog`, `FitCatalog`,
     per-slice objects, summaries, and TSV headers
@@ -23,6 +25,9 @@
     CF-by-mT trend graphs
   - verifies split mixed-event mode changes EP-sliced `ME_raw1d` content and
     records `split_mixed_event_by_phi` in `SliceCatalog`
+  - verifies complete In/Out graphs preserve `CF1D` values and errors, partial
+    groups retain the available curve with a missing-region annotation, and
+    empty groups still receive a two-region diagnostic placeholder
 - `cats_fit_smoke_test`
   - fits a synthetic `baseline x CATS` histogram and checks `p0` plus source-size recovery
 - `root_runtime_probe`
@@ -31,6 +36,12 @@
 
 ## Current Validation State
 
+- `2026-09-16` O2Physics ROOT executor `cmake --build build -j2` returned
+  `PRIMARY_OK`; `ctest --test-dir build --output-on-failure` returned
+  `PRIMARY_OK` with all 4 registered tests passing
+- `2026-09-16` rendered one complete In/Out canvas and one fully missing-group
+  placeholder canvas from the workflow smoke outputs; curve/error/legend and
+  placeholder title/annotations were visually readable
 - `2026-04-20` non-sandboxed O2Physics configure/build/`ctest --output-on-failure`
   passed all 4 registered tests
 - `2026-05-06` `bash -n scripts/run_exp_femto_1d.sh`,

@@ -8,6 +8,7 @@
 #include "TCanvas.h"
 #include "TFile.h"
 #include "TGraph.h"
+#include "TGraphErrors.h"
 #include "TH1.h"
 #include "THnSparse.h"
 #include "exp_femto_1d/Config.h"
@@ -132,12 +133,19 @@ int main() {
   auto *cf_by_mt_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/MinBias/CFByMtCanvas"));
   auto *in_plane_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/InPlane/CFByMtCanvas"));
   auto *out_of_plane_canvas = dynamic_cast<TCanvas *>(cf_file.Get("cent_slices/cent_0.00-10.00/OutOfPlane/CFByMtCanvas"));
+  auto *in_out_canvas = dynamic_cast<TCanvas *>(cf_file.Get("groups/cent_0.00-10.00__mt_0.200-0.350/InOutCFCanvas"));
   Expect(catalog_tree != nullptr, "SliceCatalog tree missing");
   Expect(cf_histogram != nullptr, "CF1D histogram missing");
   Expect(cf_histogram->GetNbinsX() > 0, "CF1D histogram should have bins");
   Expect(cf_by_mt_canvas != nullptr, "CF-by-mT canvas missing");
   Expect(in_plane_canvas != nullptr, "InPlane CF-by-mT canvas missing");
   Expect(out_of_plane_canvas != nullptr, "OutOfPlane CF-by-mT canvas missing");
+  Expect(in_out_canvas != nullptr, "In/Out group canvas missing");
+  Expect(dynamic_cast<TGraphErrors *>(in_out_canvas->GetListOfPrimitives()->FindObject("CFInOut__InPlane")) != nullptr,
+         "In/Out group canvas InPlane graph missing");
+  Expect(
+      dynamic_cast<TGraphErrors *>(in_out_canvas->GetListOfPrimitives()->FindObject("CFInOut__OutOfPlane")) != nullptr,
+      "In/Out group canvas OutOfPlane graph missing");
   auto *default_marker_graph =
       dynamic_cast<TGraph *>(cf_by_mt_canvas->GetListOfPrimitives()->FindObject("CFTrend__mt_0.200-0.350"));
   Expect(default_marker_graph != nullptr, "CF-by-mT trend graph missing");

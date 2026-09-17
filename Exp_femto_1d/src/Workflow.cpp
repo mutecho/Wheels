@@ -24,9 +24,11 @@
 #include "TFitResult.h"
 #include "TFitResultPtr.h"
 #include "TGraph.h"
+#include "TGraphErrors.h"
 #include "TH1.h"
 #include "TH1D.h"
 #include "THnSparse.h"
+#include "TLatex.h"
 #include "TLegend.h"
 #include "TMath.h"
 #include "TROOT.h"
@@ -548,6 +550,167 @@ namespace exp_femto_1d {
         legend->Draw();
         canvas.Update();
         canvas.Write("CFByMtCanvas", TObject::kOverwrite);
+      }
+    }
+
+    std::string BuildGroupCanvasTitle(const RangeBin &centrality_bin, const RangeBin &mt_bin) {
+      return "In/Out CF, cent " + FormatDouble(centrality_bin.min, 2) + "-" + FormatDouble(centrality_bin.max, 2)
+             + ", mT " + FormatDouble(mt_bin.min, 3) + "-" + FormatDouble(mt_bin.max, 3) + "; k* (GeV/c); C(k*)";
+    }
+
+    // Convert one stored CF into a canvas-owned graph. Only normal bins are
+    // displayed; ROOT's 0 +/- 0 division result is treated as an unavailable
+    // display point rather than as a measured zero correlation.
+    TGraphErrors *BuildInOutCfGraph(const TH1D &histogram, const RegionKind region_kind) {
+      auto *graph = new TGraphErrors();
+      const bool is_in_plane = region_kind == RegionKind::kInPlane;
+      graph->SetName(is_in_plane ? "CFInOut__InPlane" : "CFInOut__OutOfPlane");
+      graph->SetLineColor(is_in_plane ? kRed + 1 : kBlue + 1);
+      graph->SetMarkerColor(is_in_plane ? kRed + 1 : kBlue + 1);
+      graph->SetMarkerStyle(is_in_plane ? 20 : 21);
+      graph->SetMarkerSize(0.7);
+      graph->SetLineWidth(2);
+
+      int point_index = 0;
+      for (int bin = 1; bin <= histogram.GetNbinsX(); ++bin) {
+        const double value = histogram.GetBinContent(bin);
+        const double error = histogram.GetBinError(bin);
+        if (!std::isfinite(value) || !std::isfinite(error) || (value == 0.0 && error == 0.0)) {
+          continue;
+        }
+        graph->SetPoint(point_index, histogram.GetXaxis()->GetBinCenter(bin), value);
+        graph->SetPointError(point_index, 0.0, error);
+        ++point_index;
+      }
+
+      if (point_index == 0) {
+        delete graph;
+        return nullptr;
+      }
+      graph->SetBit(kCanDelete);
+      return graph;
+    }
+
+    // Include vertical statistical errors when selecting the display range so
+    // neither InPlane nor OutOfPlane uncertainties are clipped by the frame.
+    std::pair<double, double> FindInOutCfYRange(const std::vector<TGraphErrors *> &graphs) {
+      double y_min = std::numeric_limits<double>::infinity();
+      double y_max = -std::numeric_limits<double>::infinity();
+      for (const TGraphErrors *graph : graphs) {
+        for (int point = 0; point < graph->GetN(); ++point) {
+          double x = 0.0;
+          double value = 0.0;
+          graph->GetPoint(point, x, value);
+          const double error = graph->GetErrorY(point);
+          if (!std::isfinite(value) || !std::isfinite(error)) {
+            continue;
+          }
+          y_min = std::min(y_min, value - error);
+          y_max = std::max(y_max, value + error);
+        }
+      }
+
+      if (!std::isfinite(y_min) || !std::isfinite(y_max)) {
+        return {0.0, 1.0};
+      }
+      if (std::abs(y_max - y_min) < 1.0e-9) {
+        return {y_min - 0.5, y_max + 0.5};
+      }
+
+      const double padding = 0.10 * (y_max - y_min);
+      const double display_min = y_min > 0.0 ? std::max(0.0, y_min - padding) : y_min - padding;
+      return {display_min, y_max + padding};
+    }
+
+    void DrawMissingRegionAnnotation(const std::string &region_name, const double y_position) {
+      auto *annotation = new TLatex(0.14, y_position, ("Missing: " + region_name).c_str());
+      annotation->SetName(("MissingRegionAnnotation__" + region_name).c_str());
+      annotation->SetNDC();
+      annotation->SetTextColor(kGray + 2);
+      annotation->SetTextSize(0.04);
+      annotation->SetBit(kCanDelete);
+      annotation->Draw();
+    }
+
+    // Write one diagnostic canvas for every configured centrality x mT group,
+    // including groups whose input normalization prevented one or both EP
+    // slices from entering SliceCatalog.
+    void WriteGroupInOutCfCanvases(TFile &output_file,
+                                   const std::vector<RangeBin> &centrality_bins,
+                                   const std::vector<RangeBin> &mt_bins,
+                                   const BuildCfConfig &build_config,
+                                   const std::vector<SliceCatalogEntry> &entries) {
+      std::map<std::string, std::array<const SliceCatalogEntry *, 2>> entries_by_group;
+      for (const SliceCatalogEntry &entry : entries) {
+        if (entry.region_kind == RegionKind::kInPlane) {
+          entries_by_group[entry.group_id][0] = &entry;
+        } else if (entry.region_kind == RegionKind::kOutOfPlane) {
+          entries_by_group[entry.group_id][1] = &entry;
+        }
+      }
+
+      for (const RangeBin &centrality_bin : centrality_bins) {
+        for (const RangeBin &mt_bin : mt_bins) {
+          const std::string group_id = BuildGroupId(centrality_bin, mt_bin);
+          const auto group_it = entries_by_group.find(group_id);
+          const std::array<const SliceCatalogEntry *, 2> group_entries =
+              group_it == entries_by_group.end() ? std::array<const SliceCatalogEntry *, 2>{nullptr, nullptr}
+                                                 : group_it->second;
+
+          std::array<TGraphErrors *, 2> graphs = {nullptr, nullptr};
+          const std::array<RegionKind, 2> region_kinds = {RegionKind::kInPlane, RegionKind::kOutOfPlane};
+          const std::array<std::string, 2> region_names = {"InPlane", "OutOfPlane"};
+          std::vector<TGraphErrors *> available_graphs;
+          for (std::size_t region_index = 0; region_index < group_entries.size(); ++region_index) {
+            const SliceCatalogEntry *entry = group_entries[region_index];
+            if (entry == nullptr) {
+              continue;
+            }
+            auto *histogram = dynamic_cast<TH1D *>(output_file.Get(entry->cf_object_path.c_str()));
+            if (histogram == nullptr) {
+              throw std::runtime_error("Missing CF1D object while building In/Out canvas: " + entry->cf_object_path);
+            }
+            graphs[region_index] = BuildInOutCfGraph(*histogram, region_kinds[region_index]);
+            if (graphs[region_index] != nullptr) {
+              available_graphs.push_back(graphs[region_index]);
+            }
+          }
+
+          const auto [display_min, display_max] = FindInOutCfYRange(available_graphs);
+          auto *group_directory = GetOrCreateDirectoryPath(output_file, "groups/" + group_id);
+          group_directory->cd();
+
+          const std::string canvas_title = BuildGroupCanvasTitle(centrality_bin, mt_bin);
+          TCanvas canvas(("InOutCFCanvas__" + group_id).c_str(), canvas_title.c_str(), 900, 700);
+          canvas.SetTicks(1, 1);
+          auto *frame = canvas.DrawFrame(
+              build_config.kstar_min, display_min, build_config.kstar_max, display_max, canvas_title.c_str());
+          frame->SetBit(kCanDelete);
+
+          TLegend *legend = nullptr;
+          if (!available_graphs.empty()) {
+            legend = new TLegend(0.65, 0.72, 0.88, 0.88);
+            legend->SetBorderSize(0);
+            legend->SetFillStyle(0);
+            legend->SetBit(kCanDelete);
+          }
+
+          double missing_label_y = 0.84;
+          for (std::size_t region_index = 0; region_index < graphs.size(); ++region_index) {
+            if (graphs[region_index] != nullptr) {
+              graphs[region_index]->Draw("LP SAME");
+              legend->AddEntry(graphs[region_index], region_names[region_index].c_str(), "lep");
+            } else {
+              DrawMissingRegionAnnotation(region_names[region_index], missing_label_y);
+              missing_label_y -= 0.06;
+            }
+          }
+          if (legend != nullptr) {
+            legend->Draw();
+          }
+          canvas.Update();
+          canvas.Write("InOutCFCanvas", TObject::kOverwrite);
+        }
       }
     }
 
@@ -1168,6 +1331,8 @@ namespace exp_femto_1d {
     WriteSliceCatalogTree(*shared_output_file, catalog_entries);
     const ScopedRootBatchMode batch_mode(true);
     WriteCentSliceCfCanvases(*shared_output_file, catalog_entries, config.build.cf_by_mt_show_markers);
+    WriteGroupInOutCfCanvases(
+        *shared_output_file, config.centrality_bins, config.mt_bins, config.build, catalog_entries);
     progress.Finish();
     return statistics;
   }

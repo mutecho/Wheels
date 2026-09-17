@@ -145,6 +145,12 @@ See:
 - `slices/<slice_id>/ME_raw1d`
 - `slices/<slice_id>/CF1D`
 - `cent_slices/<cent_id>/<region_name>/CFByMtCanvas`
+- `groups/<group_id>/InOutCFCanvas`
+
+Every configured centrality-by-mT group receives an `InOutCFCanvas`. It
+overlays the stored InPlane and OutOfPlane `CF1D` values with statistical error
+bars; if either slice is unavailable, the canvas remains present and names the
+missing region instead of drawing a fabricated curve.
 
 `meta/SliceCatalog` records `split_mixed_event_by_phi` and `cf_rebin_factor`
 for every slice. Older CF files without these branches are read as `false` and

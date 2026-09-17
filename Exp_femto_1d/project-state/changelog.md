@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-16
+
+- added `groups/<group_id>/InOutCFCanvas` to every configured centrality-by-mT
+  group in `build-cf` output
+- plotted InPlane and OutOfPlane `CF1D` values as red/blue `TGraphErrors`
+  primitives with statistical errors and error-aware y-axis limits
+- retained canvas coverage for incomplete groups by naming missing regions with
+  persistent annotations instead of fabricating curves
+- extended ROOT-backed tests for complete, partially missing, and fully missing
+  group canvases in both output-file modes
+- passed the O2Physics ROOT executor build and all 4 CTest targets, then
+  rendered and visually checked one complete comparison and one empty-group
+  placeholder canvas
+
 ## 2026-05-27
 
 - added `[build].cf_rebin_factor` with default `1`; values above one merge
