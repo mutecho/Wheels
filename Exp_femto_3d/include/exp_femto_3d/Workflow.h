@@ -20,4 +20,11 @@ namespace exp_femto_3d {
 
   [[nodiscard]] std::vector<SliceCatalogEntry> LoadSliceCatalog(const std::string &cf_root_path);
 
+  /** Write the standard source/phi/epsilon report from saved CATS3D estimates.
+   * The destination must be new. Only complete groups with valid conditional
+   * errors receive harmonic/epsilon fits; other groups retain diagnostic plots.
+   * No correlation model, kernel, or slice minimizer is evaluated.
+   */
+  void WriteCats3DFitReportRoot(const std::string &path, const std::vector<LevyFitResult> &results);
+
 }  // namespace exp_femto_3d

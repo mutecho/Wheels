@@ -215,6 +215,66 @@ max = 0.4
 
   const ApplicationConfig config = LoadApplicationConfig(WriteFile(temp_dir / "valid.toml", valid_config));
   Expect(config.input.input_root == "/tmp/input.root", "input_root mismatch");
+  Expect(config.input.format == InputFormat::kFemtoDream, "omitted input.format changed legacy default");
+  for (const auto &value : {"femto", "femtodream"}) {
+    auto text = valid_config;
+    text.insert(text.find("[input]\n") + 8, "format = \"" + std::string(value) + "\"\n");
+    const auto parsed = LoadApplicationConfig(WriteFile(temp_dir / "input_format.toml", text));
+    Expect(ToString(parsed.input.format) == value, "input.format did not roundtrip");
+  }
+  for (const auto &value : {"3", "true", "[]", "{}", "'unknown'", "''"}) {
+    auto text = valid_config;
+    text.insert(text.find("[input]\n") + 8, "format = " + std::string(value) + "\n");
+    ExpectConfigError(temp_dir / "bad_input_format.toml", text, "invalid input.format accepted");
+  }
+
+  Expect(config.build.phi_mode == PhiMode::kSeparate, "omitted phi_mode changed legacy behavior");
+  for (const auto &value : {"separate", "fold_pi"}) {
+    auto text = valid_config;
+    text.insert(text.find("[build]\n") + 8, "phi_mode = \"" + std::string(value) + "\"\n");
+    const auto parsed = LoadApplicationConfig(WriteFile(temp_dir / "phi_mode.toml", text));
+    Expect(ToString(parsed.build.phi_mode) == value, "phi_mode did not roundtrip");
+  }
+  for (const auto &value : {"3", "true", "[]", "'unknown'"}) {
+    auto text = valid_config;
+    text.insert(text.find("[build]\n") + 8, "phi_mode = " + std::string(value) + "\n");
+    ExpectConfigError(temp_dir / "bad_phi_mode.toml", text, "invalid phi_mode accepted");
+  }
+  const auto femto_example = LoadApplicationConfig(
+      std::string(EXP_FEMTO_3D_SOURCE_DIR) + "/config/examples/femto.example.toml");
+  Expect(femto_example.input.format == InputFormat::kFemto
+             && femto_example.input.same_event_subtask == "TrackTrack/SE/Analysis"
+             && !femto_example.build.phi_rebin.enabled, "new-format example is invalid");
+
+  Expect(config.build.normalization.mode == CfNormalizationMode::kFullIntegral, "legacy normalization default changed");
+  const std::string shell = R"toml(
+[build.normalization]
+mode = "box_shell"
+q_out = [0.15, 0.20]
+q_side = [0.12, 0.18]
+q_long = [0.10, 0.22]
+)toml";
+  const auto shell_config = LoadApplicationConfig(WriteFile(temp_dir / "shell.toml", valid_config + shell));
+  Expect(shell_config.build.normalization.mode == CfNormalizationMode::kBoxShell
+             && shell_config.build.normalization.ranges[1][0] == .12
+             && shell_config.build.normalization.ranges[2][1] == .22, "axis normalization ranges lost");
+  for (const auto &body : std::vector<std::string>{
+      "mode = 3", "mode = 'unknown'", "mode = 'box_shell'",
+      "mode = 'full_integral'\nq_out = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [0.1]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [-0.1, 0.2]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [0.2, 0.2]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [0.3, 0.2]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [nan, 0.2]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = [0.1, inf]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]",
+      "mode = 'box_shell'\nq_out = ['0.1', 0.2]\nq_side = [0.1, 0.2]\nq_long = [0.1, 0.2]"}) {
+    ExpectConfigError(temp_dir / "bad_normalization.toml", valid_config + "\n[build.normalization]\n" + body,
+                      "invalid normalization configuration accepted: " + body);
+  }
+  ExpectConfigError(temp_dir / "bad_normalization_table.toml",
+                    valid_config + "\n[build.normalization.q_out]\nmin = 0.1\nmax = 0.2",
+                    "normalization axis table accepted instead of array");
+
   Expect(config.fit.model == FitModel::kDiag, "fit model mismatch");
   Expect(config.output.log_level == LogLevel::kDebug, "log level mismatch");
   Expect(config.fit_centrality_bins.size() == 1, "fit centrality fallback failed");

@@ -11,7 +11,21 @@ build/
 .cache/
 cmake-build-*/
 bin/
+
+# Analysis results and generated reports (at any project depth)
+*.root
+root/
 res/
+result/
+results/
+output/
+outputs/
+cf/
+*.work/
+
+# Project-specific generated data and comparison reports
+/Exp_femto_3d/data/
+/test/comparison_*/
 
 # CMake / CTest generated files
 CMakeCache.txt
@@ -33,6 +47,7 @@ compile_commands.json
 
 # Logs
 *.log
+logs/
 
 # Internal debug caches
 debuglist/

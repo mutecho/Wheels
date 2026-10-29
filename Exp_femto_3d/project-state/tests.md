@@ -1,5 +1,111 @@
 # Tests
 
+## 2026-10-29: Femto Layout And Half-Period Count Handling
+
+- All CMake targets compiled in O2Physics/latest-master-o2. Final CTest passed
+  15/15, no skips, in 314.39 s; executor status PRIMARY_OK. Targeted config/input
+  tests separately passed 2/2 in 11.98 s. This validates engineering behavior,
+  not a real-data correlation fit or physical model adequacy.
+- Equivalent seven-dimensional weighted inputs cover both layouts, all normal
+  0..2pi bins, nonuniform mT, qn splitting, native/factor/ranges rebinning and
+  all four ME phi/qn split combinations. Raw 3D counts, stored variances,
+  normalized CF/projection values and catalog coordinates match.
+- fold_pi was checked against independently extracted half-period histograms:
+  SE/ME and sum(w^2) add, normalization is recomputed, propagated CF errors match,
+  and the result differs from directly averaging CFs. Native/factor/ranges and
+  qn policies pass. Missing/wrong objects, bad axes, non-pairable folding,
+  pi-straddling separate selections and invalid mapping preserve output sentinels.
+- Synthetic fits read nine separate slices or five folded slices in one mT
+  group. Two separate R2/overview products have four points each with 0..pi and
+  pi..2pi ranges and independent harmonics; folded products retain 0..pi and old
+  paths. Synthetic saved-CATS reports check each half's eligibility independently:
+  an invalid first-half error blocks its harmonic without blocking the valid
+  second half. CATS lambda is externally fixed in these report fixtures.
+- Real-file build-only QA used Downloads/AnalysisResults-5.root, centrality
+  0..10%, mT 0.4..0.7, normal phi bins only. Nineteen slices reopen correctly;
+  integrated SE=137701964, ME=128507156, cf_scale=0.96544154487, matching the
+  earlier independent sparse probe. Its source phi axis is 0..3.14159, so this
+  file is only a layout/extraction check; fold_pi correctly rejects it and
+  leaves the existing temporary CF byte-identical. No overflow was recovered.
+- Original input SHA-256: 6dd7aa318abd5114f3ef76ee04b6f4ab11dfdb6b74cd03e26d4e5dfd34cf2bdc. Size and nanosecond mtime also remained
+  unchanged. No production data minimization or upstream train was run.
+- ROOT reopened and exported three synthetic overview canvases; visual QA
+  confirmed independent 0..pi and pi..2pi panels and the folded 0..pi panel,
+  with readable axes and trend lines confined to their intended intervals.
+  Temporary artifacts: /private/tmp/femto_phi_{0_pi,pi_2pi,folded}_20261029.png.
+- Auxiliary QA uses shell/C++ because the O2 module's PYTHONHOME conflicts with
+  Xcode's python3 in this shell. ROOT itself remained usable; no ROOT fallback
+  or environment reconstruction was used.
+
+Final regression command (from the primary guarded ROOT executor):
+
+```bash
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'cmake --build build --target input_format_test --parallel 6 && ctest --test-dir build -R "^(input_format_test|config_parse_validation_test)$" --output-on-failure && ctest --test-dir build --parallel 3 --output-on-failure'
+```
+
+Final real-file/readback/render command (PRIMARY_OK):
+
+```bash
+bash /Users/allenzhou/.codex/skills/cern_root/o2physics-root/scripts/run_root_command.sh \
+  --cwd /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d \
+  --command 'bash /private/tmp/femto_real_final_20261029.sh && root -l -b -q /private/tmp/render_femto_period_qa_20261029.C'
+```
+
+
+## 2026-10-23: Standard CATS3D Fit Reports
+
+- Direct guarded launcher `--summary-only` returned `PRIMARY_OK`, producing
+  four traditional summary ROOT files in 0.54 s with zero source folds. Build
+  and environment setup time are excluded. The full 420-point input scan was
+  not refitted or reconvolved.
+- `check_standard_reports.C` reopened all four final files: 420 parameter/error
+  vectors and catalog values/statuses matched the original scan, all 813 attempts
+  were retained, every group had six differential phi members, and harmonic/
+  epsilon eligibility matched 4/6/5/4 complete groups. Incomplete groups have
+  status canvases and no harmonic functions. PNG previews were visually checked.
+- Rebuilt and ran `workflow_smoke_test`, `cats3d_scan_test`, `cats3d_model_test`:
+  3/3 passed in 53.66 s with `PRIMARY_OK`. One saved-point full-export smoke also
+  succeeded (one source fold, 20.44 s); the PDF/HTML renderer still accepts it.
+- Evidence: `res/cats3d_fit_report_oo_cuttest_20261023/validation/launcher.log`,
+  `final_verification.log`, QA macro and artifact checks. Real data here exercise
+  constant lambda/full geometry; table-scale/diagonal summary-only cases were
+  source-reviewed rather than separately run. The earlier full CATS3D workflow
+  test was not repeated for this reporting-only extension.
+
+## 2026-10-22: CATS3D Saved-Scan Reporting
+
+- Guarded CMake build of `cats3d_scan_report` passed. The OO scan was rendered
+  using saved parameters and its recorded kernel: four coordinates x 105 slices,
+  420 model folds, 258.64 s; no minimization was rerun.
+- Closed-file ROOT QA checked 420 parameter/error vectors and all stored
+  validity, objective, Minuit and NDF fields against the original scan; all
+  813 attempt rows were retained. Independent direct sums checked 50,400 data
+  projection bins and propagated errors, sampled model projection values,
+  computed q-bin centers, and dashed styling for invalid trials. `PRIMARY_OK`.
+- Input scan/CF SHA-256, file sizes and modification times remained unchanged.
+  Four PDFs each contain 121 pages, all point images exist, and the offline
+  index's coordinate/group/failure filters were exercised in the in-app browser.
+  Group-parameter and valid/failed slice renderings were visually checked.
+- Existing `cats3d_scan_test`, `cats3d_model_test` and `cats3d_workflow_test`
+  passed 3/3 in 298.26 s through the O2Physics executor (`PRIMARY_OK`). This is
+  targeted regression coverage, not a rerun of the entire CTest suite.
+- The final launcher was also exercised end to end on one saved differential
+  phi point: one kernel load / one source fold, one group image, a three-page
+  PDF, ROOT and HTML, completed in 19.25 s for reconstruction with `PRIMARY_OK`.
+  A malformed first QA fixture was replaced using deep TTree basket copies;
+  the original scan and report inputs were never altered.
+- ROOT/PDF image assembly and HTML are separate stages. A Python codec conflict
+  in the first presentation attempt was repaired by running the standard-library
+  renderer outside O2, with subprocess `PYTHONHOME`/`PYTHONPATH` cleared. Final
+  PDFs reuse lossless PNG streams to avoid native PDF paper-layout shifts.
+- Evidence: `res/cats3d_lambda_scan_oo_cuttest_20261022/validation/` contains
+  `root_qa.log`, `ctest.log`, `presentation.log`, `artifact_checks.json` and QA
+  macros. Constants and full geometry were exercised on this real scan; the
+  reporter's diagonal/table-scale branches have not separately been run on real
+  inputs. These checks do not validate physical model adequacy or scan convergence.
+
 ## T-023: Complete Strict-Parallel Pair Coverage
 
 - date: 2026-09-07

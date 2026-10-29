@@ -1,0 +1,4 @@
+/build/
+/bin/
+/comparison_*/
+*.log

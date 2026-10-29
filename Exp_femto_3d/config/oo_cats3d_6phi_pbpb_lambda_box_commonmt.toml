@@ -1,0 +1,201 @@
+# Diagnostic use of PbPb pair purity for loosecut05thres OO data.
+# New common mT intervals, new box-normalized CF, and isolated outputs.
+# The stored table is uncorrected purity; (1-0.12)^2 is applied by CATS3D.
+# Conditional fit errors do not include external purity-table uncertainty.
+
+[input]
+input_root = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_loosecuttest.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_3Dqn"
+mixed_event_subtask = "MixedEvent_3Dqn"
+sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
+
+[output]
+output_directory = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023"
+cf_root_name = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/cf/oo_cats3d_pbpb_lambda_box_commonmt_20261023/cf_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+fit_root_name = "fit_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+fit_summary_name = "fit_summary_oo_cats3d_pbpb_lambda_box_commonmt_20261023.tsv"
+fit_report_directory = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/res/oo_cats3d_pbpb_lambda_box_commonmt_20261023"
+fit_report_root_name = "fit_report_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+profile_root_name = "profile_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+log_level = "warn"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = false
+split_mixed_event_by_phi = true
+
+# Outer Cartesian box minus the central box, using normal-bin centers.
+[build.normalization]
+mode = "box_shell"
+q_out = [0.15, 0.20]
+q_side = [0.15, 0.20]
+q_long = [0.15, 0.20]
+
+[build.rebin.phi]
+enabled = true
+factor = 3
+
+[build.rebin.mt]
+enabled = true
+
+[fit]
+correlation_backend = "cats3d"
+model = "full"
+lambda_mode = "independent" # Fixed external lambda(k), not a Minuit parameter.
+use_q2_baseline = true
+use_pml = true
+fit_q_max = 0.15
+map_pair_phi_to_symmetric_range = false
+
+[fit.parameters.alpha]
+fixed_value = 2.0
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.centrality]]
+min = 10
+max = 30
+
+[[bins.centrality]]
+min = 30
+max = 50
+
+[[bins.mt]]
+min = 0.2
+max = 0.4
+
+[[bins.mt]]
+min = 0.4
+max = 0.6
+
+[[bins.mt]]
+min = 0.6
+max = 1.1
+
+[[fit_selection.centrality]]
+min = 0
+max = 10
+
+[[fit_selection.centrality]]
+min = 10
+max = 30
+
+[[fit_selection.centrality]]
+min = 30
+max = 50
+
+[[fit_selection.mt]]
+min = 0.2
+max = 0.4
+
+[[fit_selection.mt]]
+min = 0.4
+max = 0.6
+
+[[fit_selection.mt]]
+min = 0.6
+max = 1.1
+
+[fit.cats3d]
+with_coulomb = true
+grid_bins = 31
+grid_min_fm = -50.0
+grid_max_fm = 50.0
+subdivisions = 1
+max_pw = 16
+max_kernel_gib = 4.0
+max_peak_gib = 8.0
+use_disk_cache = true
+kernel_cache_directory = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_kernels"
+
+[fit.cats3d.lambda_scan]
+enabled = false
+execution_mode = "alongside_fit"
+root_name = "lambda_scan_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+
+# Exact group bindings: no global fallback and no mT-center approximation.
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_0.00-10.00__mtbin_0000__mt_0.20-0.40"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.20to0.40_cent0to10"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_0.00-10.00__mtbin_0001__mt_0.40-0.60"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.40to0.60_cent0to10"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_0.00-10.00__mtbin_0002__mt_0.60-1.10"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.60to1.10_cent0to10"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_10.00-30.00__mtbin_0000__mt_0.20-0.40"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.20to0.40_cent10to30"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_10.00-30.00__mtbin_0001__mt_0.40-0.60"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.40to0.60_cent10to30"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_10.00-30.00__mtbin_0002__mt_0.60-1.10"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.60to1.10_cent10to30"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_30.00-50.00__mtbin_0000__mt_0.20-0.40"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.20to0.40_cent30to50"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_30.00-50.00__mtbin_0001__mt_0.40-0.60"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.40to0.60_cent30to50"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12
+
+[[fit.cats3d.lambda_groups]]
+group_id = "cent_30.00-50.00__mtbin_0002__mt_0.60-1.10"
+kind = "histogram"
+meaning = "pair_purity"
+file = "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/data/oo_cats3d_pbpb_lambda_box_commonmt_20261023/pbpb_pair_purity_oo_cats3d_pbpb_lambda_box_commonmt_20261023.root"
+histogram = "tables/hPairPurity_mT0.60to1.10_cent30to50"
+axis_unit = "GeV"
+weak_decay_fraction = 0.12

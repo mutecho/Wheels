@@ -1,6 +1,82 @@
 # Handoff
 
-## Latest Durable Handoff
+## Latest Durable Handoff (2026-10-29)
+
+- Start from config/examples/femto.example.toml; replace input/output paths.
+  input.format=femto selects the new layout. The example uses phi_mode=fold_pi,
+  merging raw SE/ME before CF construction on 0..pi. Set phi_mode=separate to
+  retain full-angle CFs and two independent half-period R²/epsilon reports.
+- Rebuild CFs when changing phi_mode. Fit-only uses the saved catalog, with
+  absent phi_mode treated as separate. Source errors and normal-bin policy
+  are preserved; odd/non-pairable folding and bins crossing pi in separate
+  mode fail before resetting existing outputs.
+- For separate full-angle fits, inspect phi_0_pi/ and phi_pi_2pi/ inside the
+  fit/report ROOTs; each contains the familiar summary, source_parameters and
+  eps_vs_mt products. Folded and legacy 0..pi reports retain the old paths.
+- Full final CTest: 15/15 passed in 314.39 s, PRIMARY_OK. The currently downloaded
+  AnalysisResults-5.root has a 0..pi source axis, so it exercises layout extraction
+  only; complete folding/separation validation uses synthetic 0..2pi inputs.
+  No original ROOT file or production fit result was changed.
+- Documentation closeout: README owns configuration usage; the formula workflow
+  document owns count-level semantics; tests.md owns verification evidence.
+  current-status, handoff, changelog, guide, tests and decisions are synchronized.
+  Existing issues/work-items were reviewed and left unchanged because their
+  resolved profile/report work is unrelated. No required documentation is missing.
+
+
+### Documentation closeout
+
+- docs_reviewed: current-status, handoff, decisions, guide, tests, issues,
+  work-items, README, formula workflow document; no repo-local doc-sync map exists.
+- docs_written: README, formula workflow document, current-status, handoff,
+  changelog, guide, tests, decisions. Runtime config and formulas were integrated
+  into existing sections; dated status/evidence entries preserve prior history.
+- docs_intentionally_unchanged: issues/work-items (unrelated resolved profile work);
+  historical CATS report/validation artifacts (their recorded inputs remain valid).
+- docs_stale_candidates: none found within the modified input/angle/report surfaces.
+- docs_missing: none.
+- formula_workflow_doc: updated; input layout, raw half-period sums, metadata,
+  per-period summaries and affected function ownership checked against source.
+- project_state_sync_status: written.
+- project-state closeout: checked.
+
+## Earlier Durable Handoff (2026-10-23)
+
+- Open `res/cats3d_fit_report_oo_cuttest_20261023/fit_report_cats3d_constant_*.root`
+  for the familiar source-parameter overview and epsilon report at each lambda.
+  The earlier projection PDFs/HTML remain in the 20261022 report directory.
+- Repeat with `bash scripts/run_cats3d_scan_report.sh --scan-root FILE
+  --output-directory NEW_DIR --summary-only`; omit `--summary-only` to also
+  reconstruct the saved models and generate projection PDF/HTML. Standard
+  summaries use no CF/kernel, and never rerun a correlation-function fit.
+- Incomplete/error-invalid phi members remain in `meta/FitCatalog` and raw
+  scan/attempt trees. Such groups show conditional-error points plus
+  `conditional_error_status_canvas`, without reduced-set harmonic/epsilon fits.
+- Final verification is under the new report's `validation/`; all 420 saved
+  estimates and 813 attempts matched, 3 targeted CTests passed, and a one-point
+  full reconstruction still works. Main scan/config/minimizer behavior is unchanged.
+
+## Earlier Durable Handoff (2026-10-22)
+
+- Per-lambda CATS3D scan reports are available under
+  `res/cats3d_lambda_scan_oo_cuttest_20261022/`; open `index.html` or the four
+  `cats3d_constant_*.pdf` / `.root` artifacts. Each PDF has 121 pages.
+- Repeat with `bash scripts/run_cats3d_scan_report.sh --scan-root FILE
+  --output-directory NEW_DIR`. The helper builds its target through the shared
+  O2Physics executor. CF and the native kernel recorded by the scan must exist;
+  the output directory must be new. No minimizer is called.
+- Main `scan_only` / `alongside_fit` behavior is unchanged: per-coordinate
+  projection reports are a separate postprocessing command. The existing
+  nominal report does not substitute for reports at all scan coordinates.
+- Validation preserves 420 points / 813 attempts, original valid/error flags,
+  matched projections and byte-identical inputs. CATS3D CTest 3/3 and ROOT QA
+  returned `PRIMARY_OK`; browser coordinate/group/failure filters and PDF
+  layout were checked. Detailed evidence is in this report's `validation/`.
+- Source changes are confined to the report target, utility/scripts and docs;
+  dirty fitter/config/normalization work was retained. All original scan
+  nonconvergence remains explicit; no production lambda was selected.
+
+## Earlier Durable Handoff (2026-09-07)
 
 - configuration follow-up completed on 2026-09-07:
   - strict-parallel now has four 1D scans plus all six 2D pairs of

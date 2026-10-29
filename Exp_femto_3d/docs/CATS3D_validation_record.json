@@ -1,0 +1,409 @@
+{
+  "template_type": "scientific_run",
+  "records": [
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/final_ctest.log",
+      "command_or_query": "ctest --test-dir build --output-on-failure",
+      "key_observation": [
+        "100% tests passed out of 13",
+        "",
+        "Total Test time (real) = 359.82 sec"
+      ],
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": true
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/no_cats_ctest.log",
+      "command_or_query": "ctest --test-dir build/no_cats_validation --output-on-failure",
+      "key_observation": [
+        "100% tests passed out of 13",
+        "",
+        "Total Test time (real) =  45.18 sec"
+      ],
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": false
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse/run.log",
+      "command_or_query": "/usr/bin/time -l bin/exp_femto_3d fit --config /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse/config.toml",
+      "key_observation": {
+        "slices": 7,
+        "valid_minima": 0,
+        "valid_errors": 0,
+        "wall_seconds": 30.91,
+        "maximum_rss_bytes": 403587072
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "input_artifacts": [
+        {
+          "path": "/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root",
+          "bytes": 88652565,
+          "sha256": "77cc6091bfac43379405784dd6b53ad828e6ac5a53472f953daddf563caba8e6",
+          "mtime_ns": 1786555772822835410
+        },
+        {
+          "path": "/Users/allenzhou/Research_software/CATS/install/lib/libCATS.dylib",
+          "bytes": 1234000,
+          "sha256": "2f33f9496f73ba0f6dae87dd843390793c1299c7399837470f6636a89efa08e2",
+          "mtime_ns": 1792398499222017134
+        }
+      ],
+      "output_artifacts": [
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse/fit.root",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse/summary.tsv",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse/report.root"
+      ],
+      "parameters": {
+        "exact_configuration": "[input]\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2.root\"\ninput_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root\"\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root\"\ntask_name = \"femto-dream-pair-task-track-track\"\nsame_event_subtask = \"SameEvent_3Dqn\"\nmixed_event_subtask = \"MixedEvent_3Dqn\"\nsparse_object_name = \"relPair3dRmTMultPercentileQnPairphi\"\n\n[output]\noutput_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse\"\ncf_root_name = \"/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2_small.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_nocol.root\"\nfit_root_name = \"fit.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_nocol.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_fcoul.tsv\"\nfit_summary_name = \"summary.tsv\"\nfit_report_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_nocol.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_fcoul.root\"\nfit_report_root_name = \"report.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_small_nonfold.root\"\nlog_level = \"info\"\n\n[build]\n# map_pair_phi_to_symmetric_range = true\nmap_pair_phi_to_symmetric_range = false\nwrite_normalized_se_me_1d_projections = false\nreopen_output_file_per_slice = false\nsplit_mixed_event_by_phi = true\n\n\n[build.rebin.phi]\nenabled = true\nfactor = 3\n\n[build.rebin.mt]\nenabled = true\n\n[fit.parameters.alpha]\nfixed_value = 2.0\n\n\n[fit]\nprogress = false\ncorrelation_backend = \"cats3d\"\nmodel = \"full\"\n# coulomb_mode = \"finite_source\"\n# coulomb_mode = \"none\"|\"gamow\"|\"finite_source\"\n# finite_source_mode = \"iterative_1d\"\n# finite_source_mode = \"fixed_1d\"|\"iterative_1d\"\nuse_q2_baseline = false\nuse_pml = true\nfit_q_max = 0.034\n# omit to follow the input CF metadata written by build-cf\nmap_pair_phi_to_symmetric_range = false\n# map_pair_phi_to_symmetric_range = true\n\n[[bins.centrality]]\nmin = 0\nmax = 10\n\n[[bins.centrality]]\nmin = 10\nmax = 30\n\n[[bins.centrality]]\nmin = 30\nmax = 50\n\n[[bins.centrality]]\nmin = 50\nmax = 80\n\n[[bins.centrality]]\nmin = 80\nmax = 100\n\n\n# [[bins.mt]]\n# min = 0.2\n# max = 0.4\n\n[[bins.mt]]\nmin = 0.4\nmax = 0.6\n\n[[bins.mt]]\nmin = 0.6\nmax = 0.8\n\n[[bins.mt]]\nmin = 0.8\nmax = 1.1\n\n[[bins.mt]]\nmin = 1.1\nmax = 1.6\n\n# [[bins.mt]]\n# min = 2.005\n# max = 2.504\n\n# [[bins.mt]]\n# min = 2.504\n# max = 3.003\n\n# [[bins.mt]]\n# min = 3.003\n# max = 4.002\n\n# [[bins.mt]]\n# min = 4.002\n# max = 5.002\n\n# [[bins.mt]]\n# min = 5.002\n# max = 8.001\n\n[fit.cats3d]\nwith_coulomb = true\ngrid_bins = 16\ngrid_min_fm = -15.0\ngrid_max_fm = 15.0\nsubdivisions = 1\nmax_pw = 16\npml_max_calls = 500\nmax_kernel_gib = 0.25\nuse_disk_cache = true\nkernel_cache_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/kernels\"\n\n[fit.cats3d.lambda]\nkind = \"constant\"\nmeaning = \"final_lambda\"\nvalue = 0.7\n\n[fit.cats3d.lambda_scan]\nenabled = true\nconstant_values = [0.65, 0.7]\nexecution_mode = \"alongside_fit\"\nroot_name = \"oo_cats3d_lambda_scan.root\"\n# Enable and supply explicit coordinates when needed:\n# constant_values = [0.6, 0.7, 0.8]\n# scale_values = [0.9, 1.0, 1.1] # Requires histogram lambda for every selected group.\n\n[[fit_selection.centrality]]\nmin=0\nmax=10\n\n[[fit_selection.mt]]\nmin=0.4\nmax=0.6\n\n[fit.parameters.rout2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rside2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rlong2]\ninitial=4.0\nmin=0.25\nmax=64.0\n"
+      },
+      "validation_note": "One selected OO group; example lambda only. Failed full fits are retained, not accepted as parameter estimates."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined/run.log",
+      "command_or_query": "/usr/bin/time -l bin/exp_femto_3d fit --config /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined/config.toml",
+      "key_observation": {
+        "slices": 7,
+        "valid_minima": 0,
+        "valid_errors": 0,
+        "wall_seconds": 26.77,
+        "maximum_rss_bytes": 404504576
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "input_artifacts": [
+        {
+          "path": "/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root",
+          "bytes": 88652565,
+          "sha256": "77cc6091bfac43379405784dd6b53ad828e6ac5a53472f953daddf563caba8e6",
+          "mtime_ns": 1786555772822835410
+        },
+        {
+          "path": "/Users/allenzhou/Research_software/CATS/install/lib/libCATS.dylib",
+          "bytes": 1234000,
+          "sha256": "2f33f9496f73ba0f6dae87dd843390793c1299c7399837470f6636a89efa08e2",
+          "mtime_ns": 1792398499222017134
+        }
+      ],
+      "output_artifacts": [
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined/fit.root",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined/summary.tsv",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined/report.root"
+      ],
+      "parameters": {
+        "exact_configuration": "[input]\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2.root\"\ninput_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root\"\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root\"\ntask_name = \"femto-dream-pair-task-track-track\"\nsame_event_subtask = \"SameEvent_3Dqn\"\nmixed_event_subtask = \"MixedEvent_3Dqn\"\nsparse_object_name = \"relPair3dRmTMultPercentileQnPairphi\"\n\n[output]\noutput_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined\"\ncf_root_name = \"/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2_small.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_nocol.root\"\nfit_root_name = \"fit.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_nocol.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_fcoul.tsv\"\nfit_summary_name = \"summary.tsv\"\nfit_report_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/coarse_refined\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_nocol.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_fcoul.root\"\nfit_report_root_name = \"report.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_small_nonfold.root\"\nlog_level = \"info\"\n\n[build]\n# map_pair_phi_to_symmetric_range = true\nmap_pair_phi_to_symmetric_range = false\nwrite_normalized_se_me_1d_projections = false\nreopen_output_file_per_slice = false\nsplit_mixed_event_by_phi = true\n\n\n[build.rebin.phi]\nenabled = true\nfactor = 3\n\n[build.rebin.mt]\nenabled = true\n\n[fit.parameters.alpha]\nfixed_value = 2.0\n\n\n[fit]\nprogress = false\ncorrelation_backend = \"cats3d\"\nmodel = \"full\"\n# coulomb_mode = \"finite_source\"\n# coulomb_mode = \"none\"|\"gamow\"|\"finite_source\"\n# finite_source_mode = \"iterative_1d\"\n# finite_source_mode = \"fixed_1d\"|\"iterative_1d\"\nuse_q2_baseline = false\nuse_pml = true\nfit_q_max = 0.034\n# omit to follow the input CF metadata written by build-cf\nmap_pair_phi_to_symmetric_range = false\n# map_pair_phi_to_symmetric_range = true\n\n[[bins.centrality]]\nmin = 0\nmax = 10\n\n[[bins.centrality]]\nmin = 10\nmax = 30\n\n[[bins.centrality]]\nmin = 30\nmax = 50\n\n[[bins.centrality]]\nmin = 50\nmax = 80\n\n[[bins.centrality]]\nmin = 80\nmax = 100\n\n\n# [[bins.mt]]\n# min = 0.2\n# max = 0.4\n\n[[bins.mt]]\nmin = 0.4\nmax = 0.6\n\n[[bins.mt]]\nmin = 0.6\nmax = 0.8\n\n[[bins.mt]]\nmin = 0.8\nmax = 1.1\n\n[[bins.mt]]\nmin = 1.1\nmax = 1.6\n\n# [[bins.mt]]\n# min = 2.005\n# max = 2.504\n\n# [[bins.mt]]\n# min = 2.504\n# max = 3.003\n\n# [[bins.mt]]\n# min = 3.003\n# max = 4.002\n\n# [[bins.mt]]\n# min = 4.002\n# max = 5.002\n\n# [[bins.mt]]\n# min = 5.002\n# max = 8.001\n\n[fit.cats3d]\nwith_coulomb = true\ngrid_bins = 16\ngrid_min_fm = -15.0\ngrid_max_fm = 15.0\nsubdivisions = 1\nmax_pw = 16\npml_max_calls = 5000\nmax_kernel_gib = 0.25\nuse_disk_cache = true\nkernel_cache_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/kernels\"\n\n[fit.cats3d.lambda]\nkind = \"constant\"\nmeaning = \"final_lambda\"\nvalue = 0.7\n\n[fit.cats3d.lambda_scan]\nenabled = true\nconstant_values = [0.65, 0.7]\nexecution_mode = \"alongside_fit\"\nroot_name = \"oo_cats3d_lambda_scan.root\"\n# Enable and supply explicit coordinates when needed:\n# constant_values = [0.6, 0.7, 0.8]\n# scale_values = [0.9, 1.0, 1.1] # Requires histogram lambda for every selected group.\n\n[[fit_selection.centrality]]\nmin=0\nmax=10\n\n[[fit_selection.mt]]\nmin=0.4\nmax=0.6\n\n[fit.parameters.rout2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rside2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rlong2]\ninitial=4.0\nmin=0.25\nmax=64.0\n"
+      },
+      "validation_note": "One selected OO group; example lambda only. Failed full fits are retained, not accepted as parameter estimates."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse/run.log",
+      "command_or_query": "/usr/bin/time -l bin/exp_femto_3d fit --config /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse/config.toml",
+      "key_observation": {
+        "slices": 7,
+        "valid_minima": 7,
+        "valid_errors": 7,
+        "wall_seconds": 70.85,
+        "maximum_rss_bytes": 563150848
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "input_artifacts": [
+        {
+          "path": "/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root",
+          "bytes": 88652565,
+          "sha256": "77cc6091bfac43379405784dd6b53ad828e6ac5a53472f953daddf563caba8e6",
+          "mtime_ns": 1786555772822835410
+        },
+        {
+          "path": "/Users/allenzhou/Research_software/CATS/install/lib/libCATS.dylib",
+          "bytes": 1234000,
+          "sha256": "2f33f9496f73ba0f6dae87dd843390793c1299c7399837470f6636a89efa08e2",
+          "mtime_ns": 1792398499222017134
+        }
+      ],
+      "output_artifacts": [
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse/fit.root",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse/summary.tsv",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse/report.root"
+      ],
+      "parameters": {
+        "exact_configuration": "[input]\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2.root\"\ninput_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root\"\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root\"\ntask_name = \"femto-dream-pair-task-track-track\"\nsame_event_subtask = \"SameEvent_3Dqn\"\nmixed_event_subtask = \"MixedEvent_3Dqn\"\nsparse_object_name = \"relPair3dRmTMultPercentileQnPairphi\"\n\n[output]\noutput_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse\"\ncf_root_name = \"/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2_small.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_nocol.root\"\nfit_root_name = \"fit.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_nocol.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_fcoul.tsv\"\nfit_summary_name = \"summary.tsv\"\nfit_report_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_coarse\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_nocol.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_fcoul.root\"\nfit_report_root_name = \"report.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_small_nonfold.root\"\nlog_level = \"info\"\n\n[build]\n# map_pair_phi_to_symmetric_range = true\nmap_pair_phi_to_symmetric_range = false\nwrite_normalized_se_me_1d_projections = false\nreopen_output_file_per_slice = false\nsplit_mixed_event_by_phi = true\n\n\n[build.rebin.phi]\nenabled = true\nfactor = 3\n\n[build.rebin.mt]\nenabled = true\n\n[fit.parameters.alpha]\nfixed_value = 2.0\n\n\n[fit]\nprogress = false\ncorrelation_backend = \"cats3d\"\nmodel = \"diag\"\n# coulomb_mode = \"finite_source\"\n# coulomb_mode = \"none\"|\"gamow\"|\"finite_source\"\n# finite_source_mode = \"iterative_1d\"\n# finite_source_mode = \"fixed_1d\"|\"iterative_1d\"\nuse_q2_baseline = false\nuse_pml = true\nfit_q_max = 0.064\n# omit to follow the input CF metadata written by build-cf\nmap_pair_phi_to_symmetric_range = false\n# map_pair_phi_to_symmetric_range = true\n\n[[bins.centrality]]\nmin = 0\nmax = 10\n\n[[bins.centrality]]\nmin = 10\nmax = 30\n\n[[bins.centrality]]\nmin = 30\nmax = 50\n\n[[bins.centrality]]\nmin = 50\nmax = 80\n\n[[bins.centrality]]\nmin = 80\nmax = 100\n\n\n# [[bins.mt]]\n# min = 0.2\n# max = 0.4\n\n[[bins.mt]]\nmin = 0.4\nmax = 0.6\n\n[[bins.mt]]\nmin = 0.6\nmax = 0.8\n\n[[bins.mt]]\nmin = 0.8\nmax = 1.1\n\n[[bins.mt]]\nmin = 1.1\nmax = 1.6\n\n# [[bins.mt]]\n# min = 2.005\n# max = 2.504\n\n# [[bins.mt]]\n# min = 2.504\n# max = 3.003\n\n# [[bins.mt]]\n# min = 3.003\n# max = 4.002\n\n# [[bins.mt]]\n# min = 4.002\n# max = 5.002\n\n# [[bins.mt]]\n# min = 5.002\n# max = 8.001\n\n[fit.cats3d]\nwith_coulomb = true\ngrid_bins = 16\ngrid_min_fm = -15.0\ngrid_max_fm = 15.0\nsubdivisions = 1\nmax_pw = 16\npml_max_calls = 5000\nmax_kernel_gib = 0.25\nuse_disk_cache = true\nkernel_cache_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/kernels\"\n\n[fit.cats3d.lambda]\nkind = \"constant\"\nmeaning = \"final_lambda\"\nvalue = 0.7\n\n[fit.cats3d.lambda_scan]\nenabled = true\nconstant_values = [0.65, 0.7]\nexecution_mode = \"alongside_fit\"\nroot_name = \"oo_cats3d_lambda_scan.root\"\n# Enable and supply explicit coordinates when needed:\n# constant_values = [0.6, 0.7, 0.8]\n# scale_values = [0.9, 1.0, 1.1] # Requires histogram lambda for every selected group.\n\n[[fit_selection.centrality]]\nmin=0\nmax=10\n\n[[fit_selection.mt]]\nmin=0.4\nmax=0.6\n\n[fit.parameters.rout2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rside2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rlong2]\ninitial=4.0\nmin=0.25\nmax=64.0\n"
+      },
+      "validation_note": "One selected OO group; example lambda only. Failed full fits are retained, not accepted as parameter estimates."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine/run.log",
+      "command_or_query": "/usr/bin/time -l bin/exp_femto_3d fit --config /Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine/config.toml",
+      "key_observation": {
+        "slices": 7,
+        "valid_minima": 7,
+        "valid_errors": 7,
+        "wall_seconds": 356.14,
+        "maximum_rss_bytes": 891518976
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "input_artifacts": [
+        {
+          "path": "/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root",
+          "bytes": 88652565,
+          "sha256": "77cc6091bfac43379405784dd6b53ad828e6ac5a53472f953daddf563caba8e6",
+          "mtime_ns": 1786555772822835410
+        },
+        {
+          "path": "/Users/allenzhou/Research_software/CATS/install/lib/libCATS.dylib",
+          "bytes": 1234000,
+          "sha256": "2f33f9496f73ba0f6dae87dd843390793c1299c7399837470f6636a89efa08e2",
+          "mtime_ns": 1792398499222017134
+        }
+      ],
+      "output_artifacts": [
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine/fit.root",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine/summary.tsv",
+        "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine/report.root"
+      ],
+      "parameters": {
+        "exact_configuration": "[input]\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2.root\"\ninput_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_sel8.root\"\n# input_root = \"/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO/AnalysisResults_3d_25ae_pass2_small.root\"\ntask_name = \"femto-dream-pair-task-track-track\"\nsame_event_subtask = \"SameEvent_3Dqn\"\nmixed_event_subtask = \"MixedEvent_3Dqn\"\nsparse_object_name = \"relPair3dRmTMultPercentileQnPairphi\"\n\n[output]\noutput_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine\"\ncf_root_name = \"/Users/allenzhou/ALICE/alidata/femtoep_res/OO/EP_dependence_CF_3d_25ae_pass2_sel8_6phi.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2.root\"\n# cf_root_name = \"EP_dependence_CF_3d_25ae_pass2_small.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_nocol.root\"\nfit_root_name = \"fit.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_nonfold_fcoul.root\"\n# fit_root_name = \"EP_dependence_CF_full_fit_v2_3d_25ae_pass2_small_nonfold.root\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_nocol.tsv\"\n# fit_summary_name = \"3d_25ae_pass2_fit_summary_nonfold_fcoul.tsv\"\nfit_summary_name = \"summary.tsv\"\nfit_report_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/diag_fine\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_nocol.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_nonfold_fcoul.root\"\nfit_report_root_name = \"report.root\"\n# fit_report_root_name = \"fit_report_3d_25ae_pass2_small_nonfold.root\"\nlog_level = \"info\"\n\n[build]\n# map_pair_phi_to_symmetric_range = true\nmap_pair_phi_to_symmetric_range = false\nwrite_normalized_se_me_1d_projections = false\nreopen_output_file_per_slice = false\nsplit_mixed_event_by_phi = true\n\n\n[build.rebin.phi]\nenabled = true\nfactor = 3\n\n[build.rebin.mt]\nenabled = true\n\n[fit.parameters.alpha]\nfixed_value = 2.0\n\n\n[fit]\nprogress = false\ncorrelation_backend = \"cats3d\"\nmodel = \"diag\"\n# coulomb_mode = \"finite_source\"\n# coulomb_mode = \"none\"|\"gamow\"|\"finite_source\"\n# finite_source_mode = \"iterative_1d\"\n# finite_source_mode = \"fixed_1d\"|\"iterative_1d\"\nuse_q2_baseline = false\nuse_pml = true\nfit_q_max = 0.064\n# omit to follow the input CF metadata written by build-cf\nmap_pair_phi_to_symmetric_range = false\n# map_pair_phi_to_symmetric_range = true\n\n[[bins.centrality]]\nmin = 0\nmax = 10\n\n[[bins.centrality]]\nmin = 10\nmax = 30\n\n[[bins.centrality]]\nmin = 30\nmax = 50\n\n[[bins.centrality]]\nmin = 50\nmax = 80\n\n[[bins.centrality]]\nmin = 80\nmax = 100\n\n\n# [[bins.mt]]\n# min = 0.2\n# max = 0.4\n\n[[bins.mt]]\nmin = 0.4\nmax = 0.6\n\n[[bins.mt]]\nmin = 0.6\nmax = 0.8\n\n[[bins.mt]]\nmin = 0.8\nmax = 1.1\n\n[[bins.mt]]\nmin = 1.1\nmax = 1.6\n\n# [[bins.mt]]\n# min = 2.005\n# max = 2.504\n\n# [[bins.mt]]\n# min = 2.504\n# max = 3.003\n\n# [[bins.mt]]\n# min = 3.003\n# max = 4.002\n\n# [[bins.mt]]\n# min = 4.002\n# max = 5.002\n\n# [[bins.mt]]\n# min = 5.002\n# max = 8.001\n\n[fit.cats3d]\nwith_coulomb = true\ngrid_bins = 32\ngrid_min_fm = -15.0\ngrid_max_fm = 15.0\nsubdivisions = 1\nmax_pw = 16\npml_max_calls = 5000\nmax_kernel_gib = 0.25\nuse_disk_cache = true\nkernel_cache_directory = \"/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/kernels\"\n\n[fit.cats3d.lambda]\nkind = \"constant\"\nmeaning = \"final_lambda\"\nvalue = 0.7\n\n[fit.cats3d.lambda_scan]\nenabled = false\nroot_name = \"oo_cats3d_lambda_scan.root\"\n# Enable and supply explicit coordinates when needed:\n# constant_values = [0.6, 0.7, 0.8]\n# scale_values = [0.9, 1.0, 1.1] # Requires histogram lambda for every selected group.\n\n[[fit_selection.centrality]]\nmin=0\nmax=10\n\n[[fit_selection.mt]]\nmin=0.4\nmax=0.6\n\n[fit.parameters.rout2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rside2]\ninitial=4.0\nmin=0.25\nmax=64.0\n[fit.parameters.rlong2]\ninitial=4.0\nmin=0.25\nmax=64.0\n"
+      },
+      "validation_note": "One selected OO group; example lambda only. Failed full fits are retained, not accepted as parameter estimates."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/grid_comparison.csv",
+      "command_or_query": "grid_check diag_coarse/config.toml diag_fine/config.toml diag_coarse/fit.root diag_fine/fit.root grid_comparison.csv",
+      "key_observation": {
+        "slices": 7,
+        "max_fixed_source_final_model_abs_difference": 1.00509e-05,
+        "max_refit_radius2_shift_over_fine_conditional_error": 0.0136487
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "space_grids": [
+          16,
+          32
+        ],
+        "space_extent_fm": [
+          -15,
+          15
+        ],
+        "max_pw": 16,
+        "subdivisions": 1,
+        "fit_q_max_GeV": 0.064
+      },
+      "validation_note": "Spatial spacing check only. No spatial-range or partial-wave convergence claim."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation/scan_audit.log",
+      "command_or_query": "fit --config diag_coarse/configured_scan.toml; audit_scan.C(configured_lambda_scan.root)",
+      "key_observation": {
+        "formal_output_sha256_unchanged": {
+          "build/cats3d_validation/diag_coarse/fit.root": "f0420f1211077a594dd03fbb98310a206d84cedf4bfee2281ca330b034d6565b",
+          "build/cats3d_validation/diag_coarse/summary.tsv": "f0c2b22622dc3da568c908ebd2c1922eeb04d6afaeb0591d209322b0f808ab95",
+          "build/cats3d_validation/diag_coarse/report.root": "9e04819d91c356dfe8f4cfb6a710c85588f00d1b681fa2882512716c8194e2cc"
+        },
+        "scan_audit": "\nProcessing build/cats3d_validation/audit_scan.C(\"build/cats3d_validation/diag_coarse/configured_lambda_scan.root\")...\nGROUP lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/ coordinate=0.65 valid=1 members=6 objective=10955.8 delta=0 sum_verified=1\nGROUP lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/ coordinate=0.7 valid=1 members=6 objective=10959.4 delta=3.6339 sum_verified=1\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phi_all/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phi_all/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0000__phi_0.26/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0000__phi_0.26/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0001__phi_0.79/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0001__phi_0.79/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0002__phi_1.31/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0002__phi_1.31/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0003__phi_1.83/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0003__phi_1.83/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0004__phi_2.36/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0004__phi_2.36/AttemptPoints rows=4 valid=4 accurate_errors=4\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0005__phi_2.88/ScanPoints rows=2 valid=2 accurate_errors=2\nTREE lambda_scan/constant/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60/cent_0.00-10.00__mtbin_0000__mt_0.40-0.60__phibin_0005__phi_2.88/AttemptPoints rows=4 valid=4 accurate_errors=4\n"
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "validation_note": "Configured seed plus bidirectional neighbors. Group members exclude integrated phi; member objectives verified against group sum."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T19:52:22.872679+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_validation",
+      "command_or_query": "inspect_render.C; local image inspection",
+      "key_observation": {
+        "images": [
+          "real_projection.png",
+          "real_lambda_scan.png",
+          "real_overview.png"
+        ]
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "validation_note": "Persisted standard ROOT objects rendered in separate ROOT processes and inspected visually."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_existing_kernel_audit/portable_ctest.log",
+      "command_or_query": "ctest --output-on-failure (scope recorded below)",
+      "key_observation": {
+        "tests_passed": 13,
+        "tests_total": 13,
+        "wall_seconds": 364.05
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": true,
+        "scope": "Full suite after portable cache implementation"
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_existing_kernel_audit/portable_no_cats_ctest.log",
+      "command_or_query": "ctest --output-on-failure (scope recorded below)",
+      "key_observation": {
+        "tests_passed": 13,
+        "tests_total": 13,
+        "wall_seconds": 49.27
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": false,
+        "scope": "Full suite with CATS and CATS3D disabled"
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_existing_kernel_audit/final_memory_ctest.log",
+      "command_or_query": "ctest --output-on-failure (scope recorded below)",
+      "key_observation": {
+        "tests_passed": 2,
+        "tests_total": 2,
+        "wall_seconds": 302.62
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": true,
+        "scope": "Model and full workflow after final input ownership and pre-output cache load changes"
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_existing_kernel_audit/final_no_cats_test.log",
+      "command_or_query": "ctest --output-on-failure (scope recorded below)",
+      "key_observation": {
+        "tests_passed": 1,
+        "tests_total": 1,
+        "wall_seconds": 2.03
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "parameters": {
+        "CATS3D_enabled": false,
+        "scope": "Disabled-backend configuration and workflow after final changes"
+      }
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_memory_probe/run.log",
+      "command_or_query": "/usr/bin/time -l native_kernel_memory_probe (read-only original geometry)",
+      "key_observation": {
+        "native_cache_loaded_without_private_fingerprints": true,
+        "q_bins_per_axis": 20,
+        "r_bins_per_axis": 31,
+        "kernel_payload_bytes": 953312000,
+        "maximum_rss_bytes": 2259468288,
+        "maximum_rss_GiB": 2.1042938232421875,
+        "wall_seconds": 6.67,
+        "swaps": 0,
+        "model_at_10_10_10_MeV": 1.41614,
+        "source_and_input_file_unchanged": true
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor",
+      "input_artifacts": [
+        {
+          "path": "/Users/allenzhou/Research_software/CATS/CATS_3D/OutputFiles/dataKernel_qData_r31_coulomb_byQ.root",
+          "bytes": 754996901,
+          "mtime_ns": 1792402736620737727
+        }
+      ],
+      "parameters": {
+        "lambda": 0.7,
+        "gaussian_R2_diagonal_fm2": [
+          16,
+          25,
+          36
+        ]
+      },
+      "validation_note": "Original 20^3 q kernel cannot directly represent current cuttest 30^3 native fit q bins. No real-data fit or new full kernel generated."
+    },
+    {
+      "source_type": "scientific_run",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/build/cats3d_existing_kernel_audit/protection/result.log",
+      "command_or_query": "CLI fit with real CF input and isolated sentinel outputs for incompatible, missing and over-budget cache requests",
+      "key_observation": {
+        "cases": [
+          "bad_grid",
+          "missing",
+          "too_large"
+        ],
+        "all_failed_before_kernel_allocation_and_output_initialization": true,
+        "unchanged_sentinel_outputs_per_case": [
+          "fit ROOT",
+          "summary TSV",
+          "report ROOT",
+          "scan ROOT"
+        ],
+        "peak_budget_test_GiB": 6.5
+      },
+      "confidence": "observed",
+      "runtime_environment": "O2Physics/latest-master-o2; ROOT 6.36.10; local libCATS Debug; guarded executor"
+    },
+    {
+      "source_type": "size_estimate",
+      "timestamp_or_date": "2026-10-19T23:58:12.562027+08:00",
+      "source_reference": "/Users/allenzhou/Research_software/Code_Base/Exp_femto_3d/docs/CATS3D拟合与lambda扫描.md",
+      "command_or_query": "30^3*31^3*sizeof(float); peak=2*kernel+16*r_samples+1GiB; disk extrapolated from legacy compression ratio",
+      "key_observation": {
+        "kernel_payload_bytes": 3217428000,
+        "kernel_payload_GiB": 2.99646332859993,
+        "estimated_disk_GiB": 2.373116594622843,
+        "estimated_process_peak_GiB": 6.9933705776929855,
+        "configured_peak_budget_GiB": 8,
+        "full_new_kernel_generated": false
+      },
+      "confidence": "estimated",
+      "validation_note": "Payload bytes are exact for configured dimensions. Compressed size and process peak are estimates, not full-scale observations or an enforced RSS cap."
+    }
+  ],
+  "summary": {
+    "implementation": "CATS3D Gaussian diag/full with external fixed lambda and independent lambda scans",
+    "automated_validation": "13/13 enabled and 13/13 disabled",
+    "real_validation": "One OO group; diag 7/7 valid with accurate errors on both spatial grids; narrow-range full 0/7 retained failures",
+    "production_precision_validated": false,
+    "portable_cache_validation": "13/13 enabled, 13/13 disabled; after final ownership/pre-output-load changes 2/2 enabled and 1/1 disabled",
+    "cache_policy": "Native CATS3D ByQ metadata and payload integrity checks; no library or private fingerprint requirement; explicit load-only kernel_cache_file supported",
+    "memory_validation": "Original 20^3*31^3 kernel read: peak RSS 2.104 GiB, 6.67 s, zero swaps; 30^3*31^3 kernel estimated 6.99 GiB peak, not generated"
+  },
+  "open_questions": [
+    "Calibrated external lambda for production",
+    "Full-model real-data convergence beyond this bounded check",
+    "Spatial extent, default 31^3 +/-50 fm grid and partial-wave convergence for production",
+    "Local CATS3D Coulomb phase TODO and LCMS/PRF approximation"
+  ],
+  "next_owner_skill": "o2physics-root",
+  "approval_state": "approved_in_session"
+}

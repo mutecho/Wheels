@@ -1,9 +1,11 @@
 #include "exp_femto_3d/Config.h"
+#include "exp_femto_3d/CfNormalization.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <set>
@@ -660,6 +662,144 @@ namespace exp_femto_3d {
       rebin.mode = RebinMode::kRanges;
     }
 
+    Cats3DLambdaInput ParseCatsLambda(const toml::table &table) {
+      Cats3DLambdaInput input;
+      input.group_id = ReadOptionalString(table, "group_id", "");
+      input.kind = ReadRequiredString(table, "kind", "CATS3D lambda");
+      input.meaning = ReadRequiredString(table, "meaning", "CATS3D lambda");
+      input.value = ReadOptionalFiniteDouble(table, "value", "CATS3D lambda");
+      input.file = ReadOptionalString(table, "file", "");
+      input.histogram = ReadOptionalString(table, "histogram", "");
+      input.axis_unit = ReadOptionalString(table, "axis_unit", "");
+      input.weak_decay_fraction = ReadOptionalFiniteDouble(table, "weak_decay_fraction", "CATS3D lambda");
+      return input;
+    }
+
+    void ValidateCatsLambda(const Cats3DLambdaInput &input) {
+      if (input.meaning != "final_lambda" && input.meaning != "pair_purity") {
+        throw ConfigError("CATS3D lambda meaning must be final_lambda or pair_purity.");
+      }
+      if (input.meaning == "pair_purity") {
+        if (!input.weak_decay_fraction || !std::isfinite(*input.weak_decay_fraction) ||
+            *input.weak_decay_fraction < 0.0 || *input.weak_decay_fraction > 1.0) {
+          throw ConfigError("pair_purity requires explicit weak_decay_fraction in [0,1].");
+        }
+      } else if (input.weak_decay_fraction) {
+        throw ConfigError("final_lambda forbids weak_decay_fraction (would double-correct the input).");
+      }
+      if (input.kind == "constant") {
+        if (!input.value || !std::isfinite(*input.value) || *input.value < 0 || *input.value > 1 ||
+            !input.file.empty() || !input.histogram.empty() || !input.axis_unit.empty()) {
+          throw ConfigError("constant CATS3D lambda requires value in [0,1] and no histogram settings.");
+        }
+      } else if (input.kind == "histogram") {
+        if (input.value || input.file.empty() || input.histogram.empty() ||
+            (input.axis_unit != "GeV" && input.axis_unit != "MeV")) {
+          throw ConfigError(
+              "histogram CATS3D lambda requires file, histogram and axis_unit=GeV|MeV, without value.");
+        }
+      } else {
+        throw ConfigError("CATS3D lambda kind must be constant or histogram.");
+      }
+    }
+
+    Cats3DConfig ParseCatsConfig(const toml::table &table, const std::string &config_path) {
+      Cats3DConfig cfg;
+      for (const char *key : {"with_coulomb", "use_disk_cache"}) {
+        if (table.contains(key) && !table[key].value<bool>()) {
+          throw ConfigError(std::string("Expected CATS3D boolean ") + key);
+        }
+      }
+      for (const char *key : {"kernel_cache_directory", "kernel_cache_file"}) {
+        if (table.contains(key) && !table[key].value<std::string>()) {
+          throw ConfigError(std::string("Expected CATS3D string ") + key);
+        }
+      }
+      cfg.with_coulomb = ReadOptionalBool(table, "with_coulomb", cfg.with_coulomb);
+      auto positive_int = [&](const char *name, int fallback) {
+        if (!table.contains(name)) {
+          return fallback;
+        }
+        const auto value = table[name].value<std::int64_t>();
+        if (!value || *value < 1 || *value > 65535) {
+          throw ConfigError(std::string("fit.cats3d.") + name + " must be an integer in [1,65535].");
+        }
+        return static_cast<int>(*value);
+      };
+      cfg.grid_bins = positive_int("grid_bins", cfg.grid_bins);
+      cfg.subdivisions = positive_int("subdivisions", cfg.subdivisions);
+      cfg.max_pw = positive_int("max_pw", cfg.max_pw);
+      if (table.contains("pml_max_calls")) {
+        const auto value = table["pml_max_calls"].value<std::int64_t>();
+        if (!value || *value < 1 || *value > std::numeric_limits<int>::max()) {
+          throw ConfigError("fit.cats3d.pml_max_calls must be a positive int.");
+        }
+        cfg.pml_max_calls = static_cast<int>(*value);
+      }
+      cfg.grid_min_fm =
+          ReadOptionalFiniteDouble(table, "grid_min_fm", "fit.cats3d").value_or(cfg.grid_min_fm);
+      cfg.grid_max_fm =
+          ReadOptionalFiniteDouble(table, "grid_max_fm", "fit.cats3d").value_or(cfg.grid_max_fm);
+      cfg.max_kernel_gib =
+          ReadOptionalFiniteDouble(table, "max_kernel_gib", "fit.cats3d").value_or(cfg.max_kernel_gib);
+      cfg.max_peak_gib =
+          ReadOptionalFiniteDouble(table, "max_peak_gib", "fit.cats3d").value_or(cfg.max_peak_gib);
+      cfg.use_disk_cache = ReadOptionalBool(table, "use_disk_cache", cfg.use_disk_cache);
+      cfg.kernel_cache_directory = ReadOptionalString(table, "kernel_cache_directory", "");
+      cfg.kernel_cache_file = ReadOptionalString(table, "kernel_cache_file", "");
+      auto absolute = [&](std::string &path) {
+        if (!path.empty() && std::filesystem::path(path).is_relative()) {
+          path = std::filesystem::absolute(std::filesystem::path(config_path).parent_path() / path)
+                     .lexically_normal()
+                     .string();
+        }
+      };
+      absolute(cfg.kernel_cache_directory);
+      absolute(cfg.kernel_cache_file);
+      if (table.contains("lambda")) {
+        cfg.lambda = ParseCatsLambda(GetRequiredTable(table, "lambda", "fit.cats3d"));
+      }
+      if (table.contains("lambda_groups")) {
+        const auto *groups = table["lambda_groups"].as_array();
+        if (!groups) {
+          throw ConfigError("fit.cats3d.lambda_groups must be an array of tables.");
+        }
+        for (const auto &node : *groups) {
+          if (!node.as_table()) {
+            throw ConfigError("CATS3D lambda group must be a table.");
+          }
+          cfg.lambda_groups.push_back(ParseCatsLambda(*node.as_table()));
+        }
+      }
+      if (cfg.lambda) {
+        absolute(cfg.lambda->file);
+      }
+      for (auto &input : cfg.lambda_groups) {
+        absolute(input.file);
+      }
+      if (table.contains("lambda_scan")) {
+        const auto &scan = GetRequiredTable(table, "lambda_scan", "fit.cats3d");
+        if (scan.contains("enabled") && !scan["enabled"].value<bool>()) {
+          throw ConfigError("lambda_scan.enabled must be boolean.");
+        }
+        for (const char *key : {"execution_mode", "root_name"}) {
+          if (scan.contains(key) && !scan[key].value<std::string>()) {
+            throw ConfigError(std::string("Expected lambda_scan string ") + key);
+          }
+        }
+        cfg.lambda_scan.enabled = ReadOptionalBool(scan, "enabled", false);
+        cfg.lambda_scan.execution_mode = ReadOptionalString(scan, "execution_mode", "alongside_fit");
+        cfg.lambda_scan.root_name = ReadOptionalString(scan, "root_name", cfg.lambda_scan.root_name);
+        if (scan.contains("constant_values")) {
+          cfg.lambda_scan.constant_values = ReadFiniteDoubleArray(scan, "constant_values", "lambda_scan");
+        }
+        if (scan.contains("scale_values")) {
+          cfg.lambda_scan.scale_values = ReadFiniteDoubleArray(scan, "scale_values", "lambda_scan");
+        }
+      }
+      return cfg;
+    }
+
   }  // namespace
 
   ApplicationConfig LoadApplicationConfig(const std::string &path) {
@@ -677,6 +817,10 @@ namespace exp_femto_3d {
     const toml::table &fit = GetRequiredTable(root, "fit", "root");
 
     config.input.input_root = ReadRequiredString(input, "input_root", "input");
+    if (const auto *format = input.get("format")) {
+      if (!format->is_string()) throw ConfigError("input.format must be a string: femtodream or femto.");
+      config.input.format = ParseInputFormat(*format->value<std::string>());
+    }
     config.input.task_name = ReadRequiredString(input, "task_name", "input");
     config.input.same_event_subtask = ReadRequiredString(input, "same_event_subtask", "input");
     config.input.mixed_event_subtask = ReadRequiredString(input, "mixed_event_subtask", "input");
@@ -694,6 +838,40 @@ namespace exp_femto_3d {
         ReadOptionalString(output, "profile_root_name", config.output.profile_root_name);
     config.output.log_level = ParseLogLevel(ReadOptionalString(output, "log_level", ToString(config.output.log_level)));
 
+    if (root["build"]["normalization"]) {
+      const auto *normalization = build["normalization"].as_table();
+      if (!normalization) throw ConfigError("build.normalization must be a table.");
+      if (normalization->contains("mode") && !(*normalization)["mode"].is_string())
+        throw ConfigError("build.normalization.mode must be a string.");
+      const auto mode = ReadOptionalString(*normalization, "mode", "full_integral");
+      if (mode == "box_shell") config.build.normalization.mode = CfNormalizationMode::kBoxShell;
+      else if (mode != "full_integral")
+        throw ConfigError("build.normalization.mode must be full_integral or box_shell.");
+      const char *axes[] = {"q_out", "q_side", "q_long"};
+      for (int axis = 0; axis < 3; ++axis) {
+        const auto *node = normalization->get(axes[axis]);
+        if (config.build.normalization.mode == CfNormalizationMode::kFullIntegral) {
+          if (node) throw ConfigError("build.normalization axis ranges require mode=box_shell.");
+          continue;
+        }
+        const auto *range = node ? node->as_array() : nullptr;
+        const std::string key = std::string("build.normalization.") + axes[axis];
+        if (!range || range->size() != 2) throw ConfigError(key + " must contain exactly two numbers.");
+        for (int bound = 0; bound < 2; ++bound) {
+          const auto number = (*range)[bound].value<double>();
+          if (!number || !std::isfinite(*number)) throw ConfigError(key + " must contain finite numbers.");
+          config.build.normalization.ranges[axis][bound] = *number;
+        }
+        const auto &bounds = config.build.normalization.ranges[axis];
+        if (bounds[0] < 0.0 || bounds[1] <= bounds[0])
+          throw ConfigError(key + " requires 0 <= min < max (GeV/c).");
+      }
+    }
+
+    if (const auto *mode = build.get("phi_mode")) {
+      if (!mode->is_string()) throw ConfigError("build.phi_mode must be a string: separate or fold_pi.");
+      config.build.phi_mode = ParsePhiMode(*mode->value<std::string>());
+    }
     config.build.map_pair_phi_to_symmetric_range =
         ReadOptionalBool(build, "map_pair_phi_to_symmetric_range", config.build.map_pair_phi_to_symmetric_range);
     config.build.write_normalized_se_me_1d_projections = ReadOptionalBool(
@@ -715,6 +893,14 @@ namespace exp_femto_3d {
     config.build.phi_rebin = ParseAxisRebinConfig(rebin, "phi");
     config.build.mt_rebin = ParseAxisRebinConfig(rebin, "mt");
 
+    const std::string backend = ReadOptionalString(fit, "correlation_backend", "bowler");
+    if (backend == "cats3d") {
+      config.fit.correlation_backend = CorrelationBackend::kCats3D;
+      for (const char *key : {"coulomb_mode", "finite_source_mode", "use_coulomb", "use_core_halo_lambda"})
+        if (fit.contains(key)) throw ConfigError(std::string("CATS3D forbids Bowler-only fit.") + key);
+      config.fit.cats3d = ParseCatsConfig(GetRequiredTable(fit, "cats3d", "fit"), path);
+    } else if (backend != "bowler") throw ConfigError("fit.correlation_backend must be bowler or cats3d.");
+    else if (fit.contains("cats3d")) throw ConfigError("fit.cats3d requires correlation_backend=cats3d.");
     config.fit.model = ParseFitModel(ReadOptionalString(fit, "model", ToString(config.fit.model)));
     config.fit.lambda_mode =
         ParseLambdaMode(ReadOptionalString(fit, "lambda_mode", ToString(config.fit.lambda_mode)));
@@ -782,6 +968,9 @@ namespace exp_femto_3d {
   }
 
   void ValidateApplicationConfig(ApplicationConfig &config) {
+    (void)ToString(config.input.format);
+    (void)ToString(config.build.phi_mode);
+    ValidateCfNormalizationConfig(config.build.normalization);
     if (config.input.input_root.empty()) {
       throw ConfigError("input.input_root is required.");
     }
@@ -818,6 +1007,52 @@ namespace exp_femto_3d {
     }
     if (!config.fit.options.use_q2_baseline && HasAnyOverride(config.fit.options.parameters.baseline_q2)) {
       throw ConfigError("fit.parameters.baseline_q2 requires fit.use_q2_baseline = true.");
+    }
+    if (config.fit.correlation_backend == CorrelationBackend::kCats3D) {
+      auto &cats = config.fit.cats3d;
+      if (config.fit.lambda_mode != LambdaMode::kIndependent || config.fit.profile_likelihood.enabled
+          || config.fit.options.coulomb_mode != CoulombMode::kNone)
+        throw ConfigError("CATS3D requires independent slices and its dedicated lambda_scan, without Bowler Coulomb settings.");
+      if (HasAnyOverride(config.fit.options.parameters.lambda))
+        throw ConfigError("CATS3D lambda is external: use fit.cats3d.lambda, not fit.parameters.lambda.");
+      auto &alpha = config.fit.options.parameters.alpha;
+      if ((alpha.fixed_value && *alpha.fixed_value != 2.0) || (alpha.initial && *alpha.initial != 2.0)
+          || (alpha.min && *alpha.min > 2) || (alpha.max && *alpha.max < 2))
+        throw ConfigError("CATS3D Gaussian source requires alpha=2.");
+      alpha.fixed_value = 2.0;
+      if (cats.grid_bins < 2 || cats.subdivisions < 1 || cats.max_pw < 1 || cats.max_pw > 65535 || cats.pml_max_calls < 1
+          || !std::isfinite(cats.grid_min_fm) || !std::isfinite(cats.grid_max_fm)
+          || cats.grid_min_fm >= 0 || cats.grid_max_fm <= 0
+          || !std::isfinite(cats.max_kernel_gib) || cats.max_kernel_gib <= 0
+          || !std::isfinite(cats.max_peak_gib) || cats.max_peak_gib <= 0)
+        throw ConfigError("Invalid CATS3D grid, partial-wave or memory settings.");
+      if (!cats.kernel_cache_file.empty() && !cats.use_disk_cache)
+        throw ConfigError("fit.cats3d.kernel_cache_file requires use_disk_cache=true.");
+      if (!cats.lambda && cats.lambda_groups.empty()) throw ConfigError("CATS3D requires external lambda input.");
+      if (cats.lambda) {
+        ValidateCatsLambda(*cats.lambda);
+        if (!cats.lambda->group_id.empty()) throw ConfigError("Default lambda input cannot specify group_id.");
+      }
+      std::set<std::string> groups;
+      for (const auto &input : cats.lambda_groups) {
+        ValidateCatsLambda(input);
+        if (input.group_id.empty() || !groups.insert(input.group_id).second)
+          throw ConfigError("CATS3D lambda_groups require unique nonempty group_id.");
+      }
+      const auto &scan = cats.lambda_scan;
+      if (scan.execution_mode != "alongside_fit" && scan.execution_mode != "scan_only")
+        throw ConfigError("lambda_scan.execution_mode must be alongside_fit or scan_only.");
+      if (scan.root_name.empty()) throw ConfigError("lambda_scan.root_name must not be empty.");
+      if (scan.enabled && scan.constant_values.empty() && scan.scale_values.empty())
+        throw ConfigError("Enabled lambda_scan requires constant_values or scale_values.");
+      if (!scan.enabled && (scan.execution_mode == "scan_only" || !scan.constant_values.empty() || !scan.scale_values.empty()))
+        throw ConfigError("Configured lambda_scan coordinates/execution_mode require enabled=true.");
+      for (const auto *values : {&scan.constant_values, &scan.scale_values}) {
+        std::set<double> seen;
+        for (double value : *values)
+          if (!std::isfinite(value) || !seen.insert(value).second)
+            throw ConfigError("lambda_scan coordinates must be finite and unique.");
+      }
     }
     ValidateFixedValueInsideEffectiveBounds("fit.parameters.lambda", config.fit.options.parameters.lambda, 0.0, 1.0);
     ValidateFixedValueInsideEffectiveBounds("fit.parameters.alpha", config.fit.options.parameters.alpha, 0.5, 2.0);
@@ -1003,6 +1238,34 @@ namespace exp_femto_3d {
         return "error";
     }
     return "info";
+  }
+
+  std::string ToString(const InputFormat format) {
+    switch (format) {
+      case InputFormat::kFemtoDream: return "femtodream";
+      case InputFormat::kFemto: return "femto";
+    }
+    throw ConfigError("Unknown input.format; expected femtodream or femto.");
+  }
+
+  InputFormat ParseInputFormat(const std::string &token) {
+    if (token == "femtodream") return InputFormat::kFemtoDream;
+    if (token == "femto") return InputFormat::kFemto;
+    throw ConfigError("Unknown input.format '" + token + "'; expected femtodream or femto.");
+  }
+
+  std::string ToString(const PhiMode mode) {
+    switch (mode) {
+      case PhiMode::kSeparate: return "separate";
+      case PhiMode::kFoldPi: return "fold_pi";
+    }
+    throw ConfigError("Unknown build.phi_mode; expected separate or fold_pi.");
+  }
+
+  PhiMode ParsePhiMode(const std::string &token) {
+    if (token == "separate") return PhiMode::kSeparate;
+    if (token == "fold_pi") return PhiMode::kFoldPi;
+    throw ConfigError("Unknown build.phi_mode '" + token + "'; expected separate or fold_pi.");
   }
 
   LogLevel ParseLogLevel(const std::string &token) {

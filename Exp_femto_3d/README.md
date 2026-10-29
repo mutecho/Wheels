@@ -33,6 +33,118 @@ Configured build trees still live under `build/`, but all executable targets are
 emitted into `bin/`. `compile_commands.json` is exported in the configured build
 directory as `build/compile_commands.json`.
 
+## Input formats
+
+`[input].format` selects the producer's seven-dimensional `THnSparseF` layout.
+Omitting it preserves `"femtodream"`; use `"femto"` for `PWGCF/Femto`.
+Unknown values and non-string values are rejected. Paths remain explicit;
+the mode does not guess task names or reorder/copy the sparse histogram.
+
+| Format | q out/side/long | mT | Centrality | Relative pair angle | q-vector |
+| --- | --- | --- | --- | --- | --- |
+| `femtodream` | 0/1/2 | 3 | 4 | 6 | 5 |
+| `femto` | 0/1/2 | 3 | 4 | 5 | 6 |
+
+The new-format example is [`config/examples/femto.example.toml`](config/examples/femto.example.toml).
+It specifies the `femto-pair-track-track/TrackTrack/{SE,ME}/Analysis` directories
+and `hQoutVsQsideVsQlongVsMtVsCentVsEventPlaneAngleVsQvector` object.
+Replace its input/output paths and run in the O2Physics ROOT environment:
+
+```bash
+bin/exp_femto_3d build-cf --config config/examples/femto.example.toml
+```
+
+All bin edges come from the input; the existing mT/phi rebin and SE/ME qn/phi
+split settings remain available. Choose the angular treatment during `build-cf`:
+
+```toml
+[build]
+phi_mode = "fold_pi"  # or "separate" (default when omitted)
+map_pair_phi_to_symmetric_range = false
+```
+
+- `fold_pi`: sum the raw SE counts at phi and phi+pi, and do the same for ME,
+  adding their stored variances. Only then normalize SE/ME and construct the CF.
+  The output covers `0..pi`; CFs or fitted radii are never averaged. The source
+  must cover `0..2pi` with an even bin count and matching half-period edges.
+  Native/factor/explicit phi rebin settings apply to the folded `0..pi` axis.
+- `separate`: retain the complete source angle range and all native statistics.
+  For full `0..2pi` data, the two halves have independent R² harmonic fits,
+  overview plots and epsilon summaries under `phi_0_pi/` and `phi_pi_2pi/` in
+  the fit/report ROOT files. The first displays `0..pi`, the second `pi..2pi`.
+  Output phi bins must not straddle pi. Underlying slice fits and any joint
+  `shared_phi` lambda strategy retain their existing behavior.
+
+`phi_all` includes every normal source angle bin in either mode: folding only
+changes its coordinate interval, not its total counts. Auxiliary underflow and
+overflow remain excluded; no overflow recovery is performed. A single q-vector
+bin cannot provide finer event-shape selections than the stored binning.
+
+The old `map_pair_phi_to_symmetric_range` label mapping is defined on `0..pi`
+only. It cannot be enabled directly on unmerged `0..2pi` input; invalid mapping,
+non-pairable folding, axis mismatch and invalid rebin selections fail before
+output reset. Femto mode preflights all seven SE/ME axes.
+
+`SliceCatalog` and `FitCatalog` record `phi_mode`; absent metadata means the
+legacy `separate` behavior. Fit-only runs follow the saved CF rather than
+reinterpreting `build.phi_mode`; changing mode requires rebuilding the CF.
+Histogram names, normalization, stored weighted errors and PML remain unchanged.
+Older half-period reports retain their existing ROOT paths. The example's fit
+settings are illustrative, not a validated real-data fit prescription.
+
+## CF normalization
+
+Omitting `[build.normalization]` preserves the existing `full_integral` mode:
+SE and ME are separately normalized by their complete normal-bin, bin-volume-weighted
+integrals before division. Underflow and overflow never contribute.
+
+To anchor the complete CF to a high-q box shell, use:
+
+```toml
+[build.normalization]
+mode = "box_shell"       # "full_integral" (default) | "box_shell"
+q_out  = [0.15, 0.20]   # [inner, outer] in GeV/c, applied to |q_out|
+q_side = [0.15, 0.20]
+q_long = [0.15, 0.20]
+```
+
+Each axis can have different limits. All three arrays are required in `box_shell`
+and must satisfy `0 <= inner < outer`; `full_integral` rejects axis arrays.
+The region includes bins whose centers satisfy **all** outer limits and **at least
+one** inner limit. It is the outer box minus the central box, rather than the
+intersection of three high-q intervals. Endpoints are inclusive with a
+`1e-9 GeV/c` comparison tolerance. Arbitrary limits select whole bins by center;
+there is no fractional-bin weighting. The signed outer box must fit within the
+input axes; incompatible SE/ME q axes, out-of-axis limits, and empty selections
+fail before the existing CF output is reset.
+
+Both modes retain the same volume-weighted integral convention. With integrals
+`I_SE` and `I_ME` in the selected region, `cf_scale = I_ME/I_SE` and
+`CF3D = cf_scale * SE_raw3d/ME_raw3d`. The factor scales every CF bin and the
+existing propagated errors; the raw histograms are preserved. Zero integrals
+retain the existing group/slice skip policy. Invalid integrals fail without
+falling back to another normalization mode.
+
+`meta/SliceCatalog` stores version 1 normalization metadata: `normalization_mode`,
+`normalization_q_out/q_side/q_long` arrays `[inner, outer]`,
+`normalization_outer_first/outer_last/inner_first/inner_last` arrays in
+out/side/long order, `normalization_se_integral`, `normalization_me_integral`,
+and `cf_scale`. Empty inner-axis intervals use `[0, 0]`; full-integral ranges
+are `[0, 0]` and have no inner box.
+
+Fit-only runs follow the **input CF metadata**, regardless of the current build
+settings. PML converts its normalized model to raw S/B using
+`r = C_model / cf_scale`; this also applies to shared-lambda, combined profiles,
+diagnostic profiles, and CATS3D lambda scans. Fit and diagnostic catalogs retain
+the same metadata, and checkpoint fingerprints include the convention.
+The profile contract is upgraded to v5 (also used by combined-profile checkpoints);
+earlier checkpoint contracts are rejected. Use a new checkpoint `run_id` or
+directory after upgrading; existing CF files remain readable.
+Only complete absence of normalization metadata means legacy full-integral;
+partial or invalid metadata is rejected. Existing production TOMLs are not
+switched automatically. A separate example is `config/examples/box_shell.toml`.
+
+
 ## Run
 
 ```bash
@@ -47,6 +159,34 @@ Optional fit overrides:
 
 - `--model full|diag`
 - `--input-cf-root /absolute/or/relative/path.root`
+
+CATS3D Gaussian backend:
+
+- `[fit].correlation_backend = "cats3d"` selects direct 3D source/wave convolution;
+  omitted fields retain the existing Bowler backend.
+- `config/examples/cats3d_gaussian.toml` documents fixed constant/ROOT-table lambda
+  and the separate constant-lambda/table-scale diagnostic scans.
+- `scripts/run_exp_femto_3d_cats3d.sh` defaults to the dedicated OO configuration
+  and the fit stage. Its example lambda is not a production calibration.
+- Both CATS3D launch scripts display output and slice progress live through the
+  guarded O2Physics executor and save timestamped logs in `logs/cats3d/`.
+  Edit `config_path` / `log_directory` in the entry script; `--dry-run` previews
+  the launch without starting ROOT or fitting. Existing runs are unaffected.
+- Native CATS3D ByQ kernels can be loaded with `fit.cats3d.kernel_cache_file`;
+  no library binary fingerprint is required. Grid and physics metadata must match.
+- `max_kernel_gib` limits one kernel; `max_peak_gib` defaults to an estimated
+  8 GiB process budget for serial use on a 16 GiB machine.
+- See [CATS3D model, configuration and output contracts](docs/CATS3D拟合与lambda扫描.md).
+- `scripts/run_cats3d_scan_report.sh --scan-root FILE --output-directory NEW_DIR`
+  renders a completed scan into one PDF/ROOT report per coordinate, per-slice
+  projections, a parameter CSV, and a filterable offline `index.html`. It reuses
+  saved parameters and the recorded native kernel without rerunning minimization.
+  Each coordinate also receives a standard `fit_report_cats3d_*.root` with
+  source-parameter overviews, phi harmonics and epsilon summaries. Use
+  `--summary-only` for these ROOT summaries without loading a CF or kernel.
+  Incomplete phi groups retain diagnostics and do not receive harmonic/epsilon fits.
+  The fit/scan command itself does not automatically invoke this postprocessor.
+- See [CATS3D validation scope and observed limits](docs/CATS3D验证记录.md).
 
 Coulomb fit modes:
 

@@ -1,0 +1,56 @@
+# PWGCF/Femto input layout; replace both absolute paths before running build-cf.
+[input]
+format = "femto"
+input_root = "/absolute/path/to/AnalysisResults.root"
+task_name = "femto-pair-track-track"
+same_event_subtask = "TrackTrack/SE/Analysis"
+mixed_event_subtask = "TrackTrack/ME/Analysis"
+sparse_object_name = "hQoutVsQsideVsQlongVsMtVsCentVsEventPlaneAngleVsQvector"
+
+[output]
+output_directory = "/absolute/path/to/femto-output"
+cf_root_name = "cf_femto.root"
+fit_root_name = "fit_femto.root"
+fit_summary_name = "fit_femto.tsv"
+fit_report_root_name = "report_femto.root"
+log_level = "info"
+
+[build]
+# fold_pi: add SE/ME at phi and phi+pi before normalizing; separate keeps both halves.
+phi_mode = "fold_pi"
+map_pair_phi_to_symmetric_range = false
+split_mixed_event_by_phi = true
+reopen_output_file_per_slice = false
+
+# Native output bins: 0..pi after folding, or 0..2pi in separate mode.
+[build.rebin.phi]
+enabled = false
+
+[build.rebin.mt]
+enabled = false
+
+[build.normalization]
+mode = "box_shell"
+q_out = [0.15, 0.20]
+q_side = [0.15, 0.20]
+q_long = [0.15, 0.20]
+
+# These generic fit settings only make the example complete. build-cf does not fit.
+[fit]
+model = "diag"
+coulomb_mode = "none"
+use_pml = true
+fit_q_max = 0.15
+map_pair_phi_to_symmetric_range = false
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.centrality]]
+min = 10
+max = 30
+
+[[bins.centrality]]
+min = 30
+max = 50

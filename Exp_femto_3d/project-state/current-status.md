@@ -1,6 +1,68 @@
 # Current Status
 
-## Task Snapshot
+## Femto Input And Half-Period Modes (2026-10-29)
+
+- Added input.format=femto for PWGCF/Femto seven-dimensional output; omitted
+  format remains femtodream. Shared input-layout code resolves phi/q-vector
+  5/6 versus 6/5 and preflights dimensions, paths and compatible axes.
+- build.phi_mode=fold_pi sums paired raw SE/ME and their stored variances
+  before normalization, producing 0..pi CFs. Omitted phi_mode remains separate;
+  full-angle separate reports have independent half-period harmonic, overview
+  and epsilon products in phi_0_pi and phi_pi_2pi directories. Old half-period
+  paths, CF names, normalization and likelihood conventions are preserved.
+- Additive phi_mode catalog metadata supports fit-only readback and saved CATS
+  reporting. Invalid pairing, rebinning or label mapping is rejected before
+  output reset; source underflow/overflow is not recovered.
+- Verification: final guarded CMake build and CTest passed 15/15 (314.39 s,
+  PRIMARY_OK), including weighted count/variance oracles, non-averaged CF
+  construction, independent half-period fits and CATS per-half eligibility.
+  Real-input and canvas QA closeout is recorded in tests.md.
+- No real-data minimization or upstream production was run. Existing dirty
+  source/config/report work was preserved.
+
+
+## CATS3D Standard Fit Reports (2026-10-23)
+
+- Saved-scan postprocessing now also produces `fit_report_cats3d_*.root` with
+  the existing `meta/FitCatalog`, `source_parameters/cent_*/mt_*`,
+  `summary/R2_vs_phi` and `eps_vs_mt` layout. Incomplete groups keep the familiar
+  panel layout and a status canvas; only complete groups with valid conditional
+  errors receive harmonic/epsilon fits. Bowler and correlation-fit behavior is unchanged.
+- Added `--summary-only` to the report CLI/launcher: no CF/kernel reads, source
+  folds, slice minimization, PDF or HTML. The regular full exporter also writes
+  these companion summaries alongside the existing projection report files.
+- Real output: `res/cats3d_fit_report_oo_cuttest_20261023/`, four ROOTs about
+  1.2 MB each. All 420 points and 813 attempts roundtrip exactly; eligible groups
+  per lambda 0.5/0.6/0.7/0.8 are 4/6/5/4 out of 15. Summary generation took
+  0.54 s with zero folds, excluding build/environment setup.
+- Guarded workflow/Bowler smoke, CATS3D scan and model CTest passed 3/3 in
+  53.66 s; final ROOT QA and one-point full-export smoke returned `PRIMARY_OK`.
+  Complete/incomplete and epsilon canvas previews were visually checked.
+  The full real scan was not refitted or reconstructed again.
+
+## Earlier CATS3D Scan Reports (2026-10-22)
+
+- Added an offline `cats3d_scan_report` executable and
+  `scripts/run_cats3d_scan_report.sh`. Completed scans can now produce PDF/ROOT
+  reports per coordinate, three-direction slice projections, parameter CSV,
+  and a filterable offline HTML index without rerunning minimization.
+- The exporter reads saved geometry, baseline, lambda input, CF path, parameters,
+  error/status flags and kernel contract. It loads the recorded native kernel
+  only, retains failed trials as diagnostics, and holds one kernel at a time.
+  The scan workflow itself still does not automatically invoke report generation.
+- Real OO cuttest report: `res/cats3d_lambda_scan_oo_cuttest_20261022/index.html`;
+  four coordinates, 105 slices each, 420 reconstructed models, 270 valid minima,
+  236 valid conditional errors, all 813 attempts retained, four 121-page PDFs.
+- Verification: guarded ROOT roundtrip matched all saved parameters/statuses,
+  50,400 data projection bins and their errors, model projections and q centers.
+  Input scan/CF SHA-256, sizes and modification times are unchanged. Existing
+  CATS3D CTest passed 3/3 in 298.26 s with `PRIMARY_OK`; PDF pages and browser
+  filtering were checked. Report reconstruction took 258.64 s; no fits rerun.
+- PDF pages use lossless ROOT PNG snapshots; vector canvases remain in ROOT.
+  Presentation runs outside O2's Python environment. This validates reporting,
+  not the physical adequacy or convergence of all input scan points.
+
+## Previous Workflow Snapshot (2026-09-07)
 
 - configuration follow-up (2026-09-07):
   `strict_parallel` now enables all six unordered 2D pairs of `lambda`,

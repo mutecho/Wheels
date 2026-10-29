@@ -60,7 +60,13 @@
 #include "CATSconstants.h"
 #endif
 #include "exp_femto_3d/Config.h"
+#include "exp_femto_3d/CfNormalization.h"
 #include "CombinedProfile.h"
+#include "InputLayout.h"
+#include "Cats3DModel.h"
+#include "Cats3DLambdaScan.h"
+#include "TNamed.h"
+#include "TFitResult.h"
 #include "ProfileDisplay2D.h"
 #include "ProfileLikelihood.h"
 #include "SharedLambdaFit.h"
@@ -70,6 +76,15 @@ extern char **environ;
 namespace exp_femto_3d {
 
   namespace {
+
+    Cats3DModel *g_active_cats3d_model = nullptr;
+    class ActiveCats3DGuard {
+     public:
+      explicit ActiveCats3DGuard(Cats3DModel *model) : previous_(g_active_cats3d_model) { g_active_cats3d_model = model; }
+      ~ActiveCats3DGuard() { g_active_cats3d_model = previous_; }
+     private:
+      Cats3DModel *previous_;
+    };
 
     constexpr double kProjection1DWindow = 0.04;
     constexpr double kHbarC = 0.1973269804;
@@ -483,8 +498,40 @@ namespace exp_femto_3d {
       return coordinates;
     }
 
-    // Integrated slices do not carry a phi center, but fit-side reinterpretation
-    // still needs a stable helper for non-integrated slices.
+    // Full-angle independent slices are summarized as two half-period data sets.
+    // Their fits are independent; raw per-slice records retain the original group IDs.
+    std::map<std::string, std::vector<LevyFitResult>> PartitionPhiReports(
+        const std::vector<LevyFitResult> &results) {
+      const bool full = std::any_of(results.begin(), results.end(), [](const auto &r) {
+        return !r.fit_uses_symmetric_phi_range && r.raw_phi_high > kPi + 1.e-5;
+      });
+      if (!full) return {{"", results}};
+      std::map<std::string, std::vector<LevyFitResult>> periods;
+      for (const auto &r : results) {
+        if (r.is_phi_integrated) continue;
+        if (r.raw_phi_low < kPi-1.e-5 && r.raw_phi_high > kPi+1.e-5)
+          throw std::runtime_error("A phi slice straddles pi; separate half-period reports require aligned bins.");
+        periods[r.raw_phi_low >= kPi-1.e-5 ? "phi_pi_2pi" : "phi_0_pi"].push_back(r);
+      }
+      return periods;
+    }
+
+    std::pair<double, double> ResolveSummaryPhiRange(const std::vector<LevyFitResult> &results) {
+      if (!results.empty() && results.front().fit_uses_symmetric_phi_range)
+        return {-kPi/2., kPi/2.};
+      const bool second = std::any_of(results.begin(), results.end(), [](const auto &r) {
+        return r.raw_phi_high > kPi+1.e-5;
+      });
+      return second ? std::make_pair(kPi,2*kPi) : std::make_pair(0.,kPi);
+    }
+
+    // Fit-only runs use saved raw intervals, independently of the current input-file layout.
+    void ValidateCatalogPhiMapping(const std::vector<SliceCatalogEntry> &catalog, const bool mapped) {
+      for (const auto &entry : catalog)
+        ValidateSymmetricPhiDomain(entry.raw_phi_low, entry.raw_phi_high, mapped);
+    }
+
+    // Integrated slices have no phi center; differential slices share the build-side mapping.
     PhiSliceCoordinates ResolveSlicePhiCoordinates(const SliceCatalogEntry &entry, const bool use_symmetric_phi_range) {
       if (entry.is_phi_integrated) {
         return {entry.raw_phi_low, entry.raw_phi_high, std::numeric_limits<double>::quiet_NaN()};
@@ -1035,6 +1082,12 @@ namespace exp_femto_3d {
       info_box->SetTextFont(42);
       info_box->SetTextSize(0.055);
       info_box->AddText("Exp femto 3D fit source parameters");
+      if (representative_result.correlation_backend == "cats3d") {
+        info_box->AddText("CATS3D Gaussian; external fixed #lambda");
+        if (std::isfinite(representative_result.lambda)) {
+          info_box->AddText(("#lambda = " + FormatDouble(representative_result.lambda, 4)).c_str());
+        }
+      }
       info_box->AddText(("centrality: "
                          + FormatRangeText(representative_result.cent_low, representative_result.cent_high))
                             .c_str());
@@ -1230,10 +1283,11 @@ namespace exp_femto_3d {
                            const int pad_number,
                            std::unique_ptr<TGraphErrors> graph,
                            const int parameter_index,
-                           const bool uses_mapped_phi_range,
+                           const std::pair<double, double> &phi_range,
                            std::vector<std::unique_ptr<TGraphErrors>> &owned_graphs,
                            std::vector<std::unique_ptr<TF1>> &owned_fits,
-                           const shared_lambda::HarmonicResult *shared_fit = nullptr) {
+                           const shared_lambda::HarmonicResult *shared_fit = nullptr,
+                           const bool fit_trend = true) {
       if (graph == nullptr) {
         return;
       }
@@ -1250,17 +1304,17 @@ namespace exp_femto_3d {
       pad->SetTopMargin(0.08);
       ApplyOverviewGraphStyle(*graph);
       graph->SetTitle("");
+      graph->GetXaxis()->SetLimits(phi_range.first, phi_range.second);
       graph->Draw("ALPE1");
 
       // Overview canvases carry the same harmonic trend line convention as the stored R2 summary fits.
       double x = 0.0;
       double y = 0.0;
       graph->GetPoint(0, x, y);
-      const double phi_fit_min = uses_mapped_phi_range ? -TMath::Pi() / 2.0 : 0.0;
-      const double phi_fit_max = uses_mapped_phi_range ? TMath::Pi() / 2.0 : TMath::Pi();
+      const auto [phi_fit_min, phi_fit_max] = phi_range;
       const bool constant_panel = parameter_index < 0;
       const int minimum_points = constant_panel ? 1 : 2;
-      if (graph->GetN() >= minimum_points && (shared_fit == nullptr || shared_fit->valid)) {
+      if (fit_trend && graph->GetN() >= minimum_points && (shared_fit == nullptr || shared_fit->valid)) {
         auto fit_function = BuildOverviewFitFunction(
             std::string(graph->GetName()) + "_overview_fit", parameter_index, phi_fit_min, phi_fit_max, y);
         if (shared_fit != nullptr) {
@@ -1274,13 +1328,6 @@ namespace exp_femto_3d {
         owned_fits.push_back(std::move(fit_function));
       }
       owned_graphs.push_back(std::move(graph));
-    }
-
-    double IntegralVisibleRange(TH3D *hist, const bool use_width = false) {
-      if (hist == nullptr) {
-        return 0.0;
-      }
-      return hist->Integral(1, hist->GetNbinsX(), 1, hist->GetNbinsY(), 1, hist->GetNbinsZ(), use_width ? "width" : "");
     }
 
     std::pair<int, int> GetAxisRangeForWindow(const TAxis *axis, const double q_max) {
@@ -1548,11 +1595,11 @@ namespace exp_femto_3d {
       }
     }
 
-    // qn bins are configured as half-open physical ranges and mapped to exact THnSparse axis bins.
-    void ApplyQnSelection(THnSparseF &sparse, const QnSliceSelection &selection) {
-      TAxis *axis = sparse.GetAxis(5);
+    // qn bins are half-open physical ranges on the producer-specific q-vector axis.
+    void ApplyQnSelection(THnSparseF &sparse, const int qn_axis, const QnSliceSelection &selection) {
+      TAxis *axis = sparse.GetAxis(qn_axis);
       if (axis == nullptr) {
-        throw std::runtime_error("Input THnSparse is missing qn axis 5.");
+        throw std::runtime_error("Input THnSparse is missing qn axis " + std::to_string(qn_axis) + ".");
       }
       if (selection.is_qn_integrated) {
         ResetAxisVisibleRange(*axis);
@@ -1634,11 +1681,15 @@ namespace exp_femto_3d {
       return entry;
     }
 
-    void WriteSliceCatalogTree(TFile &output_file, const std::vector<SliceCatalogEntry> &entries) {
+    void WriteSliceCatalogTree(TFile &output_file, const std::vector<SliceCatalogEntry> &entries,
+                               const std::string &tree_name = "SliceCatalog") {
       auto *meta_directory = GetOrCreateDirectoryPath(output_file, "meta");
       meta_directory->cd();
 
-      auto tree = std::make_unique<TTree>("SliceCatalog", "SliceCatalog");
+      auto tree = std::make_unique<TTree>(tree_name.c_str(), tree_name.c_str());
+      std::unique_ptr<CfNormalizationTreeWriter> normalization_writer;
+      if (std::any_of(entries.begin(), entries.end(), [](const auto &e) { return e.normalization.present; }))
+        normalization_writer = std::make_unique<CfNormalizationTreeWriter>(*tree);
       std::string slice_id;
       std::string group_id;
       std::string slice_directory;
@@ -1659,6 +1710,7 @@ namespace exp_femto_3d {
       double qn_low = std::numeric_limits<double>::quiet_NaN();
       double qn_high = std::numeric_limits<double>::quiet_NaN();
       std::string qn_label;
+      std::string phi_mode;
       double raw_phi_low = 0.0;
       double raw_phi_high = 0.0;
       double raw_phi_center = 0.0;
@@ -1695,6 +1747,7 @@ namespace exp_femto_3d {
       tree->Branch("qn_low", &qn_low);
       tree->Branch("qn_high", &qn_high);
       tree->Branch("qn_label", &qn_label);
+      tree->Branch("phi_mode", &phi_mode);
       tree->Branch("raw_phi_low", &raw_phi_low);
       tree->Branch("raw_phi_high", &raw_phi_high);
       tree->Branch("raw_phi_center", &raw_phi_center);
@@ -1712,6 +1765,7 @@ namespace exp_femto_3d {
       tree->Branch("is_phi_integrated", &is_phi_integrated);
 
       for (const SliceCatalogEntry &entry : entries) {
+        if (normalization_writer) normalization_writer->Set(entry.normalization);
         slice_id = entry.slice_id;
         group_id = entry.group_id;
         slice_directory = entry.slice_directory;
@@ -1732,6 +1786,7 @@ namespace exp_femto_3d {
         qn_low = entry.qn_low;
         qn_high = entry.qn_high;
         qn_label = entry.qn_label;
+        phi_mode = entry.phi_mode;
         raw_phi_low = entry.raw_phi_low;
         raw_phi_high = entry.raw_phi_high;
         raw_phi_center = entry.raw_phi_center;
@@ -1761,6 +1816,7 @@ namespace exp_femto_3d {
       }
 
       TTreeReader reader(tree);
+      CfNormalizationTreeReader normalization_reader(*tree, reader);
       TTreeReaderValue<std::string> slice_id(reader, "slice_id");
       TTreeReaderValue<std::string> group_id(reader, "group_id");
       TTreeReaderValue<std::string> slice_directory(reader, "slice_directory");
@@ -1793,6 +1849,9 @@ namespace exp_femto_3d {
       if (tree->GetBranch("qn_label") != nullptr) {
         qn_label = std::make_unique<TTreeReaderValue<std::string>>(reader, "qn_label");
       }
+      std::unique_ptr<TTreeReaderValue<std::string>> phi_mode;
+      if (tree->GetBranch("phi_mode"))
+        phi_mode = std::make_unique<TTreeReaderValue<std::string>>(reader, "phi_mode");
       TTreeReaderValue<double> raw_phi_low(reader, "raw_phi_low");
       TTreeReaderValue<double> raw_phi_high(reader, "raw_phi_high");
       TTreeReaderValue<double> raw_phi_center(reader, "raw_phi_center");
@@ -1841,6 +1900,7 @@ namespace exp_femto_3d {
       std::vector<SliceCatalogEntry> entries;
       while (reader.Next()) {
         SliceCatalogEntry entry;
+        entry.normalization = normalization_reader.Read();
         entry.slice_id = *slice_id;
         entry.group_id = *group_id;
         entry.slice_directory = *slice_directory;
@@ -1861,6 +1921,8 @@ namespace exp_femto_3d {
         entry.qn_low = qn_low ? **qn_low : std::numeric_limits<double>::quiet_NaN();
         entry.qn_high = qn_high ? **qn_high : std::numeric_limits<double>::quiet_NaN();
         entry.qn_label = qn_label ? **qn_label : kQnIntegratedLabel;
+        entry.phi_mode = phi_mode ? **phi_mode : "separate";
+        (void)ParsePhiMode(entry.phi_mode);
         entry.raw_phi_low = *raw_phi_low;
         entry.raw_phi_high = *raw_phi_high;
         entry.raw_phi_center = *raw_phi_center;
@@ -2121,6 +2183,11 @@ namespace exp_femto_3d {
                                   const double alpha,
                                   const double baseline_q2,
                                   const LevyFitOptions &fit_options) {
+      if (g_active_cats3d_model) {
+        const double p[] = {norm, lambda, rout2, rside2, rlong2, alpha, baseline_q2};
+        try { return g_active_cats3d_model->Evaluate(q_out,q_side,q_long,p,false,fit_options.use_q2_baseline); }
+        catch (const Cats3DDomainError &) { return kInvalidFullModelCFValue; }
+      }
       const double q_out2 = q_out * q_out;
       const double q_side2 = q_side * q_side;
       const double q_long2 = q_long * q_long;
@@ -2145,6 +2212,11 @@ namespace exp_femto_3d {
                               const double alpha,
                               const double baseline_q2,
                               const LevyFitOptions &fit_options) {
+      if (g_active_cats3d_model) {
+        const double p[] = {norm,lambda,rout2,rside2,rlong2,routside2,routlong2,rsidelong2,alpha,baseline_q2};
+        try { return g_active_cats3d_model->Evaluate(q_out,q_side,q_long,p,true,fit_options.use_q2_baseline); }
+        catch (const Cats3DDomainError &) { return kInvalidFullModelCFValue; }
+      }
       if (!IsFullR2MatrixPositiveSemiDefinite(rout2, rside2, rlong2, routside2, routlong2, rsidelong2)) {
         return kInvalidFullModelCFValue;
       }
@@ -2375,16 +2447,10 @@ namespace exp_femto_3d {
       return fit_function;
     }
 
-    double ComputeRawToNormalizedCFScale(TH3D *h_se_raw, TH3D *h_me_raw) {
-      if (h_se_raw == nullptr || h_me_raw == nullptr) {
-        return 0.0;
-      }
-      const double int_se = IntegralVisibleRange(h_se_raw, true);
-      const double int_me = IntegralVisibleRange(h_me_raw, true);
-      if (int_se <= 0.0 || int_me <= 0.0) {
-        return 0.0;
-      }
-      return int_se / int_me;
+    double ComputeRawToNormalizedCFScale(TH3D *h_se_raw, TH3D *h_me_raw,
+                                           const CfNormalizationResult &normalization) {
+      if (!h_se_raw || !h_me_raw) return 0.0;
+      return ResolvePMLRawScale(*h_se_raw, *h_me_raw, normalization);
     }
 
     double ComputePMLNeg2LogLContribution(const double same_counts,
@@ -2476,6 +2542,9 @@ namespace exp_femto_3d {
     double EvaluateCachedLevyModel(const PMLBinCacheEntry &bin,
                                    const double *parameters,
                                    const Levy3DPMLContext &context) {
+      if (g_active_cats3d_model)
+        return g_active_cats3d_model->Evaluate(bin.q_out,bin.q_side,bin.q_long,parameters,
+                                              context.use_full_model,context.fit_options.use_q2_baseline);
       double argument = 0.0;
       double alpha = 0.0;
       double baseline_q2 = 0.0;
@@ -2541,6 +2610,7 @@ namespace exp_femto_3d {
     // intentionally match the established FCN so diagnostics cannot change the statistic.
     PMLEvaluation EvaluatePMLObjectiveForContext(Levy3DPMLContext &context, const double *parameters) {
       ++context.fcn_calls;
+      try {
       if (context.h_se_raw == nullptr || context.h_me_raw == nullptr) {
         return {kFitPenaltyValue, PMLEvaluationStatus::kMissingInput};
       }
@@ -2571,6 +2641,9 @@ namespace exp_femto_3d {
 
       return std::isfinite(neg2_log_l) ? PMLEvaluation{neg2_log_l, PMLEvaluationStatus::kValid}
                                        : PMLEvaluation{kFitPenaltyValue, PMLEvaluationStatus::kObjectiveInvalid};
+      } catch (const Cats3DDomainError &) {
+        return {kFitPenaltyValue, PMLEvaluationStatus::kModelDomainInvalid};
+      }
     }
 
     // Legacy single-slice/profile callers keep their callback ABI while the shared fit
@@ -2694,8 +2767,9 @@ namespace exp_femto_3d {
                                     TH3D *h_me_raw,
                                     const bool use_full_model,
                                     const LevyFitOptions &fit_options,
-                                    const CoulombKernelTable *coulomb_kernel) {
-      const double raw_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
+                                    const CoulombKernelTable *coulomb_kernel,
+                                    const CfNormalizationResult &normalization) {
+      const double raw_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw, normalization);
       if (!(raw_scale > 0.0) || !std::isfinite(raw_scale)) {
         throw std::runtime_error("Cannot evaluate PML with invalid raw SE/ME normalization.");
       }
@@ -2751,6 +2825,7 @@ namespace exp_femto_3d {
                                               TH3D *h_me_raw,
                                               const bool use_full_model,
                                               const LevyFitOptions &fit_options,
+                                              const CfNormalizationResult &normalization,
                                               const std::vector<double> *seed_values = nullptr,
                                               const std::vector<PMLFixedParameter> &temporary_fixed = {},
                                               const bool run_hesse = true) {
@@ -2760,7 +2835,7 @@ namespace exp_femto_3d {
         result.setup_error = true;
         return result;
       }
-      const double raw_to_normalized_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw);
+      const double raw_to_normalized_scale = ComputeRawToNormalizedCFScale(h_se_raw, h_me_raw, normalization);
       if (raw_to_normalized_scale <= 0.0 || !std::isfinite(raw_to_normalized_scale)) {
         result.setup_error = true;
         return result;
@@ -2778,12 +2853,20 @@ namespace exp_femto_3d {
       minuit.SetFCN(Levy3DPMLFCN);
       minuit.SetPrintLevel(-1);
       minuit.SetErrorDef(1.0);
+      if (g_active_cats3d_model) {
+        // Grid-fold roundoff and the established count-log PML arithmetic are
+        // noisier than machine epsilon near an Asimov/toy minimum. Tell Minuit
+        // the objective precision so HESSE does not differentiate that noise.
+        Double_t precision[1]={1e-8}; Int_t precision_status=0;
+        minuit.mnexcm("SET EPS",precision,1,precision_status);
+        if(precision_status!=0) { result.setup_error=true; return result; }
+      }
       if (!ConfigurePMLMinuit(minuit, fit_function, use_full_model, fit_options, seed_values, temporary_fixed)) {
         result.setup_error = true;
         return result;
       }
       Int_t error_code = 0;
-      Double_t arglist[2] = {100000, 0.1};
+      Double_t arglist[2] = {g_active_cats3d_model ? double(g_active_cats3d_model->PmlMaxCalls()) : 100000.0, 0.1};
       const auto migrad_start = std::chrono::steady_clock::now();
       minuit.mnexcm("MIGRAD", arglist, 2, error_code);
       const auto migrad_end = std::chrono::steady_clock::now();
@@ -2841,13 +2924,14 @@ namespace exp_femto_3d {
                    TH3D *h_me_raw,
                    const bool use_full_model,
                    const LevyFitOptions &fit_options,
+                   const CfNormalizationResult &normalization,
                    double &fit_statistic,
                    int &ndf,
                    int &fit_status,
                    double &edm,
                    int &minuit_istat) {
       const PMLMinimizationResult result =
-          RunPMLMinimization(fit_function, h_se_raw, h_me_raw, use_full_model, fit_options);
+          RunPMLMinimization(fit_function, h_se_raw, h_me_raw, use_full_model, fit_options, normalization);
       if (result.setup_error) return false;
       fit_statistic = result.objective;
       edm = result.edm;
@@ -3009,10 +3093,15 @@ namespace exp_femto_3d {
     }
 
     std::string BuildFitModeTitle(const LevyFitResult &fit_result) {
+      if (fit_result.correlation_backend=="cats3d")
+        return fit_result.has_off_diagonal ? "CATS3D full Gaussian fit" : "CATS3D diagonal Gaussian fit";
       return fit_result.has_off_diagonal ? "Full Levy fit" : "Diagonal Levy fit";
     }
 
     std::string BuildFitSwitchLine(const LevyFitResult &fit_result) {
+      if (fit_result.correlation_backend=="cats3d")
+        return std::string("CATS3D ")+(fit_result.uses_coulomb ? "Coulomb + QS" : "plane wave + QS")
+          +", external fixed lambda, q^{2} baseline: "+(fit_result.uses_q2_baseline ? "on" : "off");
       std::string coulomb_text = "Coulomb: " + fit_result.coulomb_mode;
       if (!fit_result.finite_source_mode.empty()) {
         coulomb_text += "/" + fit_result.finite_source_mode;
@@ -3074,7 +3163,11 @@ namespace exp_femto_3d {
       box->AddText(BuildFitModeTitle(fit_result).c_str());
       box->AddText(BuildFitSwitchLine(fit_result).c_str());
       box->AddText(FormatParameterLine("N", fit_result.norm, fit_result.norm_err).c_str());
-      if (fit_result.uses_core_halo_lambda) {
+      if (fit_result.lambda_is_external_fixed) {
+        box->AddText(std::isfinite(fit_result.lambda)
+            ? ("#lambda external fixed = "+FormatDouble(fit_result.lambda,4)).c_str()
+            : "#lambda(k) external fixed: see LambdaMap3D");
+      } else if (fit_result.uses_core_halo_lambda) {
         box->AddText(FormatParameterLine("#lambda", fit_result.lambda, fit_result.lambda_err).c_str());
       } else {
         box->AddText("#lambda fixed = 1.000");
@@ -3116,6 +3209,10 @@ namespace exp_femto_3d {
                                    const std::string &x_title,
                                    const LevyFitResult &fit_result) {
       StyleProjectionHistogram(data_histogram, kBlack, 20, x_title);
+      if (fit_result.correlation_backend == "cats3d") {
+        data_histogram->SetTitle("CATS3D Gaussian projection");
+        data_histogram->SetStats(false);
+      }
       StyleProjectionCurve(fit_graph, kRed + 1);
       const double max_value = std::max(data_histogram->GetMaximum(), GetGraphMaximum(fit_graph));
       data_histogram->SetMaximum(max_value * 1.15);
@@ -3129,7 +3226,9 @@ namespace exp_femto_3d {
       auto *legend = new TLegend(0.62, 0.72, 0.88, 0.88);
       legend->SetBorderSize(0);
       legend->AddEntry(data_histogram, "Data projection", "lep");
-      legend->AddEntry(fit_graph, "Levy fit projection", "l");
+      legend->AddEntry(fit_graph,
+                       fit_result.correlation_backend == "cats3d" ? "CATS3D model projection" : "Levy fit projection",
+                       "l");
       legend->Draw();
 
       const double y1 =
@@ -3173,6 +3272,7 @@ namespace exp_femto_3d {
       std::unique_ptr<TF3> fit_function;
       LevyFitResult result;
       std::optional<PMLMinimizationResult> pml_minimization;
+      bool model_domain_valid = true;
     };
 
     double ComputeEffectiveRadiusFromResult(const LevyFitResult &result) {
@@ -3196,6 +3296,7 @@ namespace exp_femto_3d {
                                    const int fit_minuit_istat,
                                    const double finite_source_radius_fm,
                                    LevyFitResult &fit_result) {
+      fit_result.normalization = entry.normalization;
       fit_result.fit_model = ToString(model);
       fit_result.slice_id = entry.slice_id;
       fit_result.group_id = entry.group_id;
@@ -3212,6 +3313,7 @@ namespace exp_femto_3d {
       fit_result.qn_high = entry.qn_high;
       fit_result.qn_label = entry.qn_label;
       const PhiSliceCoordinates fit_phi_coordinates = ResolveSlicePhiCoordinates(entry, fit_uses_symmetric_phi_range);
+      fit_result.phi_mode = entry.phi_mode;
       fit_result.raw_phi_low = entry.raw_phi_low;
       fit_result.raw_phi_high = entry.raw_phi_high;
       fit_result.display_phi_low = fit_phi_coordinates.low;
@@ -3276,7 +3378,8 @@ namespace exp_femto_3d {
                                                        const LevyFitOptions &fit_options,
                                                        const bool fit_uses_symmetric_phi_range,
                                                        const CoulombKernelTable *coulomb_kernel,
-                                                       const bool run_pml_hesse = true) {
+                                                       const bool run_pml_hesse = true,
+                                                       const std::vector<double> *seed_parameters = nullptr) {
       if (fit_options.coulomb_mode == CoulombMode::kFiniteSource && coulomb_kernel == nullptr) {
         throw std::runtime_error("Finite-source Coulomb fit has no prepared kernel for group " + entry.group_id + ".");
       }
@@ -3286,6 +3389,20 @@ namespace exp_femto_3d {
                                     ? BuildFullLevyFitFunction(entry.slice_id + "_levy3d_full_fit", fit_options)
                                     : BuildLevyFitFunction(entry.slice_id + "_levy3d_fit", fit_options));
 
+      if(g_active_cats3d_model) {
+        output.fit_function->SetParName(1,"ExternalLambdaCarrierFixed");
+        output.fit_function->SetParName(model==FitModel::kFull?8:5,"GaussianAlphaFixed");
+      }
+      std::vector<double> seed;
+      if (seed_parameters) {
+        seed = *seed_parameters;
+        if (seed.size() != static_cast<std::size_t>(output.fit_function->GetNpar()))
+          throw std::runtime_error("Fit seed parameter count mismatch.");
+        for (int i=0;i<output.fit_function->GetNpar();++i) {
+          if (IsPMLParameterFixed(i, model==FitModel::kFull, fit_options)) seed[i]=output.fit_function->GetParameter(i);
+          else output.fit_function->SetParameter(i,seed[i]);
+        }
+      }
       double fit_statistic = 0.0;
       double fit_edm = std::numeric_limits<double>::quiet_NaN();
       int fit_ndf = 0;
@@ -3301,7 +3418,8 @@ namespace exp_femto_3d {
                                                       h_me_raw,
                                                       model == FitModel::kFull,
                                                       fit_options,
-                                                      nullptr,
+                                                      entry.normalization,
+                                                      seed.empty() ? nullptr : &seed,
                                                       {},
                                                       run_pml_hesse);
         fit_succeeded = !output.pml_minimization->setup_error;
@@ -3313,11 +3431,19 @@ namespace exp_femto_3d {
         fit_status = output.pml_minimization->migrad_status != 0 ? -output.pml_minimization->migrad_status
                                                                  : output.pml_minimization->minuit_istat;
       } else {
-        const auto fit_status_object = h_cf->Fit(output.fit_function.get(), "RSMNQ0");
+        // The optional legacy IMPROVE post-search can report status 4000 even
+        // after MIGRAD/HESSE succeeded. CATS3D uses the default ROOT fit only;
+        // its minimum still requires status=0 and accurate covariance.
+        const auto fit_status_object = h_cf->Fit(output.fit_function.get(),
+                                                 g_active_cats3d_model ? "RSNQ0" : "RSMNQ0");
         fit_statistic = output.fit_function->GetChisquare();
         fit_ndf = output.fit_function->GetNDF();
         fit_status = static_cast<int>(fit_status_object);
-        fit_succeeded = true;
+        fit_succeeded = g_active_cats3d_model ? (fit_status==0) : true;
+        if (g_active_cats3d_model && fit_status_object.Get()) {
+          fit_edm=fit_status_object->Edm();
+          fit_minuit_istat=fit_status_object->CovMatrixStatus();
+        }
       }
 
       const double finite_source_radius_fm =
@@ -3354,6 +3480,39 @@ namespace exp_femto_3d {
       } else {
         output.result.point_estimate_valid = fit_succeeded;
         output.result.parameter_errors_valid = fit_succeeded;
+      }
+      if (g_active_cats3d_model) {
+        output.result.correlation_backend="cats3d";
+        output.result.lambda_is_external_fixed=true;
+        output.result.lambda=g_active_cats3d_model->ScalarLambda();
+        output.result.lambda_err=std::isfinite(output.result.lambda) ? 0.0 : std::numeric_limits<double>::quiet_NaN();
+        output.result.lambda_input_kind=g_active_cats3d_model->LambdaInput().Input().kind;
+        output.result.lambda_input_meaning=g_active_cats3d_model->LambdaInput().Input().meaning;
+        output.result.lambda_input_object_path="fits/"+entry.slice_id+"/LambdaMap3D";
+        output.result.uses_coulomb=g_active_cats3d_model->WithCoulomb();
+        output.result.coulomb_mode=output.result.uses_coulomb ? "cats3d" : "none";
+        output.result.edm=fit_edm;
+        output.result.minuit_istat=fit_minuit_istat;
+        if (!fit_options.use_pml) output.result.parameter_errors_valid=fit_succeeded && fit_minuit_istat==3;
+        try { g_active_cats3d_model->Prepare(output.fit_function->GetParameters(),model==FitModel::kFull); }
+        catch (const Cats3DDomainError &error) {
+          output.model_domain_valid=false;
+          output.result.point_estimate_valid=false;
+          output.result.parameter_errors_valid=false;
+          output.result.fit_failure_reason=error.what();
+        }
+        if (!output.result.point_estimate_valid) {
+          output.result.fit_statistic=std::numeric_limits<double>::quiet_NaN();
+          if(output.result.fit_failure_reason.empty()) output.result.fit_failure_reason="Minimizer did not converge or setup failed";
+        }
+        if (!output.result.parameter_errors_valid) {
+          const double nan=std::numeric_limits<double>::quiet_NaN();
+          output.result.norm_err=output.result.rout2_err=output.result.rside2_err=output.result.rlong2_err=nan;
+          output.result.routside2_err=output.result.routlong2_err=output.result.rsidelong2_err=nan;
+          output.result.baseline_q2_err=fit_options.use_q2_baseline ? nan : 0;
+          if (output.pml_minimization) std::fill(output.pml_minimization->errors.begin(),output.pml_minimization->errors.end(),nan);
+        }
+        return std::optional<SingleSliceFitOutput>(std::move(output));
       }
       if (!fit_succeeded) {
         return std::nullopt;
@@ -3694,7 +3853,7 @@ namespace exp_femto_3d {
         }
         local_parameters.push_back(std::move(parameters));
         contexts.push_back(MakePMLContext(h_se_raw[member], h_me_raw[member], use_full_model,
-                                          fit_options, coulomb_kernel));
+                                          fit_options, coulomb_kernel, entry.normalization));
         output.group.usable_bins += CountPMLUsableBins(h_se_raw[member], h_me_raw[member], fit_options.fit_q_max);
       }
       const shared_lambda::ParameterLayout layout =
@@ -3882,7 +4041,7 @@ namespace exp_femto_3d {
         nominal_values.push_back(std::move(nominal));
         local_parameters.push_back(std::move(parameters));
         contexts.push_back(MakePMLContext(h_se_raw[member], h_me_raw[member], use_full_model,
-                                          fit_options, coulomb_kernel));
+                                          fit_options, coulomb_kernel, entry.normalization));
         output.group.usable_bins += CountPMLUsableBins(
             h_se_raw[member], h_me_raw[member], fit_options.fit_q_max);
       }
@@ -3908,7 +4067,7 @@ namespace exp_femto_3d {
             : BuildLevyFitFunction(entries[member]->slice_id + "_combined_profile_point", fit_options));
         return ToProfileResult(RunPMLMinimization(
             function.get(), h_se_raw[member], h_me_raw[member], use_full_model, fit_options,
-            &seed, {{1, lambda}}, false));
+            entries[member]->normalization, &seed, {{1, lambda}}, false));
       };
       std::optional<combined_profile::Result> resume_state;
       if (resume_stage_checkpoint && stage_checkpoint_path.has_value()
@@ -4121,7 +4280,8 @@ namespace exp_femto_3d {
                 "\tnorm\tnormErr\tlambda\tlambdaErr\tRout2\tRout2Err\tRside2\tRside2Err"
                 "\tRlong2\tRlong2Err\tRoutside2\tRoutside2Err\tRoutlong2\tRoutlong2Err"
                 "\tRsidelong2\tRsidelong2Err\talpha\talphaErr\tbaselineQ2\tbaselineQ2Err"
-                "\tfitStatistic\tedm\tndf\tstatus\tminuitIstat\tcovarianceQuality\n";
+                "\tfitStatistic\tedm\tndf\tstatus\tminuitIstat\tcovarianceQuality"
+                "\tcorrelationBackend\tlambdaExternalFixed\tlambdaInputKind\tlambdaInputMeaning\tlambdaInputObjectPath\n";
       output << std::fixed << std::setprecision(6);
       for (const LevyFitResult &result : results) {
         output << result.slice_id << "\t" << result.group_id << "\t" << result.fit_model << "\t"
@@ -4147,7 +4307,9 @@ namespace exp_femto_3d {
                << result.alpha << "\t" << result.alpha_err << "\t" << result.baseline_q2 << "\t"
                << result.baseline_q2_err << "\t" << result.fit_statistic << "\t" << result.edm << "\t" << result.ndf
                << "\t" << result.status << "\t" << result.minuit_istat << "\t"
-               << CovarianceQualityToken(result.minuit_istat) << "\n";
+               << CovarianceQualityToken(result.minuit_istat) << "\t" << result.correlation_backend << "\t"
+               << result.lambda_is_external_fixed << "\t" << result.lambda_input_kind << "\t"
+               << result.lambda_input_meaning << "\t" << result.lambda_input_object_path << "\n";
       }
     }
 
@@ -4156,6 +4318,11 @@ namespace exp_femto_3d {
       meta_directory->cd();
 
       auto tree = std::make_unique<TTree>("FitCatalog", "FitCatalog");
+      std::unique_ptr<CfNormalizationTreeWriter> normalization_writer;
+      if (std::any_of(results.begin(), results.end(), [](const auto &r) { return r.normalization.present; }))
+        normalization_writer = std::make_unique<CfNormalizationTreeWriter>(*tree);
+      std::string correlation_backend,lambda_input_kind,lambda_input_meaning,lambda_input_object_path;
+      int lambda_is_external_fixed=0;
       std::string slice_id;
       std::string group_id;
       std::string fit_model;
@@ -4170,6 +4337,7 @@ namespace exp_femto_3d {
       double qn_low = std::numeric_limits<double>::quiet_NaN();
       double qn_high = std::numeric_limits<double>::quiet_NaN();
       std::string qn_label;
+      std::string phi_mode;
       double phi = 0.0;
       double raw_phi_low = 0.0;
       double raw_phi_high = 0.0;
@@ -4236,6 +4404,7 @@ namespace exp_femto_3d {
       tree->Branch("qn_low", &qn_low);
       tree->Branch("qn_high", &qn_high);
       tree->Branch("qn_label", &qn_label);
+      tree->Branch("phi_mode", &phi_mode);
       tree->Branch("phi", &phi);
       tree->Branch("raw_phi_low", &raw_phi_low);
       tree->Branch("raw_phi_high", &raw_phi_high);
@@ -4291,7 +4460,19 @@ namespace exp_femto_3d {
       tree->Branch("at_parameter_boundary", &at_parameter_boundary);
       tree->Branch("fit_failure_reason", &fit_failure_reason);
 
+      tree->Branch("correlation_backend",&correlation_backend);
+      tree->Branch("lambda_is_external_fixed",&lambda_is_external_fixed);
+      tree->Branch("lambda_input_kind",&lambda_input_kind);
+      tree->Branch("lambda_input_meaning",&lambda_input_meaning);
+      tree->Branch("lambda_input_object_path",&lambda_input_object_path);
+
       for (const LevyFitResult &result : results) {
+        if (normalization_writer) normalization_writer->Set(result.normalization);
+        correlation_backend=result.correlation_backend;
+        lambda_is_external_fixed=result.lambda_is_external_fixed;
+        lambda_input_kind=result.lambda_input_kind;
+        lambda_input_meaning=result.lambda_input_meaning;
+        lambda_input_object_path=result.lambda_input_object_path;
         slice_id = result.slice_id;
         group_id = result.group_id;
         fit_model = result.fit_model;
@@ -4306,6 +4487,7 @@ namespace exp_femto_3d {
         qn_low = result.qn_low;
         qn_high = result.qn_high;
         qn_label = result.qn_label;
+        phi_mode = result.phi_mode;
         phi = result.phi;
         raw_phi_low = result.raw_phi_low;
         raw_phi_high = result.raw_phi_high;
@@ -4898,7 +5080,7 @@ namespace exp_femto_3d {
       output_file.cd();
     }
 
-    void WriteR2Graphs(TFile &output_file,
+    void WriteR2GraphsForPeriod(TDirectory &output_file,
                        const std::vector<LevyFitResult> &results,
                        const std::vector<SharedLambdaFitResult> &shared_results = {}) {
       std::map<std::string, std::vector<LevyFitResult>> grouped_results;
@@ -4920,9 +5102,7 @@ namespace exp_femto_3d {
         auto *directory = GetOrCreateDirectoryPath(output_file, "summary/R2_vs_phi/" + group_id);
         directory->cd();
 
-        const bool uses_mapped_phi_range = group_results.front().fit_uses_symmetric_phi_range;
-        const double phi_fit_min = uses_mapped_phi_range ? -TMath::Pi() / 2.0 : 0.0;
-        const double phi_fit_max = uses_mapped_phi_range ? TMath::Pi() / 2.0 : TMath::Pi();
+        const auto [phi_fit_min, phi_fit_max] = ResolveSummaryPhiRange(group_results);
         const int n_points = static_cast<int>(group_results.size());
         const bool has_off_diagonal =
             std::any_of(group_results.begin(), group_results.end(), [](const LevyFitResult &result) {
@@ -5005,6 +5185,9 @@ namespace exp_femto_3d {
           derived_harmonics->Branch("failure_reason", &derived_failure_reason);
         }
 
+        for (auto *graph : {g_rout2, g_rside2, g_rlong2, g_routside2, g_routlong2,
+                            g_rsidelong2, g_alpha, g_lambda, g_baseline_q2})
+          if (graph) graph->GetXaxis()->SetLimits(phi_fit_min, phi_fit_max);
         g_rout2->SetName("Rout2_vs_phi");
         g_rside2->SetName("Rside2_vs_phi");
         g_rlong2->SetName("Rlong2_vs_phi");
@@ -5153,11 +5336,20 @@ namespace exp_femto_3d {
       }
     }
 
+    void WriteR2Graphs(TFile &output_file, const std::vector<LevyFitResult> &results,
+                       const std::vector<SharedLambdaFitResult> &shared_results = {}) {
+      for (const auto &[period, members] : PartitionPhiReports(results)) {
+        auto *root = period.empty() ? &output_file : GetOrCreateDirectoryPath(output_file, period);
+        WriteR2GraphsForPeriod(*root, members, shared_results);
+      }
+    }
+
     // Write one publication-style source-parameter canvas for each fitted cent/mT group.
     void WriteSourceParameterOverviewCanvases(
         TDirectory &directory,
         const std::vector<LevyFitResult> &results,
-        const std::vector<SharedLambdaFitResult> &shared_results) {
+        const std::vector<SharedLambdaFitResult> &shared_results,
+        const bool fit_trends = true) {
       const GroupedFitResults grouped_results = GroupPhiDifferentialResultsByCentMt(results);
       const std::array<std::string, 6> graph_names = {
           "Rout2_vs_phi", "Rside2_vs_phi", "Rlong2_vs_phi", "Routside2_vs_phi", "Routlong2_vs_phi",
@@ -5209,7 +5401,18 @@ namespace exp_femto_3d {
           info_pad->SetRightMargin(0.04);
           info_pad->SetBottomMargin(0.04);
           info_pad->SetTopMargin(0.04);
-          CreateSourceParameterOverviewInfoBox(group_results.front())->Draw();
+          auto *info = CreateSourceParameterOverviewInfoBox(group_results.front());
+          if (!fit_trends) {
+            info->SetTextSize(.042);
+            const auto usable = std::count_if(group_results.begin(), group_results.end(), [](const auto &r) {
+              return r.point_estimate_valid && r.parameter_errors_valid;
+            });
+            info->AddText(("Valid phi errors: " + std::to_string(usable) + "/" +
+                           std::to_string(group_results.size()) + " (incomplete)").c_str());
+            info->AddText("No harmonic / #epsilon_{f} fit");
+            info->AddText("See conditional_error_status_canvas");
+          }
+          info->Draw();
         }
 
         DrawOverviewGraph(*canvas,
@@ -5220,9 +5423,11 @@ namespace exp_femto_3d {
                                               relative_phi_title,
                                               "#alpha"),
                           -1,
-                          group_results.front().fit_uses_symmetric_phi_range,
+                          ResolveSummaryPhiRange(group_results),
                           owned_graphs,
-                          owned_fits);
+                          owned_fits,
+                          nullptr,
+                          fit_trends && group_results.front().correlation_backend != "cats3d");
 
         // Keep the same visual panel order as the Eventgen overview: alpha first,
         // then out/cross, side/cross, and long/cross rows.
@@ -5243,10 +5448,11 @@ namespace exp_femto_3d {
                                                 relative_phi_title,
                                                 graph_titles[radius_index] + " [fm^{2}]"),
                             static_cast<int>(radius_index),
-                            group_results.front().fit_uses_symmetric_phi_range,
+                            ResolveSummaryPhiRange(group_results),
                             owned_graphs,
                             owned_fits,
-                            shared != nullptr ? &shared_harmonic : nullptr);
+                            shared != nullptr ? &shared_harmonic : nullptr,
+                            fit_trends);
         }
 
         canvas->Modified();
@@ -5274,9 +5480,7 @@ namespace exp_femto_3d {
         if (!qn_directory_name.empty()) target_directory = GetOrCreateDirectory(*mt_directory, qn_directory_name);
         target_directory->cd();
 
-        const bool mapped = group_results.front().fit_uses_symmetric_phi_range;
-        const double x_min = mapped ? -TMath::Pi() / 2.0 : 0.0;
-        const double x_max = mapped ? TMath::Pi() / 2.0 : TMath::Pi();
+        const auto [x_min, x_max] = ResolveSummaryPhiRange(group_results);
         const double lambda = !shared->parameter_values.empty()
                                   ? shared->parameter_values.front()
                                   : std::numeric_limits<double>::quiet_NaN();
@@ -5400,6 +5604,16 @@ namespace exp_femto_3d {
         auto graph = std::make_unique<TGraphErrors>(valid_count);
         graph->SetName("epsf_vs_mt");
         graph->SetTitle("#epsilon_{f} vs m_{T}");
+        const auto representative = std::find_if(grouped_results.begin(), grouped_results.end(), [&](const auto &g) {
+          return !g.second.empty() && g.second.front().centrality_index == entry.first.first &&
+                 g.second.front().qn_index == entry.first.second;
+        });
+        if (representative != grouped_results.end() && representative->second.front().correlation_backend == "cats3d") {
+          const auto &r = representative->second.front();
+          const std::string weight = std::isfinite(r.lambda) ? "#lambda=" + FormatDouble(r.lambda, 3) : "fixed #lambda table";
+          graph->SetTitle(("#epsilon_{f} vs m_{T} (CATS3D, " + weight + ", cent " +
+                           FormatRangeText(r.cent_low, r.cent_high) + "%)").c_str());
+        }
         graph->GetXaxis()->SetTitle("m_{T} [GeV/c^{2}]");
         graph->GetYaxis()->SetTitle("#epsilon_{f} = 2R_{s,2}^{2}/R_{s,0}^{2}");
         ApplyReportGraphStyle(*graph);
@@ -5445,12 +5659,15 @@ namespace exp_femto_3d {
       WriteSharedLambdaFitResults(*output_file, shared_lambda_results);
       WriteCombinedProfileResults(*output_file, combined_profile_records, shared_lambda_results);
       WriteCoulombKernelCatalogTree(*output_file, kernel_catalog_entries);
-      WriteR2Graphs(*output_file, fit_results, shared_lambda_results);
-      auto *source_parameters_directory = GetOrCreateDirectoryPath(*output_file, "source_parameters");
-      WriteSourceParameterOverviewCanvases(*source_parameters_directory, fit_results, shared_lambda_results);
-      WriteSharedLambdaCanvases(*source_parameters_directory, fit_results, shared_lambda_results);
-      auto *eps_directory = GetOrCreateDirectoryPath(*output_file, "eps_vs_mt");
-      WriteEpsVsMtGraphs(*eps_directory, fit_results, shared_lambda_results);
+      for (const auto &[period, members] : PartitionPhiReports(fit_results)) {
+        TDirectory *root = period.empty() ? output_file.get() : GetOrCreateDirectoryPath(*output_file, period);
+        WriteR2GraphsForPeriod(*root, members, shared_lambda_results);
+        auto *source = GetOrCreateDirectoryPath(*root, "source_parameters");
+        WriteSourceParameterOverviewCanvases(*source, members, shared_lambda_results);
+        WriteSharedLambdaCanvases(*source, members, shared_lambda_results);
+        auto *eps = GetOrCreateDirectoryPath(*root, "eps_vs_mt");
+        WriteEpsVsMtGraphs(*eps, members, shared_lambda_results);
+      }
       output_file->Write();
       output_file->Close();
     }
@@ -5630,7 +5847,7 @@ namespace exp_femto_3d {
         for (const int value : values) contract << value << ',';
       };
 
-      contract << "profile-contract-v4|display-contract-v3|model=" << ToString(model)
+      contract << "profile-contract-v5|normalization-contract-v1|display-contract-v3|model=" << ToString(model)
                << "|coulomb=" << static_cast<int>(config.fit.options.coulomb_mode)
                << "|finite_source=" << static_cast<int>(config.fit.options.finite_source_mode)
                << "|core_halo_lambda=" << config.fit.options.use_core_halo_lambda
@@ -5676,7 +5893,16 @@ namespace exp_femto_3d {
         contract << '|';
       }
 
-      for (const SliceCatalogEntry *entry : entries) contract << "slice=" << entry->slice_id << '|';
+      for (const SliceCatalogEntry *entry : entries) {
+        contract << "slice=" << entry->slice_id << "|normalization=" << ToString(entry->normalization.config.mode);
+        if (entry->normalization.present) {
+          for (const auto &range : entry->normalization.config.ranges)
+            contract << ':' << range[0] << ',' << range[1];
+          contract << ':' << entry->normalization.se_integral << ':' << entry->normalization.me_integral
+                   << ':' << entry->normalization.cf_scale;
+        } else contract << ":legacy";
+        contract << '|';
+      }
       for (const ResolvedProfileScan &scan : resolved_scans) {
         contract << "scan=" << scan.config->id << ":refine=" << scan.config->refine << ":parameters=";
         for (const std::string &parameter : scan.config->parameters) contract << parameter << ',';
@@ -5727,9 +5953,10 @@ namespace exp_femto_3d {
     void ConfigurePMLContextForEvaluation(TH3D *h_se_raw,
                                           TH3D *h_me_raw,
                                           const bool use_full_model,
-                                          const LevyFitOptions &fit_options) {
+                                          const LevyFitOptions &fit_options,
+                                          const CfNormalizationResult &normalization) {
       g_levy_3d_pml_context =
-          MakePMLContext(h_se_raw, h_me_raw, use_full_model, fit_options, g_active_coulomb_kernel);
+          MakePMLContext(h_se_raw, h_me_raw, use_full_model, fit_options, g_active_coulomb_kernel, normalization);
     }
 
     profile_likelihood::MinimizationResult ToProfileResult(const PMLMinimizationResult &result) {
@@ -5785,7 +6012,7 @@ namespace exp_femto_3d {
                                            const bool run_hesse,
                                            const SingleSliceFitOutput &nominal) {
       ActiveCoulombKernelGuard kernel_guard(kernel);
-      ConfigurePMLContextForEvaluation(h_se_raw, h_me_raw, model == FitModel::kFull, fit_options);
+      ConfigurePMLContextForEvaluation(h_se_raw, h_me_raw, model == FitModel::kFull, fit_options, entry.normalization);
       ProfileSliceOutput output;
       std::vector<double> nominal_values(static_cast<std::size_t>(nominal.fit_function->GetNpar()));
       for (int index = 0; index < nominal.fit_function->GetNpar(); ++index) {
@@ -5808,7 +6035,7 @@ namespace exp_femto_3d {
           std::vector<PMLFixedParameter> fixed;
           for (std::size_t axis = 0; axis < indices.size(); ++axis) fixed.push_back({indices[axis], values[axis]});
           return ToProfileResult(RunPMLMinimization(function.get(), h_se_raw, h_me_raw,
-                                                     model == FitModel::kFull, fit_options, &seed, fixed, run_hesse));
+                                                     model == FitModel::kFull, fit_options, entry.normalization, &seed, fixed, run_hesse));
         };
         auto evaluate_slice = [&](const std::vector<int> &indices, const std::vector<double> &values) {
           if (!write_likelihood_slice) return profile_likelihood::SliceEvaluation{};
@@ -6710,6 +6937,9 @@ namespace exp_femto_3d {
       parameter_catalog->Branch("nominal_value", &nominal_value); parameter_catalog->Branch("fixed", &fixed);
       auto catalog = std::make_unique<TTree>("ProfileLikelihoodCatalog", "ProfileLikelihoodCatalog");
       catalog->SetDirectory(nullptr);
+      std::unique_ptr<CfNormalizationTreeWriter> normalization_writer;
+      if (std::any_of(records.begin(), records.end(), [](const auto &r) { return r.entry.normalization.present; }))
+        normalization_writer = std::make_unique<CfNormalizationTreeWriter>(*catalog);
       std::string slice_id, group_id, slice_directory, scan_id, model_name, objective_kind, targets, nominal_source;
       std::string reference_source;
       std::string refinement_reason, finite_source_mode, kernel_group_id, qn_label, mt_rebin_mode, phi_rebin_mode;
@@ -6806,6 +7036,7 @@ namespace exp_femto_3d {
       catalog->Branch("kernel_kstar_bin_count", &kernel_kstar_bin_count);
       catalog->Branch("finite_kernel_seed_is_phi_all", &finite_kernel_seed_is_phi_all);
       for (const ProfileRunRecord &record : records) {
+        if (normalization_writer) normalization_writer->Set(record.entry.normalization);
         std::unique_ptr<TF3> parameter_function(model == FitModel::kFull
                                                     ? BuildFullLevyFitFunction("profile_parameter_catalog", config.fit.options)
                                                     : BuildLevyFitFunction("profile_parameter_catalog", config.fit.options));
@@ -6916,6 +7147,10 @@ namespace exp_femto_3d {
     const std::string se_path = BuildSparseObjectPath(config, config.input.same_event_subtask);
     const std::string me_path = BuildSparseObjectPath(config, config.input.mixed_event_subtask);
 
+    const InputAxisLayout axes = ResolveInputAxisLayout(config.input.format);
+    logger.Info("Input format=" + ToString(config.input.format) + " q=0/1/2 mT=" + std::to_string(axes.mt)
+                + " centrality=" + std::to_string(axes.centrality) + " phi=" + std::to_string(axes.phi)
+                + " q-vector=" + std::to_string(axes.qn) + " phi_mode=" + ToString(config.build.phi_mode) + " SE=" + se_path + " ME=" + me_path);
     auto input_file = OpenRootFile(config.input.input_root, "READ");
     THnSparseF *h_se_origin = nullptr;
     THnSparseF *h_me_origin = nullptr;
@@ -6923,34 +7158,50 @@ namespace exp_femto_3d {
       h_se_origin = dynamic_cast<THnSparseF *>(input_file->Get(se_path.c_str()));
       h_me_origin = dynamic_cast<THnSparseF *>(input_file->Get(me_path.c_str()));
       if (h_se_origin == nullptr || h_me_origin == nullptr) {
-        throw std::runtime_error("Cannot resolve required THnSparse inputs from ROOT file.");
+        throw std::runtime_error("input.format=" + ToString(config.input.format)
+                                 + ": expected THnSparseF inputs at SE=" + se_path + " ME=" + me_path);
       }
-      h_se_origin->Sumw2();
-      h_me_origin->Sumw2();
+      ValidateInputSparses(*h_se_origin, *h_me_origin, config.input, axes, se_path, me_path);
+      if (!h_se_origin->GetCalculateErrors()) h_se_origin->Sumw2();
+      if (!h_me_origin->GetCalculateErrors()) h_me_origin->Sumw2();
     };
     load_input_sparses();
 
-    TAxis *mt_axis = h_se_origin->GetAxis(3);
-    TAxis *phi_axis = h_se_origin->GetAxis(6);
-    TAxis *me_mt_axis = h_me_origin->GetAxis(3);
-    TAxis *me_phi_axis = h_me_origin->GetAxis(6);
-    TAxis *qn_axis = h_se_origin->GetAxis(5);
+    TAxis *mt_axis = h_se_origin->GetAxis(axes.mt);
+    TAxis *phi_axis = h_se_origin->GetAxis(axes.phi);
+    TAxis *me_mt_axis = h_me_origin->GetAxis(axes.mt);
+    TAxis *me_phi_axis = h_me_origin->GetAxis(axes.phi);
+    TAxis *qn_axis = h_se_origin->GetAxis(axes.qn);
     if (mt_axis == nullptr || phi_axis == nullptr || me_mt_axis == nullptr || me_phi_axis == nullptr
-        || qn_axis == nullptr || h_me_origin->GetAxis(5) == nullptr) {
-      throw std::runtime_error("Cannot resolve mT/phi/qn axes 3/6/5 from required THnSparse inputs.");
+        || qn_axis == nullptr || h_me_origin->GetAxis(axes.qn) == nullptr) {
+      throw std::runtime_error("Cannot resolve mT/phi/qn axes for input.format=" + ToString(config.input.format));
     }
     ValidateCompatibleAxes(*mt_axis, *me_mt_axis, "mT");
     ValidateCompatibleAxes(*phi_axis, *me_phi_axis, "phi");
-    const int n_phi_bins = phi_axis->GetNbins();
-    const double full_raw_phi_low = phi_axis->GetBinLowEdge(1);
-    const double full_raw_phi_high = phi_axis->GetBinUpEdge(phi_axis->GetNbins());
+    const std::array<const TAxis *, 3> se_q_axes = {
+        h_se_origin->GetAxis(axes.q[0]), h_se_origin->GetAxis(axes.q[1]), h_se_origin->GetAxis(axes.q[2])};
+    const std::array<const TAxis *, 3> me_q_axes = {
+        h_me_origin->GetAxis(axes.q[0]), h_me_origin->GetAxis(axes.q[1]), h_me_origin->GetAxis(axes.q[2])};
+    ValidateCfNormalizationAxes(se_q_axes, me_q_axes);
+    const auto normalization_region = ResolveCfNormalizationRegion(config.build.normalization, se_q_axes);
+    const TAxis selection_phi_axis = ResolvePhiSelectionAxis(*phi_axis, config.build.phi_mode);
+    const int n_phi_bins = selection_phi_axis.GetNbins();
+    const double full_raw_phi_low = selection_phi_axis.GetBinLowEdge(1);
+    const double full_raw_phi_high = selection_phi_axis.GetBinUpEdge(n_phi_bins);
+
+    ValidateSymmetricPhiDomain(full_raw_phi_low, full_raw_phi_high, config.build.map_pair_phi_to_symmetric_range);
 
     // Resolve all target selections before projection so invalid boundaries fail without partial output.
     const std::vector<AxisSliceSelection> mt_selections =
         ResolveAxisSliceSelections(*mt_axis, config.build.mt_rebin, config.mt_bins, "mt");
     const std::vector<AxisSliceSelection> phi_selections =
-        ResolveAxisSliceSelections(*phi_axis, config.build.phi_rebin, config.phi_bins, "phi");
+        ResolveAxisSliceSelections(selection_phi_axis, config.build.phi_rebin, config.phi_bins, "phi");
     ValidatePhiMappingSeam(phi_selections, config.build.map_pair_phi_to_symmetric_range);
+    if (config.build.phi_mode == PhiMode::kSeparate && full_raw_phi_high > kPi+1.e-5) {
+      for (const auto &selection : phi_selections)
+        if (selection.range.min < kPi-1.e-5 && selection.range.max > kPi+1.e-5)
+          throw std::runtime_error("Separate phi rebin interval straddles pi; align bins with the half-period boundary.");
+    }
     const std::vector<QnSliceSelection> qn_slice_selections = BuildQnSliceSelections(config, *qn_axis);
     ValidateUniqueSliceIdentifiers(config, mt_selections, phi_selections, qn_slice_selections);
 
@@ -6998,13 +7249,13 @@ namespace exp_femto_3d {
             centrality_bin, mt_bin, mt_selection.output_index, config.build.mt_rebin.enabled);
         logger.Debug("Building base group " + base_group_id);
 
-        h_se_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
-        h_se_origin->GetAxis(3)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
-        h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-        ResetAxisVisibleRange(*h_se_origin->GetAxis(5));
-        h_me_origin->GetAxis(4)->SetRangeUser(centrality_bin.min, centrality_bin.max);
-        h_me_origin->GetAxis(3)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
-        ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
+        h_se_origin->GetAxis(axes.centrality)->SetRangeUser(centrality_bin.min, centrality_bin.max);
+        h_se_origin->GetAxis(axes.mt)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
+        h_se_origin->GetAxis(axes.phi)->SetRange(1, n_phi_bins);
+        ResetAxisVisibleRange(*h_se_origin->GetAxis(axes.qn));
+        h_me_origin->GetAxis(axes.centrality)->SetRangeUser(centrality_bin.min, centrality_bin.max);
+        h_me_origin->GetAxis(axes.mt)->SetRange(mt_selection.first_bin, mt_selection.last_bin);
+        ResetAxisVisibleRange(*h_me_origin->GetAxis(axes.qn));
 
         // ME denominator splitting is independently opt-in in phi and qn, so the projection helper applies
         // the requested qn policy before each raw 3D projection.
@@ -7012,17 +7263,17 @@ namespace exp_femto_3d {
                                        const int last_phi_bin,
                                        const QnSliceSelection &qn_selection,
                                        const std::string &norm_name) -> std::unique_ptr<MixedEventProjection> {
-          h_me_origin->GetAxis(6)->SetRange(first_phi_bin, last_phi_bin);
+          h_me_origin->GetAxis(axes.phi)->SetRange(first_phi_bin, last_phi_bin);
           if (config.build.split_mixed_event_by_qn) {
-            ApplyQnSelection(*h_me_origin, qn_selection);
+            ApplyQnSelection(*h_me_origin, axes.qn, qn_selection);
           } else {
-            ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
+            ResetAxisVisibleRange(*h_me_origin->GetAxis(axes.qn));
           }
-          auto raw = std::unique_ptr<TH3D>(static_cast<TH3D *>(h_me_origin->Projection(0, 1, 2)));
+          auto raw = ProjectInput3D(*h_me_origin, axes, config.build.phi_mode);
           raw->SetDirectory(nullptr);
           auto norm = std::unique_ptr<TH3D>(static_cast<TH3D *>(raw->Clone(norm_name.c_str())));
           norm->SetDirectory(nullptr);
-          const double integral = IntegralVisibleRange(norm.get(), true);
+          const double integral = CfNormalizationIntegral(*norm, normalization_region);
           if (integral == 0.0) {
             return nullptr;
           }
@@ -7049,7 +7300,9 @@ namespace exp_femto_3d {
         auto write_slice = [&](TH3D *h_se_raw,
                                TH3D *h_se_norm,
                                const MixedEventProjection &me_projection,
-                               const SliceCatalogEntry &entry) {
+                               SliceCatalogEntry entry) {
+          entry.phi_mode = ToString(config.build.phi_mode);
+          entry.normalization = ComputeCfNormalization(*h_se_raw, *me_projection.raw, config.build.normalization);
           auto *h_cf = static_cast<TH3D *>(h_se_norm->Clone("CF3D"));
           h_cf->SetDirectory(nullptr);
           h_cf->Divide(me_projection.norm.get());
@@ -7096,7 +7349,7 @@ namespace exp_femto_3d {
                                                     mt_selection.output_index,
                                                     config.build.mt_rebin.enabled);
           logger.Debug("Building group " + group_id);
-          ApplyQnSelection(*h_se_origin, qn_selection);
+          ApplyQnSelection(*h_se_origin, axes.qn, qn_selection);
 
           std::unique_ptr<MixedEventProjection> qn_integrated_me_projection;
           const MixedEventProjection *integrated_me_for_selection = integrated_me_projection.get();
@@ -7112,12 +7365,12 @@ namespace exp_femto_3d {
             integrated_me_for_selection = qn_integrated_me_projection.get();
           }
 
-          h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-          auto *h_se_all_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
+          h_se_origin->GetAxis(axes.phi)->SetRange(1, n_phi_bins);
+          auto *h_se_all_raw = ProjectInput3D(*h_se_origin, axes, config.build.phi_mode).release();
           h_se_all_raw->SetDirectory(nullptr);
           auto *h_se_all_norm = static_cast<TH3D *>(h_se_all_raw->Clone((group_id + "_SE_all_norm").c_str()));
           h_se_all_norm->SetDirectory(nullptr);
-          const double int_se_all = IntegralVisibleRange(h_se_all_norm, true);
+          const double int_se_all = CfNormalizationIntegral(*h_se_all_norm, normalization_region);
           if (int_se_all == 0.0) {
             logger.Warn("Zero same-event integral for " + group_id + " phi=all.");
             ++statistics.skipped_zero_same_event_slices;
@@ -7167,12 +7420,12 @@ namespace exp_femto_3d {
           delete h_se_all_norm;
 
           for (const AxisSliceSelection &phi_selection : phi_selections) {
-            h_se_origin->GetAxis(6)->SetRange(phi_selection.first_bin, phi_selection.last_bin);
-            auto *h_se_raw = static_cast<TH3D *>(h_se_origin->Projection(0, 1, 2));
+            h_se_origin->GetAxis(axes.phi)->SetRange(phi_selection.first_bin, phi_selection.last_bin);
+            auto *h_se_raw = ProjectInput3D(*h_se_origin, axes, config.build.phi_mode).release();
             h_se_raw->SetDirectory(nullptr);
             auto *h_se_norm = static_cast<TH3D *>(h_se_raw->Clone((group_id + "_SE_slice_norm").c_str()));
             h_se_norm->SetDirectory(nullptr);
-            const double int_se = IntegralVisibleRange(h_se_norm, true);
+            const double int_se = CfNormalizationIntegral(*h_se_norm, normalization_region);
             if (int_se == 0.0) {
               logger.Warn("Zero same-event integral for " + group_id + " phi output bin "
                           + std::to_string(phi_selection.output_index)
@@ -7244,10 +7497,10 @@ namespace exp_femto_3d {
           write_qn_selection(qn_selection);
         }
 
-        h_se_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-        h_me_origin->GetAxis(6)->SetRange(1, n_phi_bins);
-        ResetAxisVisibleRange(*h_se_origin->GetAxis(5));
-        ResetAxisVisibleRange(*h_me_origin->GetAxis(5));
+        h_se_origin->GetAxis(axes.phi)->SetRange(1, n_phi_bins);
+        h_me_origin->GetAxis(axes.phi)->SetRange(1, n_phi_bins);
+        ResetAxisVisibleRange(*h_se_origin->GetAxis(axes.qn));
+        ResetAxisVisibleRange(*h_me_origin->GetAxis(axes.qn));
       }
     }
 
@@ -7335,7 +7588,864 @@ namespace exp_femto_3d {
       return groups;
     }
 
+    /** Persist evaluated grids, never a TF3 callback that later reverts to Bowler. */
+    void WriteCatsProvenance(TDirectory &directory, Cats3DModel &model) {
+      TDirectory::TContext context(&directory);
+      const auto &input = model.LambdaInput().Input();
+      std::string kind = input.kind, meaning = input.meaning, file = input.file, histogram = input.histogram,
+                  unit = input.axis_unit;
+      double weak = input.weak_decay_fraction.value_or(std::numeric_limits<double>::quiet_NaN());
+      double scalar = model.ScalarLambda(),
+             input_value = input.value.value_or(std::numeric_limits<double>::quiet_NaN());
+      int external_fixed = 1, external_errors_propagated = 0;
+      TTree meta("LambdaInputMetadata", "External pair weight; errors conditional on fixed input");
+      meta.Branch("kind", &kind);
+      meta.Branch("meaning", &meaning);
+      meta.Branch("file", &file);
+      meta.Branch("histogram", &histogram);
+      meta.Branch("axis_unit", &unit);
+      meta.Branch("weak_decay_fraction", &weak);
+      meta.Branch("input_value", &input_value);
+      meta.Branch("final_scalar_lambda", &scalar);
+      meta.Branch("external_fixed", &external_fixed);
+      meta.Branch("external_errors_propagated", &external_errors_propagated);
+      meta.Fill();
+      meta.Write("", TObject::kOverwrite);
+      TNamed contract("CATS3DContract", model.Contract().c_str());
+      contract.Write("", TObject::kOverwrite);
+      TNamed kernel_file("CATS3DKernelFile", model.KernelCachePath().c_str());
+      kernel_file.Write("", TObject::kOverwrite);
+      TNamed limitations(
+          "PhysicalValidationBoundary",
+          "Supplied CATS3D wave implementation, including its disabled Coulomb phase TODO; supplied q frame "
+          "unchanged; k_table=|q|/2; grid precision is a separate validation.");
+      limitations.Write("", TObject::kOverwrite);
+      if (model.LambdaInput().Histogram()) {
+        model.LambdaInput().Histogram()->Write("LambdaInput", TObject::kOverwrite);
+      }
+      auto map = model.LambdaHistogram();
+      map->Write("", TObject::kOverwrite);
+    }
+
+    void WriteCatsParameterContract(TDirectory &directory, TF3 &function, FitModel geometry,
+                                    const LevyFitOptions &options) {
+      TDirectory::TContext context(&directory);
+      TNamed model("FitGeometry", ToString(geometry).c_str());
+      model.Write("", TObject::kOverwrite);
+      TNamed statistic("FitStatistic", options.use_pml ? "existing_raw_count_PML" : "CF_chi2");
+      statistic.Write("", TObject::kOverwrite);
+      TNamed baseline("Baseline", options.use_q2_baseline ? "1+b2*qnorm_GeV_squared" : "unity");
+      baseline.Write("", TObject::kOverwrite);
+      TTree parameters("ParameterContract",
+                       "Parameter order, configured seeds, native-unit bounds and fixed flags");
+      int index = 0;
+      std::string name;
+      double initial = 0, lower = 0, upper = 0;
+      bool fixed = false;
+      parameters.Branch("index", &index);
+      parameters.Branch("name", &name);
+      parameters.Branch("initial", &initial);
+      parameters.Branch("lower", &lower);
+      parameters.Branch("upper", &upper);
+      parameters.Branch("fixed", &fixed);
+      for (index = 0; index < function.GetNpar(); ++index) {
+        name = index == 1 ? "ExternalLambdaCarrierFixed" : function.GetParName(index);
+        initial = function.GetParameter(index);
+        function.GetParLimits(index, lower, upper);
+        fixed = IsPMLParameterFixed(index, geometry == FitModel::kFull, options);
+        if (fixed) {
+          lower = upper = initial;
+        }
+        parameters.Fill();
+      }
+      parameters.Write("", TObject::kOverwrite);
+      std::string policy = options.use_pml ? "MIGRAD_tolerance=0.1;ErrorDef=1;EPS=1e-8;max_calls=" +
+                                                 std::to_string(g_active_cats3d_model->PmlMaxCalls())
+                                           : "ROOT_default_chi2_fit_without_IMPROVE";
+      TNamed minimizer("MinimizerPolicy", policy.c_str());
+      minimizer.Write("", TObject::kOverwrite);
+    }
+
+    // Both data and model average over the same transverse bins, including
+    // when the fitted q box is narrower than the usual projection window.
+    TH1D *CatsProjection(TH3D &data, const TH3D &computed, int axis, const std::string &name) {
+      const TAxis *source_axes[] = {data.GetXaxis(), data.GetYaxis(), data.GetZaxis()};
+      const TAxis *model_axes[] = {computed.GetXaxis(), computed.GetYaxis(), computed.GetZaxis()};
+      std::array<int, 3> first{}, last{};
+      int count = 1;
+      for (int k = 0; k < 3; ++k) {
+        if (k != axis) {
+          const double low = std::max(-kProjection1DWindow, model_axes[k]->GetXmin());
+          const double high = std::min(kProjection1DWindow, model_axes[k]->GetXmax());
+          first[k] = std::max(1, source_axes[k]->FindFixBin(low + 1e-9));
+          last[k] = std::min(source_axes[k]->GetNbins(), source_axes[k]->FindFixBin(high - 1e-9));
+          count *= std::max(0, last[k] - first[k] + 1);
+        }
+      }
+      if (count == 0) {
+        throw std::runtime_error("CATS3D projection has no common computed transverse bins.");
+      }
+      TH1D *projection = axis == 0 ? data.ProjectionX(name.c_str(), first[1], last[1], first[2], last[2], "e")
+                         : axis == 1
+                             ? data.ProjectionY(name.c_str(), first[0], last[0], first[2], last[2], "e")
+                             : data.ProjectionZ(name.c_str(), first[0], last[0], first[1], last[1], "e");
+      projection->SetDirectory(nullptr);
+      projection->Scale(1.0 / count);
+      return projection;
+    }
+
+    void WriteCatsArtifacts(TFile &file, TH3D &data, const SliceCatalogEntry &entry,
+                            SingleSliceFitOutput &fit, Cats3DModel &model, const LevyFitOptions &options) {
+      auto *directory = GetOrCreateDirectoryPath(file, BuildFitDirectory(entry.slice_id));
+      TDirectory::TContext context(directory);
+      WriteCatsProvenance(*directory, model);
+      data.Write("CF3D", TObject::kOverwrite);
+      if (!fit.result.point_estimate_valid) {
+        TNamed failure("FitFailure", fit.result.fit_failure_reason.c_str());
+        failure.Write();
+        return;
+      }
+      auto final = model.FinalHistogram(fit.fit_function->GetParameters(), fit.result.has_off_diagonal,
+                                        options.use_q2_baseline);
+      auto core = model.CoreHistogram();
+      core->Write("", TObject::kOverwrite);
+      final->Write("", TObject::kOverwrite);
+      std::ostringstream names;
+      for (int i = 0; i < fit.fit_function->GetNpar(); ++i) {
+        names << i << ":" << fit.fit_function->GetParName(i) << "\n";
+      }
+      TNamed parameters("ParameterNames", names.str().c_str());
+      parameters.Write();
+      BatchModeGuard batch;
+      std::array<std::unique_ptr<TH1D>, 3> projections = {
+          std::unique_ptr<TH1D>(CatsProjection(data, *final, 0, "Data_ProjX")),
+          std::unique_ptr<TH1D>(CatsProjection(data, *final, 1, "Data_ProjY")),
+          std::unique_ptr<TH1D>(CatsProjection(data, *final, 2, "Data_ProjZ"))};
+      std::array<std::unique_ptr<TH1D>, 3> predictions = {
+          std::unique_ptr<TH1D>(CatsProjection(*final, *final, 0, "Model_ProjX")),
+          std::unique_ptr<TH1D>(CatsProjection(*final, *final, 1, "Model_ProjY")),
+          std::unique_ptr<TH1D>(CatsProjection(*final, *final, 2, "Model_ProjZ"))};
+      const char *axes[] = {"X", "Y", "Z"};
+      const char *titles[] = {"q_{out} (GeV/c)", "q_{side} (GeV/c)", "q_{long} (GeV/c)"};
+      for (int axis = 0; axis < 3; ++axis) {
+        TGraph graph(predictions[axis]->GetNbinsX());
+        graph.SetName((std::string("Fit_Proj") + axes[axis]).c_str());
+        for (int bin = 1; bin <= predictions[axis]->GetNbinsX(); ++bin) {
+          graph.SetPoint(bin - 1, predictions[axis]->GetBinCenter(bin),
+                         predictions[axis]->GetBinContent(bin));
+        }
+        std::unique_ptr<TCanvas> canvas(BuildProjectionCanvas(std::string("Canvas_Proj") + axes[axis],
+                                                              projections[axis].get(), &graph, titles[axis],
+                                                              fit.result));
+        projections[axis]->Write("", TObject::kOverwrite);
+        graph.Write("", TObject::kOverwrite);
+        canvas->Write("", TObject::kOverwrite);
+      }
+      TCanvas canvas("Canvas_3D", "CATS3D data and evaluated model", 1200, 600);
+      canvas.Divide(2, 1);
+      canvas.cd(1);
+      data.Draw("BOX2Z");
+      canvas.cd(2);
+      final->Draw("BOX2Z");
+      std::unique_ptr<TPaveText> box(BuildFitParameterBox(fit.result, .12, .18, .58, .88));
+      box->Draw();
+      canvas.Write("", TObject::kOverwrite);
+    }
+
+    cats3d_scan::Attempt CatsAttempt(const SingleSliceFitOutput &output) {
+      cats3d_scan::Attempt attempt;
+      if (output.pml_minimization) {
+        attempt.fit = ToProfileResult(*output.pml_minimization);
+      } else {
+        const auto &r = output.result;
+        attempt.fit.objective = r.fit_statistic;
+        attempt.fit.edm = r.edm;
+        attempt.fit.migrad_status = r.point_estimate_valid ? 0 : r.status;
+        attempt.fit.hesse_status = r.parameter_errors_valid ? 0 : -1;
+        attempt.fit.minuit_istat = r.minuit_istat;
+        attempt.fit.model_domain_valid = output.model_domain_valid;
+        attempt.fit.objective_valid = std::isfinite(r.fit_statistic) && r.fit_statistic < kFitPenaltyValue;
+        attempt.fit.hesse_ran = true;
+        for (int i = 0; i < output.fit_function->GetNpar(); ++i) {
+          attempt.fit.values.push_back(output.fit_function->GetParameter(i));
+          attempt.fit.errors.push_back(output.fit_function->GetParError(i));
+          double low = 0, high = 0;
+          output.fit_function->GetParLimits(i, low, high);
+          attempt.fit.at_lower_bound.push_back(low < high && NearlyEqual(attempt.fit.values.back(), low));
+          attempt.fit.at_upper_bound.push_back(low < high && NearlyEqual(attempt.fit.values.back(), high));
+        }
+      }
+      attempt.fit.parameter_errors_valid = output.result.parameter_errors_valid;
+      if (!attempt.fit.parameter_errors_valid) {
+        std::fill(attempt.fit.errors.begin(), attempt.fit.errors.end(),
+                  std::numeric_limits<double>::quiet_NaN());
+      }
+      attempt.ndf = output.result.ndf;
+      attempt.failure_reason = output.result.fit_failure_reason;
+      return attempt;
+    }
+
+    // Write separate graph segments so an invalid grid point is never bridged.
+    void WriteCatsScanSegments(TDirectory &directory, const std::vector<double> &x,
+                               const std::vector<double> &delta, const std::vector<bool> &valid,
+                               const std::string &label) {
+      TDirectory::TContext context(&directory);
+      BatchModeGuard batch;
+      TCanvas canvas("DeltaObjectiveCanvas", "CATS3D lambda diagnostic", 850, 650);
+      std::vector<std::unique_ptr<TGraph>> segments;
+      for (std::size_t i = 0; i < x.size(); ++i) {
+        if (!valid[i]) {
+          continue;
+        }
+        if (i == 0 || !valid[i - 1]) {
+          segments.push_back(std::make_unique<TGraph>());
+        }
+        auto &graph = *segments.back();
+        graph.SetPoint(graph.GetN(), x[i], delta[i]);
+      }
+      if (segments.empty()) {
+        TPaveText text(.12, .3, .88, .7, "NDC");
+        text.AddText("No valid scan minimum; see ScanPoints/GroupPoints");
+        text.Draw();
+        canvas.Write();
+        return;
+      }
+      double xmin = *std::min_element(x.begin(), x.end()), xmax = *std::max_element(x.begin(), x.end()),
+             ymax = 1;
+      if (xmin == xmax) {
+        xmin -= .05;
+        xmax += .05;
+      }
+      for (std::size_t i = 0; i < delta.size(); ++i) {
+        if (valid[i]) {
+          ymax = std::max(ymax, delta[i] * 1.1);
+        }
+      }
+      auto *frame = canvas.DrawFrame(xmin, -.02 * ymax, xmax, ymax);
+      frame->SetTitle(
+          ("diagnostic only;" + label + ";#Delta objective (minimum of valid scanned points)").c_str());
+      for (std::size_t i = 0; i < segments.size(); ++i) {
+        auto &graph = *segments[i];
+        graph.SetName(("DeltaObjectiveSegment_" + std::to_string(i)).c_str());
+        graph.SetMarkerStyle(20);
+        graph.SetLineColor(kBlue + 1);
+        graph.Draw("LP SAME");
+        graph.Write();
+      }
+      canvas.Write();
+    }
+
+    void WriteCatsSliceScan(TDirectory &directory, const std::vector<cats3d_scan::Point> &points,
+                            const std::string &coordinate_label) {
+      TDirectory::TContext context(&directory);
+      TTree tree("ScanPoints", "Fixed external lambda; nuisance parameters re-minimized");
+      TTree attempts("AttemptPoints", "All actual minimizer attempts, including failures");
+      int point_index = 0, attempt_index = 0, winner_index = -1, ndf = -1, migrad = -1, hesse = -1,
+          istat = -1;
+      double coordinate = 0, objective = 0, delta = 0, edm = 0, wall_ms = 0;
+      bool valid = false, errors_valid = false, model_domain_valid = false, objective_valid = false;
+      bool at_scan_boundary = false, minimum_at_scan_boundary = false;
+      std::string status, reason, seed_origin;
+      std::vector<double> parameters, errors;
+      std::vector<int> at_lower, at_upper;
+      for (auto *target : {&tree, &attempts}) {
+        target->Branch("point_index", &point_index);
+        target->Branch("coordinate", &coordinate);
+        target->Branch("objective", &objective);
+        target->Branch("delta_objective", &delta);
+        target->Branch("valid", &valid);
+        target->Branch("parameter_errors_valid", &errors_valid);
+        target->Branch("model_domain_valid", &model_domain_valid);
+        target->Branch("objective_valid", &objective_valid);
+        target->Branch("status", &status);
+        target->Branch("failure_reason", &reason);
+        target->Branch("parameters", &parameters);
+        target->Branch("errors", &errors);
+        target->Branch("at_lower_bound", &at_lower);
+        target->Branch("at_upper_bound", &at_upper);
+        target->Branch("migrad_status", &migrad);
+        target->Branch("hesse_status", &hesse);
+        target->Branch("covariance_quality", &istat);
+        target->Branch("edm", &edm);
+        target->Branch("ndf", &ndf);
+        target->Branch("wall_ms", &wall_ms);
+      }
+      tree.Branch("winner_attempt", &winner_index);
+      tree.Branch("at_scan_boundary", &at_scan_boundary);
+      tree.Branch("minimum_at_scan_boundary", &minimum_at_scan_boundary);
+      attempts.Branch("attempt_index", &attempt_index);
+      attempts.Branch("seed_origin", &seed_origin);
+      auto fill = [&](const cats3d_scan::Attempt &a) {
+        const auto &f = a.fit;
+        valid = profile_likelihood::IsValid(f);
+        errors_valid = f.parameter_errors_valid;
+        model_domain_valid = f.model_domain_valid;
+        objective_valid = f.objective_valid;
+        objective = valid ? f.objective : std::numeric_limits<double>::quiet_NaN();
+        status = profile_likelihood::ToString(profile_likelihood::StatusFor(f));
+        reason = a.failure_reason;
+        parameters = f.values;
+        errors = f.errors;
+        at_lower = f.at_lower_bound;
+        at_upper = f.at_upper_bound;
+        migrad = f.migrad_status;
+        hesse = f.hesse_status;
+        istat = f.minuit_istat;
+        edm = f.edm;
+        ndf = a.ndf;
+        wall_ms = f.total_wall_ms;
+        seed_origin = a.seed_origin;
+      };
+      std::vector<double> xs, deltas;
+      std::vector<bool> validity;
+      for (const auto &point : points) {
+        coordinate = point.coordinate;
+        delta = point.delta_objective;
+        winner_index = point.winner;
+        at_scan_boundary = coordinate == points.front().coordinate || coordinate == points.back().coordinate;
+        minimum_at_scan_boundary = point.Best() && delta == 0 && at_scan_boundary;
+        for (std::size_t i = 0; i < point.attempts.size(); ++i) {
+          attempt_index = i;
+          fill(point.attempts[i]);
+          attempts.Fill();
+        }
+        if (point.Best()) {
+          fill(*point.Best());
+        } else {
+          fill(point.attempts.front());
+        }
+        tree.Fill();
+        xs.push_back(coordinate);
+        deltas.push_back(delta);
+        validity.push_back(point.Best() != nullptr);
+        ++point_index;
+      }
+      tree.Write();
+      attempts.Write();
+      WriteCatsScanSegments(directory, xs, deltas, validity, coordinate_label);
+    }
+
+    struct CatsScanRecord {
+      SliceCatalogEntry entry;
+      std::string kind;
+      std::vector<cats3d_scan::Point> points;
+    };
+
+    /** Summary fits require all phi members and usable conditional errors. */
+    void WriteCatsPeriodSummaries(TDirectory &file, const std::vector<LevyFitResult> &results,
+                                  const bool draw_incomplete_overviews) {
+      std::map<std::string, std::vector<LevyFitResult>> groups;
+      for (const auto &r : results) {
+        if (!r.is_phi_integrated) {
+          groups[r.group_id].push_back(r);
+        }
+      }
+      std::vector<LevyFitResult> complete;
+      for (const auto &[id, members] : groups) {
+        const bool valid =
+            members.size() >= 3 && std::all_of(members.begin(), members.end(), [](const auto &r) {
+              return r.point_estimate_valid && r.parameter_errors_valid;
+            });
+        if (valid) {
+          for (auto r : members) {
+            r.uses_core_halo_lambda = false;
+            complete.push_back(std::move(r));
+          }
+        } else {
+          auto *directory = GetOrCreateDirectoryPath(file, "summary/R2_vs_phi/" + id);
+          TDirectory::TContext context(directory);
+          TNamed status("SummaryStatus",
+                        "Incomplete/invalid phi errors or fewer than 3 phi members; no harmonic/epsilon fit");
+          status.Write();
+          const char *names[] = {"Rout2_vs_phi",     "Rside2_vs_phi",    "Rlong2_vs_phi",
+                                 "Routside2_vs_phi", "Routlong2_vs_phi", "Rsidelong2_vs_phi"};
+          for (int k = 0; k < (members.front().has_off_diagonal ? 6 : 3); ++k) {
+            TGraphErrors graph;
+            graph.SetName(names[k]);
+            for (const auto &r : members) {
+              if (r.point_estimate_valid && r.parameter_errors_valid) {
+                const int i = graph.GetN();
+                graph.SetPoint(i, r.phi, FitResultRadiusValue(r, k));
+                graph.SetPointError(i, 0, FitResultRadiusError(r, k));
+              }
+            }
+            graph.Write();
+          }
+          std::string overview = "source_parameters/" + BuildReportCentralityDirectory(members.front()) +
+                                 "/" + BuildReportMtDirectory(members.front());
+          const auto qn = BuildReportQnDirectory(members.front());
+          if (!qn.empty()) {
+            overview += "/" + qn;
+          }
+          TDirectory::TContext overview_context(GetOrCreateDirectoryPath(file, overview));
+          BatchModeGuard batch;
+          TCanvas canvas("source_parameters_overview_canvas", "CATS3D group fit status", 1000, 700);
+          TPaveText text(.05, .08, .95, .92, "NDC");
+          text.SetTextAlign(12);
+          text.SetTextFont(42);
+          text.SetTextSize(.025);
+          text.AddText("CATS3D: incomplete conditional errors or insufficient phi coverage");
+          text.AddText("No harmonic/epsilon fit; individual results remain in FitCatalog");
+          for (const auto &member : members) {
+            text.AddText((member.slice_id +
+                          ": minimum=" + (member.point_estimate_valid ? "valid" : "invalid") +
+                          ", errors=" + (member.parameter_errors_valid ? "valid" : "invalid") + " " +
+                          member.fit_failure_reason)
+                             .c_str());
+          }
+          text.Draw();
+          canvas.Write("", TObject::kOverwrite);
+          if (draw_incomplete_overviews) {
+            canvas.SetName("conditional_error_status_canvas");
+            canvas.Write("conditional_error_status_canvas", TObject::kOverwrite);
+            // Keep the familiar panel layout without fitting a reduced phi set.
+            // Missing HESSE errors must not become zero-error measurements.
+            auto diagnostic = members;
+            for (auto &r : diagnostic) {
+              if (!r.point_estimate_valid || !r.parameter_errors_valid) {
+                r.rout2 = r.rside2 = r.rlong2 = r.routside2 = r.routlong2 = r.rsidelong2 =
+                    r.alpha = std::numeric_limits<double>::quiet_NaN();
+              }
+            }
+            auto *source = GetOrCreateDirectoryPath(file, "source_parameters");
+            WriteSourceParameterOverviewCanvases(*source, diagnostic, {}, false);
+          }
+        }
+      }
+      WriteR2GraphsForPeriod(file, complete);
+      auto *source = GetOrCreateDirectoryPath(file, "source_parameters");
+      WriteSourceParameterOverviewCanvases(*source, complete, {});
+      auto *eps = GetOrCreateDirectoryPath(file, "eps_vs_mt");
+      WriteEpsVsMtGraphs(*eps, complete, {});
+      file.cd();
+    }
+
+    void WriteCatsSummaries(TFile &file, const std::vector<LevyFitResult> &results,
+                            const bool draw_incomplete_overviews = false) {
+      WriteFitCatalogTree(file, results);
+      for (const auto &[period, members] : PartitionPhiReports(results)) {
+        TDirectory *root = period.empty() ? &file : GetOrCreateDirectoryPath(file, period);
+        WriteCatsPeriodSummaries(*root, members, draw_incomplete_overviews);
+      }
+      file.cd();
+    }
+
+    // With TH1::AddDirectory(false), TFile::Get creates an unowned histogram
+    // on every read. Detach and own that object directly instead of cloning and
+    // leaking a source histogram for every preflight/member/scan access.
+    std::unique_ptr<TH3D> ReadCatsHistogram(TFile &file, const std::string &path,
+                                          const std::string &name = "") {
+      auto *histogram = dynamic_cast<TH3D *>(file.Get(path.c_str()));
+      if (!histogram) throw std::runtime_error("Missing CATS3D CF/raw-count histogram: " + path);
+      histogram->SetDirectory(nullptr);
+      std::unique_ptr<TH3D> result(histogram);
+      if (!name.empty()) result->SetName(name.c_str());
+      return result;
+    }
+
+    FitRunStatistics RunCats3DFit(const ApplicationConfig &config, const Logger &logger, FitModel geometry,
+                                  const std::string &cf_path, const std::string &fit_path,
+                                  const std::string &summary_path, const std::string &report_path) {
+      if (!Cats3DModel::Available()) {
+        throw std::runtime_error("correlation_backend=cats3d requires CATS3D build support.");
+      }
+      const auto &cfg = config.fit.cats3d;
+      const auto &scan = cfg.lambda_scan;
+      const bool scan_only = scan.enabled && scan.execution_mode == "scan_only";
+      const std::string scan_path = ResolvePath(config.output.output_directory, scan.root_name);
+      std::vector<std::string> outputs = {fit_path, summary_path, report_path};
+      if (scan.enabled) {
+        outputs.push_back(scan_path);
+      }
+      std::vector<std::string> inputs = {cf_path, config.input.input_root};
+      if (!cfg.kernel_cache_file.empty()) {
+        inputs.push_back(cfg.kernel_cache_file);
+      }
+      if (cfg.lambda && !cfg.lambda->file.empty()) {
+        inputs.push_back(cfg.lambda->file);
+      }
+      for (const auto &input : cfg.lambda_groups) {
+        if (!input.file.empty()) {
+          inputs.push_back(input.file);
+        }
+      }
+      for (std::size_t i = 0; i < outputs.size(); ++i) {
+        for (std::size_t j = 0; j < i; ++j) {
+          if (PathsReferToSameLocation(outputs[i], outputs[j])) {
+            throw std::runtime_error("CATS3D output paths must be distinct, including scan-only outputs.");
+          }
+        }
+        for (const auto &input : inputs) {
+          if (PathsReferToSameLocation(outputs[i], input)) {
+            throw std::runtime_error("CATS3D output would overwrite an input file.");
+          }
+        }
+      }
+      HistAddDirectoryGuard add_directory_guard(false);
+      auto input_file = OpenRootFile(cf_path, "READ");
+      const auto catalog = ReadSliceCatalogTree(*input_file, &logger);
+      FitRunStatistics statistics;
+      statistics.catalog_slices = catalog.size();
+      std::vector<const SliceCatalogEntry *> selected;
+      std::set<std::string> known_groups, unique_slices;
+      for (const auto &entry : catalog) {
+        if (!unique_slices.insert(entry.slice_id).second) {
+          throw std::runtime_error("Duplicate CATS3D catalog slice_id.");
+        }
+        known_groups.insert(entry.group_id);
+        if (MatchSelectedBin(entry, config.fit_centrality_bins, config.fit_mt_bins)) {
+          selected.push_back(&entry);
+        }
+      }
+      if (selected.empty()) {
+        throw std::runtime_error("No CATS3D slices match fit_selection.");
+      }
+      const bool mapped =
+          config.fit.map_pair_phi_to_symmetric_range.value_or(catalog.front().build_uses_symmetric_phi_range);
+      ValidateCatalogPhiMapping(catalog, mapped);
+      if (!catalog.empty() && catalog.front().phi_mode != ToString(config.build.phi_mode))
+        logger.Warn("Input CF phi_mode=" + catalog.front().phi_mode + "; fit follows the saved CF. Rebuild CF to change phi_mode.");
+      for (const auto &range : config.fit_mt_bins) {
+        if (!std::any_of(selected.begin(), selected.end(), [&](const auto *e) {
+              return NearlyEqual(e->mt_low, range.min) && NearlyEqual(e->mt_high, range.max);
+            })) {
+          throw std::runtime_error("CATS3D fit_selection.mt does not match a produced catalog group.");
+        }
+      }
+      std::map<std::string, std::shared_ptr<const Cats3DLambda>> weights;
+      auto global = cfg.lambda ? std::make_shared<Cats3DLambda>(*cfg.lambda) : nullptr;
+      for (const auto &input : cfg.lambda_groups) {
+        if (!known_groups.count(input.group_id)) {
+          throw std::runtime_error("Unknown CATS3D lambda group_id: " + input.group_id);
+        }
+        weights.emplace(input.group_id, std::make_shared<Cats3DLambda>(input));
+      }
+      for (const auto *entry : selected) {
+        if (!weights.count(entry->group_id)) {
+          if (!global) {
+            throw std::runtime_error("Missing external lambda for group " + entry->group_id);
+          }
+          weights.emplace(entry->group_id, global);
+        }
+        if (scan.enabled && !scan.scale_values.empty() &&
+            weights.at(entry->group_id)->Input().kind != "histogram") {
+          throw std::runtime_error(
+              "Every selected group in a lambda scale scan requires a ROOT histogram input.");
+        }
+      }
+      std::map<std::string, std::set<std::string>> differential_me;
+      for (const auto *entry : selected) {
+        auto cf = ReadCatsHistogram(*input_file, entry->cf_object_path);
+        Cats3DModel::ValidateInputGrid(*cf, config.fit.options.fit_q_max, cfg, *weights.at(entry->group_id));
+        if (config.fit.options.use_pml) {
+          auto se = ReadCatsHistogram(*input_file, entry->se_object_path);
+          auto me = ReadCatsHistogram(*input_file, entry->me_object_path);
+          for (int axis = 0; axis < 3; ++axis) {
+            const TAxis *a[] = {cf->GetXaxis(), cf->GetYaxis(), cf->GetZaxis()};
+            const TAxis *b[] = {se->GetXaxis(), se->GetYaxis(), se->GetZaxis()};
+            const TAxis *c[] = {me->GetXaxis(), me->GetYaxis(), me->GetZaxis()};
+            ValidateCompatibleAxes(*a[axis], *b[axis], "CATS3D CF/SE");
+            ValidateCompatibleAxes(*a[axis], *c[axis], "CATS3D CF/ME");
+          }
+        }
+        if (scan.enabled && !entry->is_phi_integrated) {
+          if (!entry->split_mixed_event_by_phi ||
+              !differential_me[entry->group_id].insert(entry->me_object_path).second) {
+            throw std::runtime_error(
+                "CATS3D group scan requires distinct phi-binned mixed events for every differential member.");
+          }
+        }
+      }
+      // Validate and load an explicitly supplied native input before opening any
+      // outputs. One supplied file must describe every selected computed q grid.
+      std::unique_ptr<Cats3DModel> model;
+      if (!cfg.kernel_cache_file.empty()) {
+        auto first_cf = ReadCatsHistogram(*input_file, selected.front()->cf_object_path);
+        model = std::make_unique<Cats3DModel>(*first_cf, config.fit.options.fit_q_max, cfg, &logger);
+        for (const auto *entry : selected) {
+          auto cf = ReadCatsHistogram(*input_file, entry->cf_object_path);
+          if (!model->Matches(*cf, config.fit.options.fit_q_max)) {
+            throw std::runtime_error("One explicit CATS3D kernel cannot describe different selected q grids.");
+          }
+        }
+      }
+      const auto ensure_parent=[](const std::string &path) {
+        const auto parent=std::filesystem::path(path).parent_path();
+        if(!parent.empty()) std::filesystem::create_directories(parent);
+      };
+      if(!scan_only) for(const auto &path:{fit_path,summary_path,report_path}) ensure_parent(path);
+      if(scan.enabled) ensure_parent(scan_path);
+      std::unique_ptr<TFile> output, scan_file;
+      // Initialize outputs only after all group bindings and required objects have passed preflight.
+      if (!scan_only) {
+        CreateOrResetRootFile(fit_path);
+        output = OpenRootFile(fit_path, "UPDATE");
+      }
+      if (scan.enabled) {
+        CreateOrResetRootFile(scan_path);
+        scan_file = OpenRootFile(scan_path, "UPDATE");
+      }
+      std::vector<SliceCatalogEntry> selected_catalog;
+      for (const auto *entry : selected) {
+        selected_catalog.push_back(*entry);
+      }
+      for (auto *file : {output.get(), scan_file.get()}) {
+        if (file) {
+          WriteSliceCatalogTree(*file, selected_catalog, "CATS3DSelectedSlices");
+          file->cd();
+          TNamed state("CATS3DRunStatus", "incomplete");
+          state.Write("", TObject::kOverwrite);
+          TNamed input("InputCFRoot", cf_path.c_str());
+          input.Write("", TObject::kOverwrite);
+          file->Flush();
+        }
+      }
+      std::vector<LevyFitResult> results;
+      std::vector<CatsScanRecord> records;
+      ProgressReporter progress(logger, "CATS3D slices", selected.size(), config.fit.progress);
+      std::size_t completed = 0;
+      for (const auto *entry : selected) {
+        auto cf = ReadCatsHistogram(*input_file, entry->cf_object_path, entry->slice_id + "_cats_cf");
+        std::unique_ptr<TH3D> se, me;
+        if (config.fit.options.use_pml) {
+          se = ReadCatsHistogram(*input_file, entry->se_object_path, entry->slice_id + "_cats_se");
+          me = ReadCatsHistogram(*input_file, entry->me_object_path, entry->slice_id + "_cats_me");
+          ValidateCompatibleAxes(*se->GetXaxis(), *me->GetXaxis(), "q_out");
+          ValidateCompatibleAxes(*se->GetYaxis(), *me->GetYaxis(), "q_side");
+          ValidateCompatibleAxes(*se->GetZaxis(), *me->GetZaxis(), "q_long");
+          ValidateCompatibleAxes(*se->GetXaxis(), *cf->GetXaxis(), "CF q_out");
+          ValidateCompatibleAxes(*se->GetYaxis(), *cf->GetYaxis(), "CF q_side");
+          ValidateCompatibleAxes(*se->GetZaxis(), *cf->GetZaxis(), "CF q_long");
+        }
+        if (!model || !model->Matches(*cf, config.fit.options.fit_q_max)) {
+          model.reset();
+          model = std::make_unique<Cats3DModel>(*cf, config.fit.options.fit_q_max, cfg, &logger);
+        }
+        model->SetLambda(weights.at(entry->group_id));
+        ActiveCats3DGuard active(model.get());
+        auto options = config.fit.options;
+        options.parameters.alpha.fixed_value = 2;
+        options.parameters.lambda.fixed_value =
+            std::isfinite(model->ScalarLambda()) ? model->ScalarLambda() : 1.0;
+        options.use_core_halo_lambda = true;
+        const auto nominal_start = std::chrono::steady_clock::now();
+        const auto initial_folds = model->FoldCount();
+        auto nominal =
+            FitSingleSlice(cf.get(), se.get(), me.get(), *entry, geometry, options, mapped, nullptr);
+        const double nominal_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - nominal_start)
+                .count();
+        logger.Info("CATS3D nominal " + entry->slice_id + " ms=" + std::to_string(nominal_ms) +
+                    ", source folds=" + std::to_string(model->FoldCount() - initial_folds));
+        if (!nominal) {
+          throw std::runtime_error("CATS3D failed to retain nominal fit status.");
+        }
+        ++statistics.selected_slices;
+        if (!scan_only) {
+          WriteCatsArtifacts(*output, *cf, *entry, *nominal, *model, options);
+          {
+            TDirectory::TContext context(
+                GetOrCreateDirectoryPath(*output, BuildFitDirectory(entry->slice_id)));
+            double wall_ms = nominal_ms;
+            unsigned long long folds = model->FoldCount() - initial_folds,
+                               kernel_bytes = model->KernelBytes();
+            double peak_gib = model->EstimatedPeakGiB();
+            TTree performance("FitPerformance",
+                              "Measured nominal fit time/folds; conservative kernel IO memory estimate");
+            performance.Branch("wall_ms", &wall_ms);
+            performance.Branch("source_folds", &folds);
+            performance.Branch("kernel_bytes", &kernel_bytes);
+            performance.Branch("estimated_peak_gib", &peak_gib);
+            performance.Fill();
+            performance.Write();
+          }
+          results.push_back(nominal->result);
+          if (nominal->result.point_estimate_valid) {
+            ++statistics.fitted_slices;
+          }
+        }
+        if (scan.enabled) {
+          auto *input_directory = GetOrCreateDirectoryPath(*scan_file, "inputs/" + entry->slice_id);
+          WriteCatsProvenance(*input_directory, *model);
+          std::unique_ptr<TF3> configured(geometry == FitModel::kFull
+                                              ? BuildFullLevyFitFunction("cats_scan_configured", options)
+                                              : BuildLevyFitFunction("cats_scan_configured", options));
+          WriteCatsParameterContract(*input_directory, *configured, geometry, options);
+          std::vector<double> seed(configured->GetParameters(),
+                                   configured->GetParameters() + configured->GetNpar());
+          for (const std::string kind : {"constant", "scale"}) {
+            const auto &coordinates = kind == "constant" ? scan.constant_values : scan.scale_values;
+            if (coordinates.empty()) {
+              continue;
+            }
+            CatsScanRecord record;
+            record.entry = *entry;
+            record.kind = kind;
+            record.points =
+                cats3d_scan::Run(coordinates, seed, [&](double coordinate, const std::vector<double> &start) {
+                  cats3d_scan::Attempt attempt;
+                  try {
+                    model->SetScan(kind == "constant" ? std::optional<double>(coordinate) : std::nullopt,
+                                   kind == "scale" ? coordinate : 1.0);
+                    auto trial_options = options;
+                    trial_options.parameters.lambda.fixed_value =
+                        std::isfinite(model->ScalarLambda()) ? model->ScalarLambda() : 1.0;
+                    const auto trial_start = std::chrono::steady_clock::now();
+                    auto fit = FitSingleSlice(cf.get(), se.get(), me.get(), *entry, geometry, trial_options,
+                                              mapped, nullptr, true, &start);
+                    if (!fit) {
+                      attempt.fit.minimizer_error = true;
+                      attempt.failure_reason = "minimizer_setup_failed";
+                      return attempt;
+                    }
+                    attempt = CatsAttempt(*fit);
+                    attempt.fit.total_wall_ms = std::chrono::duration<double, std::milli>(
+                                                    std::chrono::steady_clock::now() - trial_start)
+                                                    .count();
+                    return attempt;
+                  } catch (const Cats3DDomainError &error) {
+                    attempt.fit.model_domain_valid = false;
+                    attempt.failure_reason = error.what();
+                    return attempt;
+                  }
+                });
+            auto *directory = GetOrCreateDirectoryPath(
+                *scan_file, "lambda_scan/" + kind + "/" + entry->group_id + "/" + entry->slice_id);
+            WriteCatsSliceScan(*directory, record.points,
+                               kind == "constant" ? "fixed final #lambda" : "input-table scale s");
+            for (const auto &point : record.points) {
+              if (point.Best()) {
+                ++statistics.profile_valid_points;
+              } else {
+                ++statistics.profile_failed_points;
+              }
+            }
+            records.push_back(std::move(record));
+          }
+          model->SetScan(std::nullopt);
+          ++statistics.profile_completed_slices;
+        }
+        progress.Update(++completed);
+      }
+      if (scan_file) {
+        for (const std::string kind : {"constant", "scale"}) {
+          const auto &coordinates = kind == "constant" ? scan.constant_values : scan.scale_values;
+          if (coordinates.empty()) {
+            continue;
+          }
+          std::set<std::string> groups;
+          for (const auto &record : records) {
+            if (record.kind == kind) {
+              groups.insert(record.entry.group_id);
+            }
+          }
+          for (const auto &group : groups) {
+            std::vector<const std::vector<cats3d_scan::Point> *> members;
+            std::vector<std::string> ids;
+            for (const auto &record : records) {
+              if (record.kind == kind && record.entry.group_id == group && !record.entry.is_phi_integrated) {
+                members.push_back(&record.points);
+                ids.push_back(record.entry.slice_id);
+              }
+            }
+            const auto sum = cats3d_scan::Sum(coordinates, members);
+            auto *directory = GetOrCreateDirectoryPath(*scan_file, "lambda_scan/" + kind + "/" + group);
+            TDirectory::TContext context(directory);
+            TTree tree("GroupPoints", "Sum of all differential phi minima; integrated phi excluded");
+            double coordinate = 0, objective = 0, delta = 0;
+            bool valid = false, at_scan_boundary = false, minimum_at_scan_boundary = false;
+            std::string failure;
+            tree.Branch("coordinate", &coordinate);
+            tree.Branch("objective", &objective);
+            tree.Branch("delta_objective", &delta);
+            tree.Branch("valid", &valid);
+            tree.Branch("failure_reason", &failure);
+            tree.Branch("member_slice_ids", &ids);
+            tree.Branch("at_scan_boundary", &at_scan_boundary);
+            tree.Branch("minimum_at_scan_boundary", &minimum_at_scan_boundary);
+            std::vector<double> xs, deltas;
+            std::vector<bool> validity;
+            for (const auto &point : sum) {
+              coordinate = point.coordinate;
+              objective = point.objective;
+              delta = point.delta_objective;
+              valid = point.valid;
+              failure = point.failure_reason;
+              at_scan_boundary = coordinate == sum.front().coordinate || coordinate == sum.back().coordinate;
+              minimum_at_scan_boundary = valid && delta == 0 && at_scan_boundary;
+              tree.Fill();
+              xs.push_back(coordinate);
+              deltas.push_back(delta);
+              validity.push_back(valid);
+            }
+            tree.Write();
+            WriteCatsScanSegments(*directory, xs, deltas, validity,
+                                  kind == "constant" ? "fixed final #lambda" : "input-table scale s");
+          }
+        }
+        scan_file->cd();
+        TNamed state("CATS3DRunStatus", "complete");
+        state.Write("", TObject::kOverwrite);
+        scan_file->Write();
+        scan_file->Close();
+        statistics.profile_output_path = scan_path;
+      }
+      if (output) {
+        WriteCatsSummaries(*output, results);
+        output->cd();
+        TNamed state("CATS3DRunStatus", "complete");
+        state.Write("", TObject::kOverwrite);
+        output->Write();
+        output->Close();
+        WriteFitResultsSummaryTsv(summary_path, results);
+        CreateOrResetRootFile(report_path);
+        auto report = OpenRootFile(report_path, "UPDATE");
+        WriteCatsSummaries(*report, results);
+        TNamed detailed("CATS3DModelFile", fit_path.c_str());
+        report->cd();
+        detailed.Write();
+        // Snapshot group-level external inputs in the report; no fictitious scalar lambda graph.
+        for (const auto &[group, weight] : weights) {
+          auto *directory = GetOrCreateDirectoryPath(*report, "cats3d_lambda_inputs/" + group);
+          TDirectory::TContext context(directory);
+          if (weight->Histogram()) {
+            weight->Histogram()->Write("LambdaInput");
+          }
+          std::ostringstream definition;
+          definition << "kind=" << weight->Input().kind << ";meaning=" << weight->Input().meaning
+                     << ";file=" << weight->Input().file << ";histogram=" << weight->Input().histogram
+                     << ";axis_unit=" << weight->Input().axis_unit;
+          if (weight->Input().weak_decay_fraction) {
+            definition << ";weak_decay_fraction=" << *weight->Input().weak_decay_fraction;
+          }
+          if (weight->Input().kind == "constant") {
+            definition << ";final_lambda=" << weight->Evaluate(0);
+          }
+          TNamed input("ExternalLambda", definition.str().c_str());
+          input.Write();
+        }
+        report->Write();
+        report->Close();
+      }
+      progress.Finish();
+      return statistics;
+    }
+
   }  // namespace
+
+  void WriteCats3DFitReportRoot(const std::string &path, const std::vector<LevyFitResult> &results) {
+    if (results.empty()) throw std::runtime_error("Cannot report an empty CATS3D result set");
+    if (std::filesystem::exists(path)) throw std::runtime_error("Report destination already exists: " + path);
+    for (const auto &r : results) {
+      if (r.correlation_backend != "cats3d" || !r.lambda_is_external_fixed) {
+        throw std::runtime_error("Saved CATS3D report requires externally fixed lambda: " + r.slice_id);
+      }
+    }
+    auto file = OpenRootFile(path, "CREATE");
+    WriteCatsSummaries(*file, results, true);
+    file->Write();
+    file->Close();
+  }
 
   FitRunStatistics RunFit(const ApplicationConfig &config,
                           const Logger &logger,
@@ -7351,6 +8461,11 @@ namespace exp_femto_3d {
     const std::string fit_report_root_path =
         ResolvePath(config.output.fit_report_directory, config.output.fit_report_root_name);
     const std::string profile_root_path = ResolvePath(config.output.output_directory, config.output.profile_root_name);
+    if (config.fit.correlation_backend==CorrelationBackend::kCats3D) {
+      if(profile_estimate_only) throw std::runtime_error("CATS3D uses its dedicated lambda_scan, not profile-estimate-only.");
+      return RunCats3DFit(config,logger,override_model.value_or(config.fit.model),cf_root_path,
+                         fit_root_path,fit_summary_path,fit_report_root_path);
+    }
     if (PathsReferToSameLocation(fit_report_root_path, fit_root_path)
         || PathsReferToSameLocation(fit_report_root_path, cf_root_path)) {
       throw std::runtime_error(
@@ -7379,6 +8494,9 @@ namespace exp_femto_3d {
     }
     const bool fit_uses_symmetric_phi_range =
         config.fit.map_pair_phi_to_symmetric_range.value_or(input_cf_uses_symmetric_phi_range);
+    ValidateCatalogPhiMapping(catalog_entries, fit_uses_symmetric_phi_range);
+    if (!catalog_entries.empty() && catalog_entries.front().phi_mode != ToString(config.build.phi_mode))
+      logger.Warn("Input CF phi_mode=" + catalog_entries.front().phi_mode + "; fit follows the saved CF. Rebuild CF to change phi_mode.");
 
     // Native/factor mT groups are discovered from the catalog; explicit fit ranges must match one produced group.
     for (const RangeBin &requested_mt : config.fit_mt_bins) {

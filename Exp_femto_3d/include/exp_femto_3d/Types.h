@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -22,6 +23,50 @@ namespace exp_femto_3d {
   enum class FitModel {
     kDiag,
     kFull,
+  };
+
+  enum class CorrelationBackend { kBowler, kCats3D };
+
+  /** External pair weight; purity is a pair purity, never a single-track purity. */
+  struct Cats3DLambdaInput {
+    std::string group_id;
+    std::string kind = "constant";
+    std::string meaning = "final_lambda";
+    std::optional<double> value;
+    std::string file;
+    std::string histogram;
+    std::string axis_unit;
+    std::optional<double> weak_decay_fraction;
+  };
+
+  struct Cats3DLambdaScanConfig {
+    bool enabled = false;
+    std::string execution_mode = "alongside_fit";
+    std::vector<double> constant_values;
+    std::vector<double> scale_values;
+    std::string root_name = "cats3d_lambda_scan.root";
+  };
+
+  /** Numerical settings for the local CATS3D backend, with q in MeV and r in fm. */
+  struct Cats3DConfig {
+    bool with_coulomb = true;
+    int grid_bins = 31;
+    double grid_min_fm = -50.0;
+    double grid_max_fm = 50.0;
+    int subdivisions = 1;
+    int max_pw = 16;
+    int pml_max_calls = 100000;
+    double max_kernel_gib = 4.0;
+    bool use_disk_cache = true;
+    std::string kernel_cache_directory;
+    std::optional<Cats3DLambdaInput> lambda;
+    std::vector<Cats3DLambdaInput> lambda_groups;
+    Cats3DLambdaScanConfig lambda_scan;
+    // Conservative process estimate, including the native loader's second kernel
+    // copy and 1 GiB for ROOT/input objects. This is not an OS-enforced RSS limit.
+    double max_peak_gib = 8.0;
+    // Load-only native CATS3DFastKernel6DByQ file; empty selects automatic caching.
+    std::string kernel_cache_file;
   };
 
   // The shared-phi mode performs one simultaneous PML fit per (centrality,mT,qn) group.
@@ -92,12 +137,16 @@ namespace exp_femto_3d {
     std::optional<double> max;
   };
 
+  /** Producer layout only; all physical bin edges remain properties of the ROOT input. */
+  enum class InputFormat { kFemtoDream, kFemto };
+
   struct InputConfig {
     std::string input_root;
     std::string task_name;
     std::string same_event_subtask;
     std::string mixed_event_subtask;
     std::string sparse_object_name;
+    InputFormat format = InputFormat::kFemtoDream;
   };
 
   struct OutputConfig {
@@ -112,7 +161,29 @@ namespace exp_femto_3d {
     LogLevel log_level = LogLevel::kInfo;
   };
 
+  enum class CfNormalizationMode { kFullIntegral, kBoxShell };
+
+  /** Absolute LCMS q ranges [inner, outer] in GeV/c; the shell is outer box minus inner box. */
+  struct CfNormalizationConfig {
+    CfNormalizationMode mode = CfNormalizationMode::kFullIntegral;
+    std::array<std::array<double, 2>, 3> ranges{}; // out, side, long
+  };
+
+  /** Bin-center selection provenance and width-weighted integrals; cf_scale = ME/SE. */
+  struct CfNormalizationResult {
+    bool present = false; // Entirely absent metadata denotes the legacy full-integral convention.
+    CfNormalizationConfig config;
+    std::array<int, 3> outer_first{}, outer_last{}, inner_first{}, inner_last{};
+    double se_integral = std::numeric_limits<double>::quiet_NaN();
+    double me_integral = std::numeric_limits<double>::quiet_NaN();
+    double cf_scale = std::numeric_limits<double>::quiet_NaN();
+  };
+
+  /** fold_pi sums corresponding half-period SE/ME counts before any normalization. */
+  enum class PhiMode { kSeparate, kFoldPi };
+
   struct BuildCfConfig {
+    CfNormalizationConfig normalization;
     bool map_pair_phi_to_symmetric_range = false;
     bool write_normalized_se_me_1d_projections = false;
     bool reopen_output_file_per_slice = true;
@@ -122,6 +193,7 @@ namespace exp_femto_3d {
     AxisRebinConfig phi_rebin;
     AxisRebinConfig mt_rebin;
     ProgressMode progress = ProgressMode::kAuto;
+    PhiMode phi_mode = PhiMode::kSeparate;
   };
 
   // A parameter override changes only explicitly configured fit seeds, bounds, or supported fixed values.
@@ -241,6 +313,8 @@ namespace exp_femto_3d {
     ProgressMode progress = ProgressMode::kAuto;
     ProfileLikelihoodConfig profile_likelihood;
     CombinedProfileConfig combined_profile;
+    CorrelationBackend correlation_backend = CorrelationBackend::kBowler;
+    Cats3DConfig cats3d;
   };
 
   struct ApplicationConfig {
@@ -257,6 +331,7 @@ namespace exp_femto_3d {
   };
 
   struct SliceCatalogEntry {
+    CfNormalizationResult normalization;
     std::string slice_id;
     std::string group_id;
     std::string slice_directory;
@@ -292,9 +367,11 @@ namespace exp_femto_3d {
     std::string phi_rebin_mode = "native";
     bool is_qn_integrated = true;
     bool is_phi_integrated = false;
+    std::string phi_mode = "separate";
   };
 
   struct LevyFitResult {
+    CfNormalizationResult normalization;
     std::string fit_model = "diag";
     std::string slice_id;
     std::string group_id;
@@ -361,6 +438,12 @@ namespace exp_femto_3d {
     bool parameter_errors_valid = false;
     bool at_parameter_boundary = false;
     std::string fit_failure_reason;
+    std::string correlation_backend = "bowler";
+    std::string lambda_input_kind;
+    std::string lambda_input_meaning;
+    std::string lambda_input_object_path;
+    bool lambda_is_external_fixed = false;
+    std::string phi_mode = "separate";
   };
 
   struct SharedLambdaFitAttempt {

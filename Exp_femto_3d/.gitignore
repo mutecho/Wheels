@@ -1,2 +1,6 @@
 build/
 bin/
+logs/cats3d/
+res/cats3d_scan_report_*/
+res/cats3d_lambda_scan_oo_cuttest_*/
+res/cats3d_fit_report_*/

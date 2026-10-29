@@ -1,5 +1,23 @@
 # Decisions
 
+## DEC-014: Explicit Input Layout And Count-Level Half-Period Treatment
+
+- date: 2026-10-29
+- decision: input.format=femto selects PWGCF/Femto; omitted format retains
+  femtodream. Paths remain explicit and source histograms are not reordered.
+- angular modes: omitted build.phi_mode defaults to separate. Full-angle
+  separate reports produce two independent harmonic/overview/epsilon sets
+  under phi_0_pi and phi_pi_2pi; underlying slice/shared-lambda fits are unchanged.
+  Explicit fold_pi sums phi and phi+pi raw SE/ME and stored variances before
+  normalization, then builds CFs on 0..pi. Never average CFs or fitted radii.
+- compatibility: existing half-period paths, normalization and likelihood
+  contracts remain. Additive phi_mode catalog metadata defaults to separate
+  when absent; fit-only follows the saved data, not a new build-side setting.
+- validation: require pairable full-period axes for folding and pi-aligned
+  output intervals for separate summaries; reject invalid mapping/rebin/input
+  before output reset. The downloaded 0..pi input is a layout check only.
+
+
 ## DEC-013: Separate 2D Numerical Truth, Validity, And Display Geometry
 
 - date: 2026-09-07

@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-10-29: Femto Layout And Raw Half-Period Count Modes
+
+- Added explicit femto/femtodream input layouts with backward-compatible
+  defaults and shared projection/selection code.
+- Added fold_pi raw SE/ME plus variance merging and separate independent
+  half-period reports, with compatible catalog provenance and preflight guards.
+- Guarded final build/CTest passed 15/15; real-file structure and synthetic
+  histogram/fit/report checks are recorded in tests.md. No production fits ran.
+
+
+## 2026-10-23: Traditional CATS3D Fit Report Layout
+
+- Reused the existing source overview, phi harmonics and epsilon report writers
+  for saved CATS3D scan coordinates; added a kernel-free `--summary-only` mode.
+  Incomplete groups retain diagnostic panels without reduced-member fits.
+- Generated four real OO `fit_report_cats3d_*.root` files, validated 420 points /
+  813 attempts and complete-group eligibility, visually checked canvases, and
+  passed three targeted CTests plus a one-point full-export smoke (`PRIMARY_OK`).
+
+## 2026-10-22: Offline CATS3D Scan Reports
+
+- Added a reusable saved-scan exporter and guarded launcher, plus a portable
+  Python PDF/HTML presentation step. Reports preserve raw scan parameter,
+  status/error and attempt records and reuse the recorded kernel without fits.
+- Generated the four-coordinate real OO report (420 models, 270 valid minima,
+  236 valid errors, four 121-page PDFs); validated closed ROOT projections,
+  input isolation, browser filtering and PDF layout. Existing CATS3D CTest
+  passed 3/3 with `PRIMARY_OK`.
+
 ## 2026-09-07: Complete Strict-Parallel Pair Coverage
 
 - Enabled all six unordered 2D pairs of lambda and the three diagonal radii

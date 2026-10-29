@@ -9,6 +9,11 @@ namespace exp_femto_3d {
   [[nodiscard]] ApplicationConfig LoadApplicationConfig(const std::string &path);
   void ValidateApplicationConfig(ApplicationConfig &config);
 
+  [[nodiscard]] std::string ToString(InputFormat format);
+  [[nodiscard]] InputFormat ParseInputFormat(const std::string &token);
+  [[nodiscard]] std::string ToString(PhiMode mode);
+  [[nodiscard]] PhiMode ParsePhiMode(const std::string &token);
+
   [[nodiscard]] std::string ToString(LogLevel level);
   [[nodiscard]] LogLevel ParseLogLevel(const std::string &token);
   [[nodiscard]] std::string ToString(FitModel model);

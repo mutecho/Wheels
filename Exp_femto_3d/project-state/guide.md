@@ -12,6 +12,22 @@
 - 降低运行时无效输出
 - 支持后续 agent 或人工对 build / fit 两阶段分别验证
 
+## 输入模式
+
+`[input].format` 省略时沿用 `femtodream`；新 `PWGCF/Femto` 结果显式设为
+`femto`，任务和对象路径继续由配置填写。新布局把 phi/q-vector 放在第 5/6 轴，
+`InputLayout` 统一提供索引与预检，不重排整个 sparse。格式表、运行命令和配置契约以
+[README 的 Input formats](../README.md#input-formats) 为准。
+
+使用 `config/examples/femto.example.toml`，替换输入和输出绝对路径后执行
+`bin/exp_femto_3d build-cf --config config/examples/femto.example.toml`。
+示例使用 `phi_mode="fold_pi"`：先合并 phi 与 phi+pi 的原始 SE/ME 计数和误差平方，
+再归一化构造 `0..pi` CF；重分箱作用于合并后的角度轴。
+另一个模式 `phi_mode="separate"`（省略字段的默认值）保留原始切片，对完整 `0..2pi`
+分别在 `phi_0_pi/` 与 `phi_pi_2pi/` 下输出各自的 R² 谐波拟合、参数图和 epsilon 汇总。
+旧 `0..pi` 输入及其报告路径保持兼容。模式切换需重新运行 `build-cf`，fit-only 跟随保存的 CF。
+完整原始角度不直接启用对称标签映射；两种模式均不恢复 overflow。
+
 ## 当前分析流程
 
 项目保留原始宏的两阶段工作流：
@@ -69,6 +85,28 @@
   原始 ROOT macro 参考实现，不进入新项目主构建。
 
 ## 运行入口
+
+### CATS3D 扫描报表后处理
+
+已完成的 CATS3D scan 可以补生成逐 λ 的 PDF/ROOT 报表，不需要重新拟合：
+
+```bash
+bash scripts/run_cats3d_scan_report.sh \
+  --scan-root /path/to/lambda_scan_cats3d.root \
+  --output-directory /path/to/new_report_directory
+```
+
+默认读取 OO cuttest scan，默认输出到带时间戳的 `res/cats3d_scan_report_*`。脚本会通过 O2Physics guarded executor 构建并运行报表工具，然后在普通 Python 环境生成 PDF 和 `index.html`。输出目录必须不存在；CF 和 scan 中记录的 native kernel 必须仍可读取。`--dry-run` 可预览命令。
+
+报表包含每个坐标的组内参数图、逐切片三方向投影、保存参数与收敛/误差状态，网页可按 λ、中心度/mT 和状态筛选。灰色虚线仅表示未收敛试探点，条件误差不可用时不补零。PDF 使用 ROOT PNG 的无损快照；矢量画布保存在配套 ROOT 文件。
+
+同时生成 `fit_report_cats3d_*.root`，沿用 `res/fit_report_*.root` 的 `source_parameters/cent_*/mt_*` 总览画布、`summary/R2_vs_phi` 和 `eps_vs_mt`。六个 φ 的极小值与条件误差均有效的组才进行谐波拟合和偏心率计算；其他组显示可用点及 `conditional_error_status_canvas`，全部原始状态留在 `meta/FitCatalog`。
+
+只需要这种传统 ROOT 汇总时，在同一命令加 `--summary-only`：不读取 CF 或 kernel，不做源卷积及切片拟合，不生成 PDF/HTML。这适合查看已经完成的扫描，内存无需容纳大核。真实 OO 报表见 `res/cats3d_fit_report_oo_cuttest_20261023/`，每份约 1.2 MB。
+
+`scan_only` 本身仍只自动写扫描 ROOT；`alongside_fit` 的正式报表对应名义 λ。若希望一次操作依次完成扫描与逐坐标报表，可在扫描命令成功后调用上述脚本。完整契约见 [CATS3D 拟合与 λ 扫描](../docs/CATS3D拟合与lambda扫描.md)。
+
+### 主程序
 
 项目主程序为：
 

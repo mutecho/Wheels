@@ -1148,7 +1148,10 @@ fixed_value = 2.0
       "shared_fit.root", "shared_fit.tsv", "shared_report.root", false, std::nullopt,
       "use_coulomb = false\nlambda_mode = \"shared_phi\"\n", true, shared_parameter_lines,
       "", "shared_profiles_disabled.root", false, "", true);
-  const ApplicationConfig shared_config = LoadApplicationConfig(shared_config_path);
+  ApplicationConfig shared_config = LoadApplicationConfig(shared_config_path);
+  // Later combined/profile configs deliberately omit this setting: fit must follow CF metadata.
+  shared_config.build.normalization.mode = CfNormalizationMode::kBoxShell;
+  for (auto &range : shared_config.build.normalization.ranges) range = {.075, .15};
   const BuildCfRunStatistics shared_build_stats = RunBuildCf(shared_config, logger);
   Expect(shared_build_stats.stored_slices == 5, "shared toy build must contain one integrated and four phi slices");
   const FitRunStatistics shared_fit_stats = RunFit(shared_config, logger);

@@ -1,0 +1,102 @@
+[input]
+input_root = "/path/to/AnalysisResults_3d_dataset.root"
+task_name = "femto-dream-pair-task-track-track"
+same_event_subtask = "SameEvent_3Dqn"
+mixed_event_subtask = "MixedEvent_3Dqn"
+sparse_object_name = "relPair3dRmTMultPercentileQnPairphi"
+
+[output]
+output_directory = "/path/to/output"
+cf_root_name = "EP_dependence_CF_dataset.root"
+fit_root_name = "EP_dependence_CF_fit_dataset.root"
+fit_summary_name = "fit_summary.tsv"
+fit_report_directory = "/path/to/report-output"
+fit_report_root_name = "EP_dependence_CF_fit_report_dataset.root"
+log_level = "info"
+
+[build]
+map_pair_phi_to_symmetric_range = false
+write_normalized_se_me_1d_projections = false
+reopen_output_file_per_slice = true
+split_mixed_event_by_phi = false
+# split_same_event_by_qn = true
+# split_mixed_event_by_qn = true  # requires split_same_event_by_qn and [[bins.qn]]
+progress = "auto"
+
+[build.rebin.phi]
+enabled = false
+
+[build.rebin.mt]
+enabled = true
+
+[fit]
+correlation_backend = "cats3d"
+model = "full"
+# legacy equivalent still accepted: use_coulomb = true
+use_q2_baseline = true
+use_pml = true
+fit_q_max = 0.15
+# Optional: [fit.parameters.<name>] can override main Levy initial/min/max.
+# lambda and alpha additionally support fixed_value.
+# omit to follow the input CF metadata written by build-cf
+# map_pair_phi_to_symmetric_range = false
+progress = "auto"
+
+[[bins.centrality]]
+min = 0
+max = 10
+
+[[bins.mt]]
+min = 0.24
+max = 0.33
+
+[[fit_selection.centrality]]
+min = 0
+max = 10
+
+[[fit_selection.mt]]
+min = 0.24
+max = 0.33
+
+[fit.cats3d]
+with_coulomb = true
+# Compatibility defaults; establish grid convergence for your own source sizes.
+grid_bins = 31
+grid_min_fm = -50.0
+grid_max_fm = 50.0
+subdivisions = 1
+max_pw = 16
+max_kernel_gib = 4.0
+max_peak_gib = 8.0 # Estimated process peak budget for a 16 GiB machine.
+use_disk_cache = true
+# Optional load-only native CATS3D ByQ file; q/r grids and physics must match.
+# kernel_cache_file = "/path/to/matching_CATS3DFastKernel6DByQ.root"
+
+# EXAMPLE ONLY. Supply your calibrated external pair lambda before production.
+[fit.cats3d.lambda]
+kind = "constant"
+meaning = "final_lambda"
+value = 0.7
+# Histogram alternative (replace kind/value, do not combine them):
+# kind = "histogram"
+# meaning = "pair_purity"
+# file = "/path/to/pair_purity.root"
+# histogram = "hPairPurity"
+# axis_unit = "GeV"
+# weak_decay_fraction = 0.12 # Explicit example, not a built-in correction.
+
+# Exact group overrides use the same fields, plus a group_id from SliceCatalog:
+# [[fit.cats3d.lambda_groups]]
+# group_id = "<exact SliceCatalog.group_id>"
+# kind = "histogram"
+# meaning = "final_lambda"
+# file = "/path/to/lambda.root"
+# histogram = "hLambda"
+# axis_unit = "GeV"
+
+[fit.cats3d.lambda_scan]
+enabled = false
+execution_mode = "alongside_fit" # Or scan_only; preserves all formal outputs.
+root_name = "cats3d_lambda_scan.root"
+# constant_values = [0.6, 0.7, 0.8]
+# scale_values = [0.9, 1.0, 1.1] # Histogram input required for every selected group.
